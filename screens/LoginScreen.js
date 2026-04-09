@@ -1,37 +1,144 @@
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, SafeAreaView } from 'react-native';
 import { useState } from 'react';
 
 export default function LoginScreen({ navigation }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [emailFocused, setEmailFocused] = useState(false);
+  const [passFocused, setPassFocused] = useState(false);
 
   const handleLogin = () => {
     if (!email || !password) {
-      Alert.alert('Error', 'Enter email & password');
+      Alert.alert('Error', 'Please enter your email and password.');
       return;
     }
-
     navigation.replace('Main');
   };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.logo}>DYUKSA</Text>
+    <SafeAreaView style={styles.safe}>
+      <View style={styles.container}>
 
-      <TextInput placeholder="Email" style={styles.input} value={email} onChangeText={setEmail}/>
-      <TextInput placeholder="Password" secureTextEntry style={styles.input} value={password} onChangeText={setPassword}/>
+        {/* Card */}
+        <View style={styles.card}>
 
-      <TouchableOpacity style={styles.button} onPress={handleLogin}>
-        <Text style={styles.buttonText}>Login</Text>
-      </TouchableOpacity>
-    </View>
+          {/* Logo */}
+          <View style={styles.logoRow}>
+            <View style={styles.logoBox}>
+              <Text style={styles.logoLetter}>D</Text>
+            </View>
+          </View>
+
+          <Text style={styles.title}>Welcome To DYUKSA</Text>
+          <Text style={styles.subtitle}>Sign in to your account to continue</Text>
+
+          {/* Email */}
+          <View style={[styles.inputWrap, emailFocused && styles.inputFocused]}>
+            <TextInput
+              style={styles.input}
+              placeholder="Email address"
+              placeholderTextColor="#AAAABC"
+              value={email}
+              onChangeText={setEmail}
+              autoCapitalize="none"
+              keyboardType="email-address"
+              onFocus={() => setEmailFocused(true)}
+              onBlur={() => setEmailFocused(false)}
+            />
+          </View>
+
+          {/* Password */}
+          <View style={[styles.inputWrap, passFocused && styles.inputFocused]}>
+            <TextInput
+              style={[styles.input, { flex: 1 }]}
+              placeholder="Password"
+              placeholderTextColor="#AAAABC"
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry={!showPassword}
+              onFocus={() => setPassFocused(true)}
+              onBlur={() => setPassFocused(false)}
+            />
+            <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeBtn}>
+              <Text style={styles.eyeIcon}>{showPassword ? '🙈' : '👁️'}</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Forgot */}
+          <TouchableOpacity style={styles.forgotRow}>
+            <Text style={styles.forgotText}>Forgot password?</Text>
+          </TouchableOpacity>
+
+          {/* Sign In */}
+          <TouchableOpacity style={styles.signInBtn} onPress={handleLogin}>
+            <Text style={styles.signInText}>Sign in</Text>
+          </TouchableOpacity>
+
+          {/* Sign Up */}
+          <View style={styles.signUpRow}>
+            <Text style={styles.signUpPrompt}>Don't have an account? </Text>
+            <TouchableOpacity>
+              <Text style={styles.signUpLink}>Sign Up</Text>
+            </TouchableOpacity>
+          </View>
+
+        </View>
+      </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex:1, justifyContent:'center', padding:20, backgroundColor:'#0f172a' },
-  logo: { fontSize:32, color:'#fff', textAlign:'center', marginBottom:40, fontWeight:'bold' },
-  input: { backgroundColor:'#1e293b', color:'#fff', padding:12, borderRadius:8, marginBottom:15 },
-  button: { backgroundColor:'#3b82f6', padding:15, borderRadius:8 },
-  buttonText: { color:'#fff', textAlign:'center', fontWeight:'bold' }
+  safe: { flex: 1, backgroundColor: '#F5F5F7' },
+  container: { flex: 1, justifyContent: 'center', paddingHorizontal: 24 },
+
+  card: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 28,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.08,
+    shadowRadius: 24,
+    elevation: 8,
+  },
+
+  logoRow: { alignItems: 'center', marginBottom: 20 },
+  logoBox: {
+    width: 52, height: 52,
+    borderRadius: 10,
+    backgroundColor: '#1A1A2E',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  logoLetter: { color: '#4ECDC4', fontSize: 22, fontWeight: '800' },
+
+  title: { fontSize: 20, fontWeight: '700', color: '#1A1A2E', textAlign: 'center', marginBottom: 4 },
+  subtitle: { fontSize: 13, color: '#888899', textAlign: 'center', marginBottom: 24 },
+
+  inputWrap: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#F0F0F5',
+    borderRadius: 10, borderWidth: 1.5, borderColor: 'transparent',
+    paddingHorizontal: 14, marginBottom: 12, height: 50,
+  },
+  inputFocused: { borderColor: '#4ECDC4', backgroundColor: '#fff' },
+  input: { flex: 1, fontSize: 15, color: '#1A1A2E' },
+  eyeBtn: { padding: 4 },
+  eyeIcon: { fontSize: 16 },
+
+  forgotRow: { alignItems: 'flex-end', marginBottom: 20 },
+  forgotText: { color: '#888899', fontSize: 13 },
+
+  signInBtn: {
+    backgroundColor: '#1A1A2E',
+    borderRadius: 10, height: 50,
+    justifyContent: 'center', alignItems: 'center',
+    marginBottom: 20,
+  },
+  signInText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+
+  signUpRow: { flexDirection: 'row', justifyContent: 'center' },
+  signUpPrompt: { color: '#888899', fontSize: 13 },
+  signUpLink: { color: '#1A1A2E', fontSize: 13, fontWeight: '700' },
 });
