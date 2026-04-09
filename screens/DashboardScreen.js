@@ -7,15 +7,8 @@ import { useNavigation } from '@react-navigation/native';
 
 const SIDEBAR_WIDTH = 260;
 
-const QuickAction = ({ icon, label, onPress }) => (
-  <TouchableOpacity style={styles.quickAction} onPress={onPress}>
-    <Text style={styles.quickIcon}>{icon}</Text>
-    <Text style={styles.quickLabel}>{label}</Text>
-  </TouchableOpacity>
-);
-
-const SidebarItem = ({ icon, label, active, hasArrow }) => (
-  <TouchableOpacity style={[styles.sidebarItem, active && styles.sidebarItemActive]}>
+const SidebarItem = ({ icon, label, active, hasArrow, onPress }) => (
+  <TouchableOpacity style={[styles.sidebarItem, active && styles.sidebarItemActive]} onPress={onPress}>
     <Text style={styles.sidebarItemIcon}>{icon}</Text>
     <Text style={[styles.sidebarItemLabel, active && styles.sidebarItemLabelActive]}>{label}</Text>
     {hasArrow && <Text style={styles.sidebarArrow}>›</Text>}
@@ -32,17 +25,19 @@ export default function DashboardScreen() {
     Animated.timing(slideAnim, { toValue: 0, duration: 250, useNativeDriver: true }).start();
   };
 
-  const closeSidebar = () => {
+  const closeSidebar = (cb) => {
     Animated.timing(slideAnim, { toValue: -SIDEBAR_WIDTH, duration: 220, useNativeDriver: true })
-      .start(() => setSidebarOpen(false));
+      .start(() => { setSidebarOpen(false); cb && cb(); });
   };
+
+  const goToTab  = (tab)    => closeSidebar(() => navigation.navigate(tab));
+  const goToStack = (screen) => closeSidebar(() => navigation.navigate(screen));
 
   return (
     <SafeAreaView style={styles.safe}>
-      {/* Fix Android status bar */}
-      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" translucent={false} />
+      <StatusBar barStyle="dark-content" backgroundColor="#fff" translucent={false} />
 
-      {/* Top Navbar */}
+      {/* ── Top Navbar ── */}
       <View style={styles.navbar}>
         <View style={styles.navLeft}>
           <TouchableOpacity style={styles.hamburger} onPress={openSidebar}>
@@ -50,14 +45,14 @@ export default function DashboardScreen() {
             <View style={styles.hamLine} />
             <View style={styles.hamLine} />
           </TouchableOpacity>
-          {/* D — tappable on every screen to jump to Dashboard */}
+          {/* D stays on Dashboard */}
           <TouchableOpacity style={styles.logoBox} activeOpacity={0.75}>
             <Text style={styles.logoText}>D</Text>
           </TouchableOpacity>
           <Text style={styles.brandName}>DYUKSA</Text>
         </View>
         <View style={styles.navRight}>
-          <TouchableOpacity style={styles.navIconBtn}>
+          <TouchableOpacity style={styles.navIconBtn} onPress={() => navigation.navigate('Chat')}>
             <Text style={styles.navIcon}>💬</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.navIconBtn}>
@@ -66,31 +61,34 @@ export default function DashboardScreen() {
         </View>
       </View>
 
-      {/* Page Header */}
+      {/* ── Welcome Header ── */}
       <View style={styles.pageHeader}>
         <Text style={styles.welcomeText}>Welcome back, Anurag!</Text>
         <Text style={styles.subText}>Here's a quick overview of your workspace.</Text>
       </View>
 
+      {/* ── 4 Sections ── */}
       <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
 
-        {/* In Progress */}
+        {/* Section 1 — In Progress */}
         <View style={styles.card}>
           <View style={styles.cardHeader}>
             <Text style={styles.cardTitle}>In Progress ▾</Text>
           </View>
           <View style={styles.emptyState}>
             <Text style={styles.emptyIcon}>🕐</Text>
-            <Text style={styles.emptyLabel}>No in-progress tasks assigned to you</Text>
+            <Text style={styles.emptyLabel}>No in_progress tasks assigned to you</Text>
             <Text style={styles.emptySubLabel}>No tasks are currently assigned to you</Text>
           </View>
         </View>
 
-        {/* Recent Documents */}
+        {/* Section 2 — Recent Documents */}
         <View style={styles.card}>
           <View style={styles.cardHeader}>
             <Text style={styles.cardTitle}>Recent Documents</Text>
-            <TouchableOpacity><Text style={styles.viewAll}>View All →</Text></TouchableOpacity>
+            <TouchableOpacity onPress={() => navigation.navigate('Docs')}>
+              <Text style={styles.viewAll}>View All →</Text>
+            </TouchableOpacity>
           </View>
           <View style={styles.emptyState}>
             <Text style={styles.emptyIcon}>📋</Text>
@@ -98,11 +96,13 @@ export default function DashboardScreen() {
           </View>
         </View>
 
-        {/* Favourite Projects */}
+        {/* Section 3 — Favourite Projects */}
         <View style={styles.card}>
           <View style={styles.cardHeader}>
             <Text style={styles.cardTitle}>Favourite Projects</Text>
-            <TouchableOpacity><Text style={styles.viewAll}>View All →</Text></TouchableOpacity>
+            <TouchableOpacity onPress={() => navigation.navigate('Projects')}>
+              <Text style={styles.viewAll}>View All →</Text>
+            </TouchableOpacity>
           </View>
           <View style={styles.emptyState}>
             <Text style={styles.emptyIcon}>📊</Text>
@@ -110,44 +110,55 @@ export default function DashboardScreen() {
           </View>
         </View>
 
-        {/* Quick Actions — Events replaces Review Doc */}
+        {/* Section 4 — Quick Actions */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Quick Actions</Text>
           <View style={styles.quickRow}>
-            <QuickAction icon="🗂️" label="New Project" />
-            <QuickAction icon="📅" label="Events" />
-            <QuickAction icon="👍" label="Approved Doc" />
+            <TouchableOpacity style={styles.quickBtn} onPress={() => navigation.navigate('Calendar')}>
+              <Text style={styles.quickIcon}>📅</Text>
+              <Text style={styles.quickLabel}>Events</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.quickBtn} onPress={() => navigation.navigate('Tasks')}>
+              <Text style={styles.quickIcon}>📋</Text>
+              <Text style={styles.quickLabel}>My Tasks</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.quickBtn}>
+              <Text style={styles.quickIcon}>👍</Text>
+              <Text style={styles.quickLabel}>Approved{'\n'}Docs</Text>
+            </TouchableOpacity>
           </View>
         </View>
 
       </ScrollView>
 
-      {/* Sidebar Modal */}
+      {/* ── Sidebar ── */}
       {sidebarOpen && (
-        <Modal transparent visible animationType="none" onRequestClose={closeSidebar}>
-          <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={closeSidebar} />
+        <Modal transparent visible animationType="none" onRequestClose={() => closeSidebar()}>
+          <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => closeSidebar()} />
           <Animated.View style={[styles.sidebar, { transform: [{ translateX: slideAnim }] }]}>
             <SafeAreaView style={{ flex: 1 }}>
               <StatusBar barStyle="light-content" backgroundColor="#1A1A2E" />
+
+              {/* Sidebar header — D goes to Dashboard */}
               <View style={styles.sidebarHeader}>
-                <View style={styles.logoBox}>
+                <TouchableOpacity style={styles.logoBox} onPress={() => closeSidebar()}>
                   <Text style={styles.logoText}>D</Text>
-                </View>
+                </TouchableOpacity>
                 <Text style={styles.sidebarBrand}>DYUKSA</Text>
-                <TouchableOpacity onPress={closeSidebar} style={styles.closeBtn}>
+                <TouchableOpacity onPress={() => closeSidebar()} style={styles.closeBtn}>
                   <Text style={styles.closeBtnText}>✕</Text>
                 </TouchableOpacity>
               </View>
 
               <ScrollView style={styles.sidebarNav} showsVerticalScrollIndicator={false}>
-                <SidebarItem icon="⊞" label="Dashboard" active />
-                <SidebarItem icon="🗂️" label="Projects" hasArrow />
-                <SidebarItem icon="📋" label="My Tasks" hasArrow />
-                <SidebarItem icon="📄" label="Documents" />
-                <SidebarItem icon="📅" label="Calendar" />
+                <SidebarItem icon="⊞"  label="Dashboard"       active onPress={() => closeSidebar()} />
+                <SidebarItem icon="🗂️" label="Projects"        hasArrow onPress={() => goToTab('Projects')} />
+                <SidebarItem icon="📅" label="Calendar"        hasArrow onPress={() => goToTab('Calendar')} />
+                <SidebarItem icon="📋" label="My Tasks"        hasArrow onPress={() => goToTab('Tasks')} />
+                <SidebarItem icon="📄" label="Documents"                onPress={() => goToTab('Docs')} />
                 <SidebarItem icon="⚡" label="Quick Notes" />
                 <SidebarItem icon="👥" label="Team Management" hasArrow />
-                <SidebarItem icon="💬" label="Chats" hasArrow />
+                <SidebarItem icon="💬" label="Chats"           hasArrow onPress={() => goToStack('Chat')} />
               </ScrollView>
 
               <View style={styles.sidebarDivider} />
@@ -163,11 +174,11 @@ export default function DashboardScreen() {
               </View>
 
               <View style={styles.sidebarBottom}>
-                <TouchableOpacity style={styles.sidebarBottomBtn}>
+                <TouchableOpacity style={styles.sidebarBottomBtn} onPress={() => goToStack('Settings')}>
                   <Text style={styles.sidebarBottomIcon}>⚙️</Text>
                   <Text style={styles.sidebarBottomText}>Settings</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.sidebarBottomBtn}>
+                <TouchableOpacity style={styles.sidebarBottomBtn} onPress={() => closeSidebar(() => navigation.navigate('Login'))}>
                   <Text style={styles.sidebarBottomIcon}>🚪</Text>
                   <Text style={[styles.sidebarBottomText, { color: '#F87171' }]}>Logout</Text>
                 </TouchableOpacity>
@@ -181,21 +192,9 @@ export default function DashboardScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: '#F5F5F7',
-    // Android status bar fix
-    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
-  },
+  safe: { flex: 1, backgroundColor: '#F5F5F7', paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0 },
 
-  navbar: {
-    backgroundColor: '#fff',
-    flexDirection: 'row', alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 14, paddingVertical: 10,
-    borderBottomWidth: 1, borderBottomColor: '#EBEBF0',
-    elevation: 2,
-  },
+  navbar: { backgroundColor: '#fff', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#EBEBF0', elevation: 2 },
   navLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   navRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   hamburger: { gap: 5, padding: 4, justifyContent: 'center' },
@@ -211,19 +210,21 @@ const styles = StyleSheet.create({
   subText: { fontSize: 12, color: '#888899', marginTop: 2 },
 
   scroll: { flex: 1, padding: 12 },
+
   card: { backgroundColor: '#fff', borderRadius: 14, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: '#EBEBF0' },
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   cardTitle: { fontSize: 14, fontWeight: '600', color: '#1A1A2E', marginBottom: 10 },
   viewAll: { fontSize: 12, color: '#888899' },
-  emptyState: { alignItems: 'center', paddingVertical: 20, gap: 6 },
-  emptyIcon: { fontSize: 30, opacity: 0.3 },
+
+  emptyState: { alignItems: 'center', paddingVertical: 28, gap: 8 },
+  emptyIcon: { fontSize: 32, opacity: 0.3 },
   emptyLabel: { fontSize: 13, color: '#888899', textAlign: 'center', fontWeight: '500' },
   emptySubLabel: { fontSize: 11, color: '#AAAABC', textAlign: 'center' },
 
-  quickRow: { flexDirection: 'row', gap: 8 },
-  quickAction: { flex: 1, alignItems: 'center', paddingVertical: 16, borderRadius: 10, borderWidth: 1, borderColor: '#EBEBF0', gap: 6 },
-  quickIcon: { fontSize: 22 },
-  quickLabel: { fontSize: 10, color: '#888899', textAlign: 'center', fontWeight: '500' },
+  quickRow: { flexDirection: 'row', gap: 10 },
+  quickBtn: { flex: 1, alignItems: 'center', paddingVertical: 18, borderRadius: 10, borderWidth: 1, borderColor: '#EBEBF0', gap: 8 },
+  quickIcon: { fontSize: 26 },
+  quickLabel: { fontSize: 10, color: '#888899', textAlign: 'center', fontWeight: '500', lineHeight: 14 },
 
   overlay: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.45)' },
   sidebar: { position: 'absolute', top: 0, left: 0, width: SIDEBAR_WIDTH, height: '100%', backgroundColor: '#1A1A2E', elevation: 20, shadowColor: '#000', shadowOffset: { width: 4, height: 0 }, shadowOpacity: 0.3, shadowRadius: 12 },
