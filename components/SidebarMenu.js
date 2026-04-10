@@ -1,11 +1,10 @@
-import React, { useState, useRef, useContext } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, Modal,
+  View, Text, StyleSheet, TouchableOpacity, Modal,
   Animated, ScrollView, StatusBar,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRef, useState, useContext } from 'react';
 import { useNavigation } from '@react-navigation/native';
-import NotificationBell from './NotificationBell';
 import { ThemeContext } from '../context/ThemeContext';
 import { AuthContext } from '../context/AuthContext';
 
@@ -17,79 +16,43 @@ const SidebarItem = ({ icon, label, active, hasArrow, onPress }) => (
     onPress={onPress}
   >
     <Text style={styles.sidebarItemIcon}>{icon}</Text>
-    <Text style={[styles.sidebarItemLabel, active && styles.sidebarItemLabelActive]}>
-      {label}
-    </Text>
+    <Text style={[styles.sidebarItemLabel, active && styles.sidebarItemLabelActive]}>{label}</Text>
     {hasArrow && <Text style={styles.sidebarArrow}>›</Text>}
   </TouchableOpacity>
 );
 
-export default function NavBar({ title, activeScreen }) {
+export default function SidebarMenu({ activeScreen }) {
   const navigation = useNavigation();
   const { theme } = useContext(ThemeContext);
   const { logout, user } = useContext(AuthContext);
   const isDark = theme === 'Dark';
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [open, setOpen] = useState(false);
   const slideAnim = useRef(new Animated.Value(-SIDEBAR_WIDTH)).current;
 
   const openSidebar = () => {
-    setSidebarOpen(true);
+    setOpen(true);
     Animated.timing(slideAnim, { toValue: 0, duration: 250, useNativeDriver: true }).start();
   };
 
   const closeSidebar = (cb) => {
     Animated.timing(slideAnim, { toValue: -SIDEBAR_WIDTH, duration: 220, useNativeDriver: true })
-      .start(() => { setSidebarOpen(false); cb && cb(); });
+      .start(() => { setOpen(false); cb && cb(); });
   };
 
-  const goTo = (screen) => {
-    closeSidebar(() => {
-      if (['Chat', 'Settings'].includes(screen)) {
-        navigation.navigate(screen);
-      } else {
-        navigation.navigate('Main', { screen });
-      }
-    });
-  };
-
-  const goToDashboard = () => {
-    navigation.navigate('Main', { screen: 'Dashboard' });
-  };
+  const goToDashboard = () => closeSidebar(() => navigation.navigate('Main', { screen: 'Dashboard' }));
+  const goToTab   = (tab)    => closeSidebar(() => navigation.navigate('Main', { screen: tab }));
+  const goToStack = (screen) => closeSidebar(() => navigation.navigate(screen));
 
   return (
     <>
-      <StatusBar
-        barStyle={isDark ? 'light-content' : 'dark-content'}
-        backgroundColor={isDark ? '#0D0D0F' : '#ffffff'}
-        translucent={false}
-      />
-      <View style={[styles.navbar, isDark && styles.navbarDark]}>
-        <View style={styles.navLeft}>
-          <TouchableOpacity style={styles.hamburger} onPress={openSidebar}>
-            <View style={[styles.hamLine, isDark && styles.hamLineDark]} />
-            <View style={[styles.hamLine, isDark && styles.hamLineDark]} />
-            <View style={[styles.hamLine, isDark && styles.hamLineDark]} />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.logoBox} onPress={goToDashboard} activeOpacity={0.75}>
-            <Text style={styles.logoText}>D</Text>
-          </TouchableOpacity>
-          <Text style={[styles.brandName, isDark && styles.brandNameDark]}>
-            {title || 'DYUKSA'}
-          </Text>
-        </View>
-        <View style={styles.navRight}>
-          <TouchableOpacity
-            style={[styles.navIconBtn, isDark && styles.navIconBtnDark]}
-            onPress={() => navigation.navigate('Chat')}
-          >
-            <Text style={styles.navIcon}>💬</Text>
-          </TouchableOpacity>
-          <NotificationBell />
-        </View>
-      </View>
+      {/* Hamburger */}
+      <TouchableOpacity style={styles.hamburger} onPress={openSidebar}>
+        <View style={[styles.hamLine, isDark && styles.hamLineDark]} />
+        <View style={[styles.hamLine, isDark && styles.hamLineDark]} />
+        <View style={[styles.hamLine, isDark && styles.hamLineDark]} />
+      </TouchableOpacity>
 
-      {/* Sidebar Modal */}
-      {sidebarOpen && (
+      {open && (
         <Modal transparent visible animationType="none" onRequestClose={() => closeSidebar()}>
           <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => closeSidebar()} />
           <Animated.View style={[styles.sidebar, { transform: [{ translateX: slideAnim }] }]}>
@@ -105,23 +68,23 @@ export default function NavBar({ title, activeScreen }) {
               </View>
 
               <ScrollView style={styles.sidebarNav} showsVerticalScrollIndicator={false}>
-                <SidebarItem icon="⊞"  label="Dashboard"      active={activeScreen === 'Dashboard'} onPress={() => goTo('Dashboard')} />
-                <SidebarItem icon="🗂️" label="Projects"        active={activeScreen === 'Projects'}  onPress={() => goTo('Projects')} hasArrow />
-                <SidebarItem icon="📋" label="My Tasks"        active={activeScreen === 'Tasks'}     onPress={() => goTo('Tasks')} hasArrow />
-                <SidebarItem icon="📄" label="Documents"       active={activeScreen === 'Docs'}      onPress={() => goTo('Docs')} />
-                <SidebarItem icon="📅" label="Calendar"        active={activeScreen === 'Calendar'}  onPress={() => goTo('Calendar')} />
+                <SidebarItem icon="⊞"  label="Dashboard"      active={activeScreen === 'Dashboard'} onPress={goToDashboard} />
+                <SidebarItem icon="🗂️" label="Projects"        active={activeScreen === 'Projects'}  hasArrow onPress={() => goToTab('Projects')} />
+                <SidebarItem icon="📅" label="Calendar"        active={activeScreen === 'Calendar'}  hasArrow onPress={() => goToTab('Calendar')} />
+                <SidebarItem icon="📋" label="My Tasks"        active={activeScreen === 'Tasks'}     hasArrow onPress={() => goToTab('Tasks')} />
+                <SidebarItem icon="📄" label="Documents"       active={activeScreen === 'Docs'}               onPress={() => goToStack('Docs')} />
                 <SidebarItem icon="⚡" label="Quick Notes"     active={activeScreen === 'QuickNotes'}
                   onPress={() => closeSidebar(() => navigation.navigate('Main', { screen: 'Dashboard', params: { scrollToNotes: true } }))} />
                 <SidebarItem icon="👥" label="Team Management" hasArrow
                   onPress={() => closeSidebar(() => navigation.navigate('TeamManagement'))} />
-                <SidebarItem icon="💬" label="Chats"           active={activeScreen === 'Chat'}      onPress={() => goTo('Chat')} hasArrow />
+                <SidebarItem icon="💬" label="Chats"           active={activeScreen === 'Chat'}      hasArrow onPress={() => goToStack('Chat')} />
               </ScrollView>
 
               <View style={styles.sidebarDivider} />
 
               <View style={styles.sidebarFooter}>
                 <View style={styles.userAvatar}>
-                  <Text style={styles.userAvatarText}>{user?.avatar || 'A'}</Text>
+                  <Text style={styles.userAvatarText}>{user?.avatar || user?.name?.[0]?.toUpperCase() || 'U'}</Text>
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.userName}>{user?.name || 'User'}</Text>
@@ -130,7 +93,7 @@ export default function NavBar({ title, activeScreen }) {
               </View>
 
               <View style={styles.sidebarBottom}>
-                <TouchableOpacity style={styles.sidebarBottomBtn} onPress={() => goTo('Settings')}>
+                <TouchableOpacity style={styles.sidebarBottomBtn} onPress={() => goToStack('Settings')}>
                   <Text style={styles.sidebarBottomIcon}>⚙️</Text>
                   <Text style={styles.sidebarBottomText}>Settings</Text>
                 </TouchableOpacity>
@@ -151,24 +114,15 @@ export default function NavBar({ title, activeScreen }) {
 }
 
 const styles = StyleSheet.create({
-  navbar: { backgroundColor: '#fff', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#EBEBF0', elevation: 2 },
-  navbarDark: { backgroundColor: '#0D0D0F', borderBottomColor: '#252530' },
-  navLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  navRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   hamburger: { gap: 5, padding: 4, justifyContent: 'center' },
   hamLine: { width: 20, height: 2, backgroundColor: '#1A1A2E', borderRadius: 2 },
-  hamLineDark: { backgroundColor: '#fff' },
-  logoBox: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center' },
-  logoText: { color: '#4ECDC4', fontSize: 15, fontWeight: '800' },
-  brandName: { fontSize: 15, fontWeight: '700', color: '#1A1A2E', letterSpacing: 0.5 },
-  brandNameDark: { color: '#fff' },
-  navIconBtn: { width: 36, height: 36, borderRadius: 8, borderWidth: 1, borderColor: '#EBEBF0', justifyContent: 'center', alignItems: 'center', backgroundColor: '#FAFAFA' },
-  navIconBtnDark: { borderColor: '#252530', backgroundColor: '#141418' },
-  navIcon: { fontSize: 16 },
-  overlay: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.5)' },
+  hamLineDark: { backgroundColor: '#FFFFFF' },
+  overlay: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.45)' },
   sidebar: { position: 'absolute', top: 0, left: 0, width: SIDEBAR_WIDTH, height: '100%', backgroundColor: '#1A1A2E', elevation: 20, shadowColor: '#000', shadowOffset: { width: 4, height: 0 }, shadowOpacity: 0.3, shadowRadius: 12 },
   sidebarHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#252535', gap: 10 },
   sidebarBrand: { flex: 1, color: '#fff', fontSize: 16, fontWeight: '700', letterSpacing: 1 },
+  logoBox: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#4ECDC4', justifyContent: 'center', alignItems: 'center' },
+  logoText: { color: '#1A1A2E', fontSize: 15, fontWeight: '800' },
   closeBtn: { padding: 4 },
   closeBtnText: { color: '#5C5C6E', fontSize: 16 },
   sidebarNav: { flex: 1, paddingTop: 8, paddingHorizontal: 8 },

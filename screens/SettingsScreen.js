@@ -1,13 +1,15 @@
 import React, { useContext } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Switch, SafeAreaView, StatusBar, Platform,
+  Switch, StatusBar, Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import NavBar from '../components/NavBar';
 import { ThemeContext } from '../context/ThemeContext';
+import { AuthContext } from '../context/AuthContext';
 
-const SegmentControl = ({ options, value, onChange, isDark }) => (
+const SegmentControl = ({ options, value, onChange, isDark, bdr }) => (
   <View style={[styles.segment, { backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}>
     {options.map(opt => (
       <TouchableOpacity
@@ -23,25 +25,22 @@ const SegmentControl = ({ options, value, onChange, isDark }) => (
 
 export default function SettingsScreen() {
   const navigation = useNavigation();
-  const { theme, setTheme, fontSize, setFontSize, fontScale } = useContext(ThemeContext);
+  const ctx = useContext(ThemeContext);
+  const { logout, user } = useContext(AuthContext);
+  const {
+    theme, fontSize, fontScale, setSetting,
+    dataMode, projectView, collapseSidebar,
+    desktopNotif, emailNotif, chatMention,
+    taskAssign, notifSound, sessionAlerts,
+  } = ctx;
+
   const isDark = theme === 'Dark';
-
-  const [dataMode,       setDataMode]       = React.useState('Local');
-  const [projectView,    setProjectView]    = React.useState('Grid');
-  const [collapseSidebar,setCollapseSidebar]= React.useState(false);
-  const [desktopNotif,   setDesktopNotif]   = React.useState(true);
-  const [emailNotif,     setEmailNotif]     = React.useState(false);
-  const [chatMention,    setChatMention]    = React.useState(true);
-  const [taskAssign,     setTaskAssign]     = React.useState(true);
-  const [notifSound,     setNotifSound]     = React.useState(true);
-  const [sessionAlerts,  setSessionAlerts]  = React.useState(true);
-
   const bg   = isDark ? '#0D0D0F' : '#F5F5F7';
   const card = isDark ? '#1A1A20' : '#FFFFFF';
   const txt  = isDark ? '#FFFFFF' : '#1A1A2E';
   const sub  = isDark ? '#9898A6' : '#888899';
   const bdr  = isDark ? '#252530' : '#EBEBF0';
-  const fs   = (s) => s * fontScale;
+  const fs   = s => s * fontScale;
 
   const SectionHeader = ({ title }) => (
     <Text style={[styles.sectionHeader, { color: sub, fontSize: fs(12) }]}>{title}</Text>
@@ -53,11 +52,20 @@ export default function SettingsScreen() {
         <Text style={styles.settingIcon}>{icon}</Text>
         <View style={{ flex: 1 }}>
           <Text style={[styles.settingLabel, { color: txt, fontSize: fs(14) }]}>{label}</Text>
-          {subtitle && <Text style={[styles.settingSubtitle, { color: sub, fontSize: fs(11) }]}>{subtitle}</Text>}
+          {subtitle ? <Text style={[styles.settingSubtitle, { color: sub, fontSize: fs(11) }]}>{subtitle}</Text> : null}
         </View>
       </View>
       {right}
     </View>
+  );
+
+  const sw = (key, val) => (
+    <Switch
+      value={val}
+      onValueChange={v => setSetting(key, v)}
+      trackColor={{ false: bdr, true: '#1A1A2E' }}
+      thumbColor="#fff"
+    />
   );
 
   return (
@@ -78,62 +86,53 @@ export default function SettingsScreen() {
           <SectionHeader title="Configuration" />
           <View style={[styles.card, { backgroundColor: card, borderColor: bdr }]}>
             <SettingRow icon="💾" label="Data Mode" subtitle="Where your data is stored and synced"
-              right={<SegmentControl options={['Local','Cloud']} value={dataMode} onChange={setDataMode} isDark={isDark} />}
+              right={<SegmentControl options={['Local','Cloud']} value={dataMode} onChange={v => setSetting('dataMode', v)} isDark={isDark} bdr={bdr} />}
             />
             <SettingRow icon="⊞" label="Default Project View" subtitle="How projects are displayed"
-              right={<SegmentControl options={['Grid','Table']} value={projectView} onChange={setProjectView} isDark={isDark} />}
+              right={<SegmentControl options={['Grid','Table']} value={projectView} onChange={v => setSetting('projectView', v)} isDark={isDark} bdr={bdr} />}
             />
             <SettingRow icon="☰" label="Collapsed Sidebar by Default" subtitle="Start with sidebar minimized"
-              right={<Switch value={collapseSidebar} onValueChange={setCollapseSidebar} trackColor={{ false: bdr, true: '#1A1A2E' }} thumbColor="#fff" />}
+              right={sw('collapseSidebar', collapseSidebar)}
             />
           </View>
 
-          {/* APPEARANCE — theme and font actually work globally */}
+          {/* APPEARANCE */}
           <SectionHeader title="Appearance" />
           <View style={[styles.card, { backgroundColor: card, borderColor: bdr }]}>
-
-            <SettingRow icon="🎨" label="Theme" subtitle="Currently: Light applies white backgrounds, Dark applies dark backgrounds everywhere"
-              right={<SegmentControl options={['Light','Dark']} value={theme} onChange={setTheme} isDark={isDark} />}
+            <SettingRow icon="🎨" label="Theme" subtitle={`Active: ${theme} mode applied globally`}
+              right={<SegmentControl options={['Light','Dark']} value={theme} onChange={v => setSetting('theme', v)} isDark={isDark} bdr={bdr} />}
             />
-
-            <SettingRow icon="T" label="Font Size" subtitle="Applies to all text in the app"
-              right={<SegmentControl options={['Small','Medium','Large']} value={fontSize} onChange={setFontSize} isDark={isDark} />}
+            <SettingRow icon="T" label="Font Size" subtitle={`Active: ${fontSize} — scales all text in the app`}
+              right={<SegmentControl options={['Small','Medium','Large']} value={fontSize} onChange={v => setSetting('fontSize', v)} isDark={isDark} bdr={bdr} />}
             />
-
             <SettingRow icon="☰" label="Collapsed Sidebar" subtitle="Start with sidebar minimized on load"
-              right={<Switch value={collapseSidebar} onValueChange={setCollapseSidebar} trackColor={{ false: bdr, true: '#1A1A2E' }} thumbColor="#fff" />}
+              right={sw('collapseSidebar', collapseSidebar)}
             />
           </View>
 
           {/* NOTIFICATIONS */}
           <SectionHeader title="Notifications" />
           <View style={[styles.card, { backgroundColor: card, borderColor: bdr }]}>
-            {[
-              { icon: '🖥', label: 'Desktop Notifications',  sub: 'Push alerts in your browser',                   val: desktopNotif, set: setDesktopNotif },
-              { icon: '✉️', label: 'Email Notifications',    sub: 'Receive updates to your inbox',                  val: emailNotif,   set: setEmailNotif },
-              { icon: '💬', label: 'Chat Mention Alerts',    sub: 'Notify when someone @mentions you in chat',      val: chatMention,  set: setChatMention },
-              { icon: '📋', label: 'Task Assignment Alerts', sub: 'Notify when a task is assigned to you',          val: taskAssign,   set: setTaskAssign },
-              { icon: '🔊', label: 'Notification Sound',     sub: 'Play a sound for incoming notifications',        val: notifSound,   set: setNotifSound },
-            ].map(item => (
-              <SettingRow
-                key={item.label}
-                icon={item.icon} label={item.label} subtitle={item.sub}
-                right={<Switch value={item.val} onValueChange={item.set} trackColor={{ false: bdr, true: '#1A1A2E' }} thumbColor="#fff" />}
-              />
-            ))}
+            <SettingRow icon="🖥"  label="Desktop Notifications"  subtitle="Push alerts in your browser"                  right={sw('desktopNotif',  desktopNotif)} />
+            <SettingRow icon="✉️"  label="Email Notifications"    subtitle="Receive updates to your inbox"                right={sw('emailNotif',    emailNotif)} />
+            <SettingRow icon="💬"  label="Chat Mention Alerts"    subtitle="Notify when someone @mentions you in chat"    right={sw('chatMention',   chatMention)} />
+            <SettingRow icon="📋"  label="Task Assignment Alerts" subtitle="Notify when a task is assigned to you"        right={sw('taskAssign',    taskAssign)} />
+            <SettingRow icon="🔊"  label="Notification Sound"     subtitle="Play a sound for incoming notifications"      right={sw('notifSound',    notifSound)} />
           </View>
 
           {/* SECURITY */}
           <SectionHeader title="Security" />
           <View style={[styles.card, { backgroundColor: card, borderColor: bdr }]}>
             <SettingRow icon="⏱" label="Auto-logout Timeout" subtitle="Sign out automatically after inactivity"
-              right={<View style={[styles.dropdownBox, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}>
-                <Text style={[styles.dropdownText, { color: txt }]}>30 min</Text>
-                <Text style={{ color: sub, fontSize: 10 }}>▾</Text>
-              </View>}
+              right={
+                <View style={[styles.dropdownBox, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}>
+                  <Text style={[styles.dropdownText, { color: txt }]}>30 min</Text>
+                  <Text style={{ color: sub, fontSize: 10 }}>▾</Text>
+                </View>
+              }
             />
             <SettingRow icon="🔔" label="Active Session Alerts" subtitle="Get notified when a new device logs in"
-              right={<Switch value={sessionAlerts} onValueChange={setSessionAlerts} trackColor={{ false: bdr, true: '#1A1A2E' }} thumbColor="#fff" />}
+              right={sw('sessionAlerts', sessionAlerts)}
             />
           </View>
 
@@ -141,10 +140,10 @@ export default function SettingsScreen() {
           <SectionHeader title="Account" />
           <View style={[styles.card, { backgroundColor: card, borderColor: bdr }]}>
             {[
-              { icon: '👤', label: 'Edit Profile',     sub: 'Update your name and avatar' },
-              { icon: '🔒', label: 'Change Password',  sub: 'Update your account password' },
+              { icon: '👤', label: 'Edit Profile',    sub: 'Update your name and avatar', onPress: () => navigation.navigate('EditProfile') },
+              { icon: '🔒', label: 'Change Password', sub: 'Update your account password', onPress: () => navigation.navigate('ChangePassword') },
             ].map(item => (
-              <TouchableOpacity key={item.label} style={[styles.settingRow, { borderBottomColor: bdr }]}>
+              <TouchableOpacity key={item.label} onPress={item.onPress} style={[styles.settingRow, { borderBottomColor: bdr }]}>
                 <View style={styles.settingLeft}>
                   <Text style={styles.settingIcon}>{item.icon}</Text>
                   <View style={{ flex: 1 }}>
@@ -157,7 +156,7 @@ export default function SettingsScreen() {
             ))}
             <TouchableOpacity
               style={[styles.settingRow, { borderBottomColor: 'transparent' }]}
-              onPress={() => navigation.navigate('Login')}
+              onPress={async () => { await logout(); }}
             >
               <View style={styles.settingLeft}>
                 <Text style={styles.settingIcon}>🚪</Text>

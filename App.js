@@ -1,16 +1,28 @@
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, useNavigation } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import {
   Text, View, TouchableOpacity, StyleSheet, Modal,
-  TextInput, Alert, Animated, Image, ScrollView,
-  SafeAreaView, Platform,
+  TextInput, Alert, Animated, Image, ScrollView, Platform,
 } from 'react-native';
-import { useState, useRef, useEffect } from 'react';
+import { SafeAreaView, SafeAreaProvider } from 'react-native-safe-area-context';
+import { useState, useRef, useEffect, useContext } from 'react';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { NotificationsProvider, NotificationsContext } from './context/NotificationsContext';
+import { AuthProvider, AuthContext } from './context/AuthContext';
+import { registerForPushNotifications, addNotificationListeners, rescheduleAllEvents } from './services/PushNotificationService';
+import { DataService } from './services/DataService';
+import { ThemeProvider } from './context/ThemeContext';
+import ErrorBoundary from './components/ErrorBoundary';
+import OnboardingScreen, { ONBOARDING_KEY } from './screens/OnboardingScreen';
 
-import LoginScreen     from './screens/LoginScreen';
+import LoginScreen            from './screens/LoginScreen';
+import SignupScreen            from './screens/SignupScreen';
+import ForgotPasswordScreen    from './screens/ForgotPasswordScreen';
+import TeamManagementScreen    from './screens/TeamManagementScreen';
+import EditProfileScreen       from './screens/EditProfileScreen';
+import ChangePasswordScreen    from './screens/ChangePasswordScreen';
 import DashboardScreen from './screens/DashboardScreen';
 import CalendarScreen  from './screens/CalendarScreen';
 import ProjectsScreen  from './screens/ProjectsScreen';
@@ -34,7 +46,8 @@ function QuickTaskButton({ onPress }) {
   );
 }
 
-function QuickTaskModal({ visible, onClose }) {
+function QuickTaskModal({ visible, onClose, navigation }) {
+  const { addNotification } = useContext(NotificationsContext);
   const [activeTab, setActiveTab] = useState('task');
   const [taskName,  setTaskName]  = useState('');
   const [taskDesc,  setTaskDesc]  = useState('');
@@ -77,7 +90,18 @@ function QuickTaskModal({ visible, onClose }) {
       const existing = await AsyncStorage.getItem(STORAGE_KEY);
       const updated  = [newEntry, ...(existing ? JSON.parse(existing) : [])];
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-      closeModal(() => Alert.alert(activeTab === 'task' ? '✅ Task Saved!' : '📅 Event Saved!', `"${newEntry.name}" saved.\nOpen the Tasks tab to see it.`));
+      // Fire notification
+      if (activeTab === 'task') {
+        addNotification({ type: 'task', icon: '⚡', title: 'Quick Note Created', body: `"${newEntry.name}" saved to Quick Notes.` });
+      } else {
+        addNotification({ type: 'event', icon: '📅', title: 'Event Created', body: `"${newEntry.name}"${newEntry.eventDate ? ' on ' + newEntry.eventDate : ''} has been scheduled.` });
+      }
+      closeModal(() => {
+        navigation.navigate('Main', {
+          screen: 'Dashboard',
+          params: { scrollToNotes: true },
+        });
+      });
     } catch { Alert.alert('Error', 'Could not save.'); }
   };
 
@@ -159,6 +183,7 @@ function QuickTaskModal({ visible, onClose }) {
 // Dashboard is the FIRST tab = main screen, bottom bar always visible
 function MainTabs() {
   const [modalVisible, setModalVisible] = useState(false);
+  const navigation = useNavigation();
   return (
     <>
       <Tab.Navigator
@@ -197,23 +222,93 @@ function MainTabs() {
         <Tab.Screen name="Calendar" component={CalendarScreen} />
         <Tab.Screen name="Tasks"    component={TasksScreen} />
       </Tab.Navigator>
-      <QuickTaskModal visible={modalVisible} onClose={() => setModalVisible(false)} />
+      <QuickTaskModal visible={modalVisible} onClose={() => setModalVisible(false)} navigation={navigation} />
     </>
+  );
+}
+
+function RootNavigator() {
+  const { isAuthenticated, isLoading } = useContext(AuthContext);
+  const [showOnboarding, setShowOnboarding] = useState(null); // null=checking, true/false
+
+  useEffect(() => {
+    AsyncStorage.getItem(ONBOARDING_KEY).then(done => {
+      setShowOnboarding(done !== 'true');
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    // Register push notifications and reschedule event reminders
+    registerForPushNotifications().catch(() => {});
+    DataService.Tasks.migrate().catch(() => {}); // migrate existing data to sync schema
+    DataService.Tasks.getAll().then(tasks => {
+      rescheduleAllEvents(tasks).catch(() => {});
+    }).catch(() => {});
+
+    const unsub = addNotificationListeners(
+      (notification) => { /* notification received while app is open */ },
+      (response)     => { /* user tapped a notification */ }
+    );
+    return unsub;
+  }, [isAuthenticated]);
+
+  if (isLoading || showOnboarding === null) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center' }}>
+        <View style={{ width: 64, height: 64, borderRadius: 14, backgroundColor: '#4ECDC4', justifyContent: 'center', alignItems: 'center', marginBottom: 20 }}>
+          <Text style={{ color: '#1A1A2E', fontSize: 28, fontWeight: '800' }}>D</Text>
+        </View>
+        <Text style={{ color: '#fff', fontSize: 22, fontWeight: '700', letterSpacing: 2, marginBottom: 8 }}>DYUKSA</Text>
+        <Text style={{ color: '#4ECDC4', fontSize: 13 }}>Loading your workspace...</Text>
+      </View>
+    );
+  }
+
+  if (showOnboarding) {
+    return <OnboardingScreen onDone={() => setShowOnboarding(false)} />;
+  }
+
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      {!isAuthenticated ? (
+        // Auth stack — unauthenticated
+        <>
+          <Stack.Screen name="Login"          component={LoginScreen} />
+          <Stack.Screen name="Signup"         component={SignupScreen} />
+          <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
+        </>
+      ) : (
+        // App stack — authenticated
+        <>
+          <Stack.Screen name="Main"     component={MainTabs} />
+          <Stack.Screen name="Chat"     component={ChatScreen} />
+          <Stack.Screen name="Settings" component={SettingsScreen} />
+          <Stack.Screen name="Docs"              component={DocumentsScreen} />
+          <Stack.Screen name="TeamManagement"   component={TeamManagementScreen} />
+          <Stack.Screen name="EditProfile"      component={EditProfileScreen} />
+          <Stack.Screen name="ChangePassword"   component={ChangePasswordScreen} />
+        </>
+      )}
+    </Stack.Navigator>
   );
 }
 
 export default function App() {
   return (
-    <NavigationContainer>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="Login"    component={LoginScreen} />
-        <Stack.Screen name="Main"     component={MainTabs} />
-        <Stack.Screen name="Chat"     component={ChatScreen} />
-        <Stack.Screen name="Settings" component={SettingsScreen} />
-        {/* Docs accessible from Dashboard sidebar */}
-        <Stack.Screen name="Docs"     component={DocumentsScreen} />
-      </Stack.Navigator>
-    </NavigationContainer>
+    <ErrorBoundary>
+    <SafeAreaProvider>
+    <AuthProvider>
+      <NotificationsProvider>
+        <ThemeProvider>
+          <NavigationContainer>
+            <RootNavigator />
+          </NavigationContainer>
+        </ThemeProvider>
+      </NotificationsProvider>
+    </AuthProvider>
+    </SafeAreaProvider>
+    </ErrorBoundary>
   );
 }
 

@@ -5,39 +5,51 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
-
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#1A1A2E"
     },
-
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSCameraUsageDescription": "This app needs camera access to take photos",
-        "NSPhotoLibraryUsageDescription": "This app needs access to your photos",
-        "NSPhotoLibraryAddUsageDescription": "This app needs permission to save photos"
+        "NSCameraUsageDescription": "DYUKSA needs camera access to attach photos to tasks and notes.",
+        "NSPhotoLibraryUsageDescription": "DYUKSA needs photo library access to attach images to tasks and notes.",
+        "NSPhotoLibraryAddUsageDescription": "DYUKSA needs permission to save photos."
       }
     },
-
     "android": {
       "edgeToEdgeEnabled": true,
       "permissions": [
         "CAMERA",
         "READ_EXTERNAL_STORAGE",
-        "WRITE_EXTERNAL_STORAGE"
+        "WRITE_EXTERNAL_STORAGE",
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE",
+        "android.permission.POST_NOTIFICATIONS"
       ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#1A1A2E"
       }
     },
-
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#4ECDC4",
+          "sounds": [],
+          "androidMode": "default",
+          "androidCollapsedTitle": "DYUKSA"
+        }
+      ]
+    ]
   }
 }
