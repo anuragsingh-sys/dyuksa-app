@@ -1,102 +1,219 @@
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   Modal, TextInput, StatusBar, Platform,
-  ScrollView, Image, Alert, Animated,
+  ScrollView, Image, Alert, Animated, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useState, useCallback, useRef, useContext } from 'react';
+import { useState, useCallback, useRef, useContext, useEffect } from 'react';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as ImagePicker from 'expo-image-picker';
 import { NotificationsContext } from '../context/NotificationsContext';
+import { getUsers, getProjects, getAccessToken } from '../services/ApiService';
 import SidebarMenu from '../components/SidebarMenu';
 import { ThemeContext } from '../context/ThemeContext';
 import NotificationBell from '../components/NotificationBell';
 
-const STORAGE_KEY = 'DYUKSA_QUICK_TASKS';
-const STATUS_OPTIONS = ['Todo', 'In Progress', 'Done'];
-const STATUS_COLORS  = { 'Todo': '#888899', 'In Progress': '#4ECDC4', 'Done': '#4ADE80' };
+const BASE_URL = 'http://192.168.1.164:8000/api/v1';
 
+const STATUS_OPTIONS = ['pending', 'in_progress', 'completed', 'backlog', 'deployed', 'deferred', 'review'];
+const STATUS_LABELS  = { pending: 'Pending', in_progress: 'In Progress', completed: 'Completed', backlog: 'Backlog', deployed: 'Deployed', deferred: 'Deferred', review: 'Review' };
+const STATUS_COLORS  = { pending: '#888899', in_progress: '#4ECDC4', completed: '#4ADE80', backlog: '#F472B6', deployed: '#3B82F6', deferred: '#FBBF24', review: '#A78BFA' };
+const PRIORITY_OPTIONS = ['low', 'medium', 'high', 'urgent'];
+const PRIORITY_COLORS  = { low: '#4ADE80', medium: '#FBBF24', high: '#F97316', urgent: '#EF4444' };
+
+// ── Inline Dropdown ──────────────────────────────────────────────────────────
+function InlineDropdown({ options, selected, onSelect, placeholder }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <View>
+      <TouchableOpacity style={[dd.trigger, open && dd.triggerOpen]} onPress={() => setOpen(o => !o)}>
+        <Text style={[dd.triggerText, !selected && { color: '#AAAABC' }]} numberOfLines={1}>
+          {selected || placeholder}
+        </Text>
+        <Text style={dd.arrow}>{open ? '▲' : '▾'}</Text>
+      </TouchableOpacity>
+      {open && (
+        <View style={dd.list}>
+          <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled" style={{ maxHeight: 180 }}>
+            {options.map((opt, i) => (
+              <TouchableOpacity
+                key={i}
+                style={[dd.item, i === options.length - 1 && { borderBottomWidth: 0 }]}
+                onPress={() => { onSelect(opt); setOpen(false); }}
+              >
+                <Text style={[dd.itemText, selected === opt.label && { color: '#4ECDC4', fontWeight: '700' }]}>
+                  {opt.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      )}
+    </View>
+  );
+}
+
+const dd = StyleSheet.create({
+  trigger: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#F5F5F7', borderRadius: 10, borderWidth: 1.5, borderColor: '#EBEBF0', paddingHorizontal: 12, height: 46 },
+  triggerOpen: { borderColor: '#4ECDC4', backgroundColor: '#fff' },
+  triggerText: { fontSize: 13, color: '#1A1A2E', flex: 1 },
+  arrow: { fontSize: 11, color: '#888899', marginLeft: 4 },
+  list: { backgroundColor: '#fff', borderRadius: 10, borderWidth: 1.5, borderColor: '#4ECDC4', marginTop: 4 },
+  item: { paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F0F0F5' },
+  itemText: { fontSize: 13, color: '#1A1A2E' },
+});
+
+// ── Main Screen ──────────────────────────────────────────────────────────────
 export default function TasksScreen() {
   const navigation = useNavigation();
-  const { theme, fontScale } = useContext(ThemeContext);
+  const { theme } = useContext(ThemeContext);
+  const { addNotification } = useContext(NotificationsContext);
   const isDark = theme === 'Dark';
   const bg   = isDark ? '#0D0D0F' : '#F5F5F7';
   const card = isDark ? '#1A1A20' : '#FFFFFF';
   const txt  = isDark ? '#FFFFFF' : '#1A1A2E';
   const sub  = isDark ? '#9898A6' : '#888899';
   const bdr  = isDark ? '#252530' : '#EBEBF0';
-  const fs   = s => s * fontScale;
 
-  const { addNotification } = useContext(NotificationsContext);
-  const [tasks,  setTasks]  = useState([]);
-  const [filter, setFilter] = useState('All');
-  const [modalVisible, setModalVisible] = useState(false);
-  const [newTaskName, setNewTaskName] = useState('');
-  const [newTaskDesc, setNewTaskDesc] = useState('');
+  const [tasks,    setTasks]    = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [users,    setUsers]    = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const [filter,   setFilter]   = useState('All');
 
-  // Modal slides from top so keyboard doesn't hide it
-  const slideAnim = useRef(new Animated.Value(-400)).current;
-  const animated  = useRef(false);
+  const [modalVisible,   setModalVisible]   = useState(false);
+  const [saving,         setSaving]         = useState(false);
+  const slideAnim = useRef(new Animated.Value(-700)).current;
 
-  useFocusEffect(useCallback(() => {
-    AsyncStorage.getItem(STORAGE_KEY).then(d => setTasks(d ? JSON.parse(d) : []));
-  }, []));
+  const [heading,       setHeading]       = useState('');
+  const [description,   setDescription]   = useState('');
+  const [project,       setProject]       = useState(null);
+  const [status,        setStatus]        = useState(null);
+  const [priority,      setPriority]      = useState('medium');
+  const [startDate,     setStartDate]     = useState('');
+  const [endDate,       setEndDate]       = useState('');
+  const [assignedTo,    setAssignedTo]    = useState([]);
+  const [links,         setLinks]         = useState('');
+  const [images,        setImages]        = useState([]);
+  const [projectSearch, setProjectSearch] = useState('');
+
+  useFocusEffect(useCallback(() => { fetchTasks(); }, []));
+
+  useEffect(() => {
+    getProjects().then(setProjects).catch(() => {});
+    getUsers().then(setUsers).catch(() => {});
+  }, []);
+
+  const fetchTasks = async () => {
+    setLoading(true);
+    try {
+      const token = await getAccessToken();
+      const res   = await fetch(`${BASE_URL}/tasksite/`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (res.ok) setTasks(Array.isArray(data) ? data : (data.tasks || data.results || []));
+    } catch (e) {
+      console.error('fetchTasks error:', e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const openModal = () => {
     setModalVisible(true);
-    animated.current = true;
     Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, tension: 80, friction: 12 }).start();
   };
 
   const closeModal = () => {
-    animated.current = false;
-    Animated.timing(slideAnim, { toValue: -400, duration: 250, useNativeDriver: true })
-      .start(() => { setModalVisible(false); setNewTaskName(''); setNewTaskDesc(''); });
+    Animated.timing(slideAnim, { toValue: -700, duration: 250, useNativeDriver: true }).start(() => {
+      setModalVisible(false);
+      setHeading(''); setDescription(''); setProject(null); setStatus(null);
+      setPriority('medium'); setStartDate(''); setEndDate('');
+      setAssignedTo([]); setLinks(''); setImages([]); setProjectSearch('');
+    });
   };
 
-  const addTask = async () => {
-    if (!newTaskName.trim()) { Alert.alert('Required', 'Enter a task name.'); return; }
-    const newEntry = {
-      id: Date.now().toString(), type: 'task',
-      name: newTaskName.trim(), description: newTaskDesc.trim(),
-      eventDate: '', images: [],
-      createdAt: new Date().toISOString(), status: 'Todo',
-    };
-    const existing = await AsyncStorage.getItem(STORAGE_KEY);
-    const updated  = [newEntry, ...(existing ? JSON.parse(existing) : [])];
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-    setTasks(updated);
-    addNotification({ type: 'task', icon: '📋', title: 'Task Created', body: `"${newEntry.name}" has been added to your tasks.` });
-    closeModal();
+  const openCamera = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') { Alert.alert('Permission Denied', 'Camera access is needed.'); return; }
+    const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.8 });
+    if (!result.canceled && result.assets?.[0]?.uri) setImages(p => [...p, result.assets[0].uri]);
   };
 
-  const save = async (updated) => { setTasks(updated); await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated)); };
-  const cycleStatus = id => save(tasks.map(t => t.id !== id ? t : { ...t, status: STATUS_OPTIONS[(STATUS_OPTIONS.indexOf(t.status) + 1) % STATUS_OPTIONS.length] }));
-  const deleteTask  = id => Alert.alert('Delete', 'Remove this item?', [
-    { text: 'Cancel', style: 'cancel' },
-    { text: 'Delete', style: 'destructive', onPress: () => save(tasks.filter(t => t.id !== id)) },
-  ]);
+  const openGallery = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') { Alert.alert('Permission Denied', 'Gallery access is needed.'); return; }
+    const result = await ImagePicker.launchImageLibraryAsync({ allowsMultipleSelection: true, quality: 0.8 });
+    if (!result.canceled && result.assets?.length) setImages(p => [...p, ...result.assets.map(a => a.uri)]);
+  };
 
-  const filtered =
-    filter === 'All'    ? tasks :
-    filter === 'Events' ? tasks.filter(t => t.type === 'event') :
-    tasks.filter(t => t.type === 'task' && t.status === filter);
+  const createTask = async () => {
+    if (!heading.trim()) { Alert.alert('Required', 'Enter a task title.'); return; }
+    if (!project)        { Alert.alert('Required', 'Select a project.'); return; }
+
+    setSaving(true);
+    try {
+      const token    = await getAccessToken();
+      const formData = new FormData();
+      formData.append('heading', heading.trim());
+      formData.append('project', String(project.id));
+      if (description) formData.append('description', description);
+      if (status)      formData.append('status',      status);
+      if (priority)    formData.append('priority',    priority);
+      if (startDate)   formData.append('start_date',  startDate);
+      if (endDate)     formData.append('end_date',    endDate);
+      if (links.trim()) formData.append('uploaded_links', links.trim());
+      assignedTo.forEach(uid => formData.append('assigned_to', String(uid)));
+      images.forEach((uri, i) => {
+        formData.append('uploaded_files', { uri, name: `image_${i}.jpg`, type: 'image/jpeg' });
+      });
+
+      const res  = await fetch(`${BASE_URL}/tasksite/`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: formData,
+      });
+      const data = await res.json();
+      if (res.ok) {
+        addNotification({ type: 'task', icon: '📋', title: 'Task Created', body: `"${heading.trim()}" added successfully.` });
+        await fetchTasks();
+        closeModal();
+      } else {
+        Alert.alert('Error', data.message || data.detail || JSON.stringify(data));
+      }
+    } catch (e) {
+      Alert.alert('Error', e.message || 'Network error.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleAssignee = (uid) => {
+    setAssignedTo(prev => prev.includes(uid) ? prev.filter(id => id !== uid) : [...prev, uid]);
+  };
+
+  const filteredProjects = projects.filter(p =>
+    p.name?.toLowerCase().includes(projectSearch.toLowerCase())
+  );
+
+  const filtered = filter === 'All' ? tasks : tasks.filter(t => t.status === filter);
 
   const formatDate = iso => {
-    try { return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }); }
-    catch { return ''; }
+    try { return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: '2-digit' }); }
+    catch { return iso || ''; }
   };
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: bg }]}>
-      <StatusBar barStyle={isDark ? "light-content" : "dark-content"} backgroundColor={isDark ? "#0D0D0F" : "#fff"} translucent={false} />
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={isDark ? '#0D0D0F' : '#fff'} translucent={false} />
 
       {/* Navbar */}
       <View style={[styles.navbar, { backgroundColor: card, borderBottomColor: bdr }]}>
         <View style={styles.navLeft}>
           <SidebarMenu activeScreen="Tasks" />
           <View style={styles.logoBox}><Text style={styles.logoText}>D</Text></View>
-          <Text style={[styles.brandName, { color: txt }]}>Tasks</Text>
+          <Text style={[styles.brandName, { color: txt }]}>Task Board</Text>
         </View>
         <View style={styles.navRight}>
           <TouchableOpacity style={styles.navIconBtn} onPress={() => navigation.navigate('Chat')}>
@@ -106,143 +223,245 @@ export default function TasksScreen() {
         </View>
       </View>
 
-      {/* Sub header with + New Task button */}
+      {/* Sub header */}
       <View style={[styles.subHeader, { backgroundColor: card, borderBottomColor: bdr }]}>
         <View>
-          <Text style={[styles.pageTitle, { color: txt }]}>Tasks</Text>
-          <Text style={[styles.pageSub, { color: sub }]}>{tasks.filter(t => t.type === 'task').length} task{tasks.filter(t => t.type === 'task').length !== 1 ? 's' : ''}</Text>
+          <Text style={[styles.pageTitle, { color: txt }]}>My Tasks</Text>
+          <Text style={[styles.pageSub, { color: sub }]}>{tasks.length} task{tasks.length !== 1 ? 's' : ''}</Text>
         </View>
         <TouchableOpacity style={styles.newBtn} onPress={openModal}>
-          <Text style={styles.newBtnText}>+ New Task</Text>
+          <Text style={styles.newBtnText}>+ Create Task</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Stats */}
-      <View style={styles.statsBar}>
-        {[
-          { label: 'Tasks',  value: tasks.filter(t => t.type === 'task').length,  color: '#1A1A2E' },
-          { label: 'Events', value: tasks.filter(t => t.type === 'event').length, color: '#A78BFA' },
-          { label: 'Done',   value: tasks.filter(t => t.status === 'Done').length, color: '#4ADE80' },
-          { label: 'Images', value: tasks.reduce((n, t) => n + (t.images?.length || 0), 0), color: '#4ECDC4' },
-        ].map((s, i, arr) => (
-          <View key={s.label} style={[styles.statItem, i < arr.length - 1 && styles.statBorder]}>
-            <Text style={[styles.statNum, { color: s.color }]}>{s.value}</Text>
-            <Text style={styles.statLabel}>{s.label}</Text>
-          </View>
-        ))}
-      </View>
-
-      {/* Filters */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filtersWrap} contentContainerStyle={styles.filters}>
-        {['All', 'Todo', 'In Progress', 'Done', 'Events'].map(f => (
-          <TouchableOpacity key={f} style={[styles.chip, filter === f && styles.chipActive]} onPress={() => setFilter(f)}>
-            <Text style={[styles.chipText, filter === f && styles.chipTextActive]}>{f}</Text>
+      {/* Filter chips */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={[styles.filtersWrap, { backgroundColor: card, borderBottomColor: bdr }]} contentContainerStyle={styles.filters}>
+        {['All', ...STATUS_OPTIONS].map(f => (
+          <TouchableOpacity key={f} style={[styles.chip, { borderColor: bdr }, filter === f && styles.chipActive]} onPress={() => setFilter(f)}>
+            <Text style={[styles.chipText, filter === f && styles.chipTextActive]}>
+              {f === 'All' ? 'All' : STATUS_LABELS[f]}
+            </Text>
           </TouchableOpacity>
         ))}
       </ScrollView>
 
-      {filtered.length === 0 ? (
+      {/* Task list */}
+      {loading ? (
         <View style={styles.emptyState}>
-          <Text style={{ fontSize: 52, opacity: 0.3 }}>{tasks.length === 0 ? '📋' : '🔍'}</Text>
-          <Text style={styles.emptyTitle}>{tasks.length === 0 ? 'No tasks yet' : `No ${filter.toLowerCase()} items`}</Text>
-          <Text style={styles.emptySub}>{tasks.length === 0 ? 'Tap "+ New Task" or use the ＋ button' : 'Try a different filter'}</Text>
-          {tasks.length === 0 && (
-            <TouchableOpacity style={[styles.newBtn, { marginTop: 8 }]} onPress={openModal}>
-              <Text style={styles.newBtnText}>+ New Task</Text>
-            </TouchableOpacity>
-          )}
+          <ActivityIndicator size="large" color="#4ECDC4" />
+          <Text style={[styles.emptySub, { color: sub }]}>Loading tasks...</Text>
+        </View>
+      ) : filtered.length === 0 ? (
+        <View style={styles.emptyState}>
+          <Text style={{ fontSize: 48, opacity: 0.3 }}>📋</Text>
+          <Text style={[styles.emptyTitle, { color: txt }]}>No tasks yet</Text>
+          <Text style={[styles.emptySub, { color: sub }]}>Tap + Create Task to add one</Text>
         </View>
       ) : (
         <FlatList
-          data={filtered} keyExtractor={i => i.id}
+          data={filtered}
+          keyExtractor={i => String(i.id)}
           contentContainerStyle={{ padding: 12 }}
-          showsVerticalScrollIndicator={false}
+          onRefresh={fetchTasks}
+          refreshing={loading}
           renderItem={({ item }) => (
-            <View style={styles.taskCard}>
+            <View style={[styles.taskCard, { backgroundColor: card, borderColor: bdr }]}>
               <View style={styles.cardTop}>
-                <View style={[styles.typeIcon, { backgroundColor: item.type === 'event' ? 'rgba(167,139,250,0.15)' : 'rgba(78,205,196,0.12)' }]}>
-                  <Text style={{ fontSize: 18 }}>{item.type === 'event' ? '📅' : '📋'}</Text>
+                <View style={[styles.typeIcon, { backgroundColor: (STATUS_COLORS[item.status] || '#888') + '20' }]}>
+                  <Text style={{ fontSize: 18 }}>📋</Text>
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.taskName}>{item.name}</Text>
-                  <Text style={styles.taskDate}>{formatDate(item.createdAt)}</Text>
+                  <Text style={[styles.taskName, { color: txt }]} numberOfLines={1}>{item.heading}</Text>
+                  {item.project_details?.name && (
+                    <Text style={[styles.taskProject, { color: sub }]}>📁 {item.project_details.name}</Text>
+                  )}
+                  {(item.start_date || item.created_at) && (
+                    <Text style={[styles.taskDate, { color: sub }]}>{formatDate(item.start_date || item.created_at)}</Text>
+                  )}
                 </View>
-                <TouchableOpacity
-                  style={[styles.statusBadge, { backgroundColor: item.type === 'event' ? 'rgba(167,139,250,0.12)' : STATUS_COLORS[item.status] + '20' }]}
-                  onPress={() => item.type === 'task' && cycleStatus(item.id)}
-                >
-                  <Text style={[styles.statusText, { color: item.type === 'event' ? '#A78BFA' : STATUS_COLORS[item.status] }]}>
-                    {item.type === 'event' ? 'Event' : item.status}
+                <View style={[styles.statusBadge, { backgroundColor: (STATUS_COLORS[item.status] || '#888') + '20' }]}>
+                  <Text style={[styles.statusText, { color: STATUS_COLORS[item.status] || '#888' }]}>
+                    {STATUS_LABELS[item.status] || item.status}
                   </Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.deleteBtn} onPress={() => deleteTask(item.id)}>
-                  <Text style={{ fontSize: 15 }}>🗑</Text>
-                </TouchableOpacity>
+                </View>
               </View>
-              {!!item.description && <Text style={styles.taskDesc}>{item.description}</Text>}
-              {item.type === 'event' && !!item.eventDate && (
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                  <Text style={{ fontSize: 12 }}>🕐</Text>
-                  <Text style={{ fontSize: 12, color: '#A78BFA', fontWeight: '500' }}>{item.eventDate}</Text>
+              {!!item.description && (
+                <Text style={[styles.taskDesc, { color: sub }]} numberOfLines={2}>{item.description}</Text>
+              )}
+              {item.priority && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                  <View style={[styles.priorityDot, { backgroundColor: PRIORITY_COLORS[item.priority] || '#888' }]} />
+                  <Text style={{ fontSize: 11, color: sub, fontWeight: '500' }}>{item.priority?.toUpperCase()}</Text>
                 </View>
               )}
-              {item.images?.length > 0 && (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
-                  {item.images.map((uri, i) => (
-                    <Image key={i} source={{ uri }} style={styles.thumbnail} />
-                  ))}
-                </ScrollView>
-              )}
-              <View style={styles.syncNote}>
-                <Text style={{ fontSize: 10, color: '#4ECDC4', fontWeight: '500' }}>💾 Saved locally · Will sync when backend connected</Text>
-              </View>
             </View>
           )}
         />
       )}
 
-      {/* Add Task Modal — slides from top */}
+      {/* ── Create Task Modal ── */}
       {modalVisible && (
         <Modal transparent visible animationType="none" onRequestClose={closeModal}>
           <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={closeModal} />
           <Animated.View style={[styles.topModal, { transform: [{ translateY: slideAnim }] }]}>
             <SafeAreaView>
               <View style={styles.handle} />
-              <View style={styles.modalContent}>
+              <ScrollView style={styles.modalScroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+
                 <View style={styles.modalHeader}>
-                  <Text style={styles.modalTitle}>New Task</Text>
+                  <Text style={styles.modalTitle}>Create Task</Text>
                   <TouchableOpacity style={styles.closeCircle} onPress={closeModal}>
                     <Text style={styles.closeCircleText}>✕</Text>
                   </TouchableOpacity>
                 </View>
-                <Text style={styles.fieldLabel}>Task Name *</Text>
+
+                {/* Project search */}
+                <Text style={styles.fieldLabel}>Project *</Text>
+                <TextInput
+                  style={[styles.input, project && { borderColor: '#4ECDC4', backgroundColor: '#fff' }]}
+                  placeholder="Search project..."
+                  placeholderTextColor="#AAAABC"
+                  value={project ? project.name : projectSearch}
+                  onChangeText={t => { setProjectSearch(t); setProject(null); }}
+                />
+                {!project && projectSearch.length > 0 && filteredProjects.length > 0 && (
+                  <View style={styles.searchList}>
+                    {filteredProjects.slice(0, 5).map((p, i) => (
+                      <TouchableOpacity
+                        key={p.id}
+                        style={[styles.searchItem, i === Math.min(filteredProjects.length, 5) - 1 && { borderBottomWidth: 0 }]}
+                        onPress={() => { setProject(p); setProjectSearch(''); }}
+                      >
+                        <Text style={styles.searchItemText}>{p.name}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+
+                {/* Task Title */}
+                <Text style={styles.fieldLabel}>Task Title *</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="What needs to be done?"
+                  placeholder="Enter a concise task title"
                   placeholderTextColor="#AAAABC"
-                  value={newTaskName}
-                  onChangeText={setNewTaskName}
-                  autoFocus
+                  value={heading}
+                  onChangeText={setHeading}
                 />
+
+                {/* Description */}
                 <Text style={styles.fieldLabel}>Description</Text>
                 <TextInput
-                  style={[styles.input, { height: 72, paddingTop: 10 }]}
-                  placeholder="Add details..."
+                  style={[styles.input, { height: 90, paddingTop: 12 }]}
+                  placeholder="Add task details..."
                   placeholderTextColor="#AAAABC"
-                  value={newTaskDesc}
-                  onChangeText={setNewTaskDesc}
+                  value={description}
+                  onChangeText={setDescription}
                   multiline
                   textAlignVertical="top"
                 />
-                <View style={styles.modalBtns}>
-                  <TouchableOpacity style={styles.cancelBtn} onPress={closeModal}>
-                    <Text style={styles.cancelBtnText}>Cancel</Text>
+
+                {/* Status + Priority */}
+                <View style={{ flexDirection: 'row', gap: 10, marginBottom: 14 }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.fieldLabel}>Status</Text>
+                    <InlineDropdown
+                      placeholder="Select status"
+                      options={STATUS_OPTIONS.map(s => ({ label: STATUS_LABELS[s], value: s }))}
+                      selected={status ? STATUS_LABELS[status] : null}
+                      onSelect={o => setStatus(o.value)}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.fieldLabel}>Priority</Text>
+                    <InlineDropdown
+                      placeholder="Priority"
+                      options={PRIORITY_OPTIONS.map(p => ({ label: p.charAt(0).toUpperCase() + p.slice(1), value: p }))}
+                      selected={priority ? priority.charAt(0).toUpperCase() + priority.slice(1) : null}
+                      onSelect={o => setPriority(o.value)}
+                    />
+                  </View>
+                </View>
+
+                {/* Start + End Date */}
+                <View style={{ flexDirection: 'row', gap: 10, marginBottom: 14 }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.fieldLabel}>Start Date</Text>
+                    <TextInput style={styles.input} placeholder="YYYY-MM-DD" placeholderTextColor="#AAAABC" value={startDate} onChangeText={setStartDate} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.fieldLabel}>Due Date</Text>
+                    <TextInput style={styles.input} placeholder="YYYY-MM-DD" placeholderTextColor="#AAAABC" value={endDate} onChangeText={setEndDate} />
+                  </View>
+                </View>
+
+                {/* Assignees */}
+                <Text style={styles.fieldLabel}>Assignees</Text>
+                <View style={styles.assigneeWrap}>
+                  {users.map(u => (
+                    <TouchableOpacity
+                      key={u.id}
+                      style={[styles.assigneeChip, assignedTo.includes(u.id) && styles.assigneeChipActive]}
+                      onPress={() => toggleAssignee(u.id)}
+                    >
+                      <Text style={[styles.assigneeText, assignedTo.includes(u.id) && { color: '#fff' }]}>
+                        {u.first_name || u.username}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                {/* Links */}
+                <Text style={styles.fieldLabel}>Links</Text>
+                <TextInput
+                  style={[styles.input, { marginBottom: 14 }]}
+                  placeholder="Paste URL here..."
+                  placeholderTextColor="#AAAABC"
+                  value={links}
+                  onChangeText={setLinks}
+                  autoCapitalize="none"
+                />
+
+                {/* Attachments */}
+                <Text style={styles.fieldLabel}>Attachments</Text>
+                <View style={styles.attachRow}>
+                  <TouchableOpacity style={styles.attachBtn} onPress={openCamera}>
+                    <View style={styles.attachIconWrap}><Text style={{ fontSize: 22 }}>📷</Text></View>
+                    <Text style={styles.attachLabel}>Camera</Text>
+                    <Text style={styles.attachSub}>Take a photo</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={styles.newBtn} onPress={addTask}>
-                    <Text style={styles.newBtnText}>Add Task</Text>
+                  <TouchableOpacity style={styles.attachBtn} onPress={openGallery}>
+                    <View style={styles.attachIconWrap}><Text style={{ fontSize: 22 }}>🖼️</Text></View>
+                    <Text style={styles.attachLabel}>Gallery</Text>
+                    <Text style={styles.attachSub}>Pick from photos</Text>
                   </TouchableOpacity>
                 </View>
-              </View>
+                {images.length > 0 && (
+                  <View style={{ marginBottom: 14 }}>
+                    <Text style={[styles.fieldLabel, { marginBottom: 8 }]}>{images.length} image{images.length > 1 ? 's' : ''} attached</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                      {images.map((uri, i) => (
+                        <View key={i} style={{ position: 'relative', marginRight: 10 }}>
+                          <Image source={{ uri }} style={styles.previewImg} />
+                          <TouchableOpacity style={styles.removeImg} onPress={() => setImages(p => p.filter((_, idx) => idx !== i))}>
+                            <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700' }}>✕</Text>
+                          </TouchableOpacity>
+                        </View>
+                      ))}
+                    </ScrollView>
+                  </View>
+                )}
+
+                {/* Buttons */}
+                <View style={[styles.modalBtns, { marginBottom: 28 }]}>
+                  <TouchableOpacity style={styles.cancelBtn} onPress={closeModal} disabled={saving}>
+                    <Text style={styles.cancelBtnText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.newBtn, saving && { opacity: 0.7 }]} onPress={createTask} disabled={saving}>
+                    {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.newBtnText}>Create Task</Text>}
+                  </TouchableOpacity>
+                </View>
+
+              </ScrollView>
             </SafeAreaView>
           </Animated.View>
         </Modal>
@@ -252,56 +471,64 @@ export default function TasksScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#F5F5F7', paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0 },
-  navbar: { backgroundColor: '#fff', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#EBEBF0', elevation: 2 },
+  safe: { flex: 1, paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0 },
+  navbar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, elevation: 2 },
   navLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   navRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   logoBox: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center' },
   logoText: { color: '#4ECDC4', fontSize: 15, fontWeight: '800' },
-  brandName: { fontSize: 15, fontWeight: '700', color: '#1A1A2E' },
+  brandName: { fontSize: 15, fontWeight: '700' },
   navIconBtn: { width: 36, height: 36, borderRadius: 8, borderWidth: 1, borderColor: '#EBEBF0', justifyContent: 'center', alignItems: 'center', backgroundColor: '#FAFAFA' },
   navIcon: { fontSize: 16 },
-  subHeader: { backgroundColor: '#fff', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#EBEBF0', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  pageTitle: { fontSize: 17, fontWeight: '700', color: '#1A1A2E' },
-  pageSub: { fontSize: 12, color: '#888899', marginTop: 2 },
+  subHeader: { paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  pageTitle: { fontSize: 17, fontWeight: '700' },
+  pageSub: { fontSize: 12, marginTop: 2 },
   newBtn: { backgroundColor: '#1A1A2E', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
   newBtnText: { color: '#fff', fontSize: 13, fontWeight: '600' },
-  statsBar: { backgroundColor: '#fff', flexDirection: 'row', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#EBEBF0' },
-  statItem: { flex: 1, alignItems: 'center' },
-  statBorder: { borderRightWidth: 1, borderRightColor: '#EBEBF0' },
-  statNum: { fontSize: 20, fontWeight: '700' },
-  statLabel: { fontSize: 11, color: '#888899', marginTop: 2 },
-  filtersWrap: { maxHeight: 52, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#EBEBF0' },
+  filtersWrap: { maxHeight: 52, borderBottomWidth: 1 },
   filters: { paddingHorizontal: 12, paddingVertical: 10, gap: 8 },
-  chip: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20, borderWidth: 1, borderColor: '#EBEBF0', backgroundColor: '#fff' },
+  chip: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20, borderWidth: 1, backgroundColor: '#fff' },
   chipActive: { backgroundColor: '#1A1A2E', borderColor: '#1A1A2E' },
   chipText: { fontSize: 12, color: '#888899', fontWeight: '500' },
   chipTextActive: { color: '#fff', fontWeight: '700' },
   emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 8 },
-  emptyTitle: { fontSize: 16, fontWeight: '600', color: '#1A1A2E' },
-  emptySub: { fontSize: 13, color: '#888899', textAlign: 'center', paddingHorizontal: 40 },
-  taskCard: { backgroundColor: '#fff', borderRadius: 14, padding: 16, marginBottom: 10, borderWidth: 1, borderColor: '#EBEBF0' },
-  cardTop: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
+  emptyTitle: { fontSize: 16, fontWeight: '600' },
+  emptySub: { fontSize: 13, textAlign: 'center' },
+  taskCard: { borderRadius: 14, padding: 14, marginBottom: 10, borderWidth: 1 },
+  cardTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 6 },
   typeIcon: { width: 38, height: 38, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
-  taskName: { fontSize: 14, fontWeight: '600', color: '#1A1A2E' },
-  taskDate: { fontSize: 11, color: '#AAAABC', marginTop: 2 },
+  taskName: { fontSize: 14, fontWeight: '600' },
+  taskProject: { fontSize: 11, marginTop: 2 },
+  taskDate: { fontSize: 11, marginTop: 2 },
   statusBadge: { borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 },
   statusText: { fontSize: 11, fontWeight: '600' },
-  deleteBtn: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#FFF5F5', justifyContent: 'center', alignItems: 'center' },
-  taskDesc: { fontSize: 13, color: '#5C5C6E', lineHeight: 20, marginBottom: 8 },
-  thumbnail: { width: 80, height: 80, borderRadius: 10, marginRight: 8, borderWidth: 1, borderColor: '#EBEBF0' },
-  syncNote: { backgroundColor: 'rgba(78,205,196,0.06)', borderRadius: 6, padding: 6, marginTop: 4 },
+  taskDesc: { fontSize: 13, lineHeight: 20, marginBottom: 4 },
+  priorityDot: { width: 8, height: 8, borderRadius: 4 },
   overlay: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.45)' },
-  topModal: { position: 'absolute', top: 0, left: 0, right: 0, backgroundColor: '#fff', borderBottomLeftRadius: 24, borderBottomRightRadius: 24, shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 16, elevation: 20 },
+  topModal: { position: 'absolute', top: 0, left: 0, right: 0, backgroundColor: '#fff', borderBottomLeftRadius: 24, borderBottomRightRadius: 24, maxHeight: '95%', shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 16, elevation: 20 },
   handle: { width: 40, height: 4, backgroundColor: '#DEDEE8', borderRadius: 2, alignSelf: 'center', marginTop: 8, marginBottom: 4 },
-  modalContent: { paddingHorizontal: 20, paddingBottom: 24 },
+  modalScroll: { paddingHorizontal: 20 },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, marginTop: 4 },
   modalTitle: { fontSize: 20, fontWeight: '700', color: '#1A1A2E' },
   closeCircle: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#F5F5F7', justifyContent: 'center', alignItems: 'center' },
   closeCircleText: { color: '#888899', fontSize: 13, fontWeight: '600' },
-  fieldLabel: { fontSize: 12, fontWeight: '600', color: '#888899', marginBottom: 6 },
-  input: { backgroundColor: '#F5F5F7', borderRadius: 10, borderWidth: 1.5, borderColor: '#4ECDC4', paddingHorizontal: 14, height: 48, fontSize: 14, color: '#1A1A2E', marginBottom: 14 },
-  modalBtns: { flexDirection: 'row', gap: 10 },
+  fieldLabel: { fontSize: 12, fontWeight: '600', color: '#888899', marginBottom: 6, letterSpacing: 0.3 },
+  input: { backgroundColor: '#F5F5F7', borderRadius: 10, borderWidth: 1.5, borderColor: '#EBEBF0', paddingHorizontal: 14, height: 46, fontSize: 14, color: '#1A1A2E', marginBottom: 14 },
+  searchList: { backgroundColor: '#fff', borderRadius: 10, borderWidth: 1.5, borderColor: '#4ECDC4', marginTop: -10, marginBottom: 14 },
+  searchItem: { paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F0F0F5' },
+  searchItemText: { fontSize: 13, color: '#1A1A2E' },
+  assigneeWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 14 },
+  assigneeChip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, borderWidth: 1.5, borderColor: '#EBEBF0', backgroundColor: '#F5F5F7' },
+  assigneeChipActive: { backgroundColor: '#1A1A2E', borderColor: '#1A1A2E' },
+  assigneeText: { fontSize: 12, color: '#1A1A2E', fontWeight: '500' },
+  attachRow: { flexDirection: 'row', gap: 12, marginBottom: 14 },
+  attachBtn: { flex: 1, backgroundColor: '#F5F5F7', borderRadius: 12, borderWidth: 1.5, borderColor: '#EBEBF0', paddingVertical: 12, alignItems: 'center', gap: 3 },
+  attachIconWrap: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', marginBottom: 2, borderWidth: 1, borderColor: '#EBEBF0' },
+  attachLabel: { fontSize: 12, fontWeight: '700', color: '#1A1A2E' },
+  attachSub: { fontSize: 10, color: '#AAAABC' },
+  previewImg: { width: 80, height: 80, borderRadius: 10, borderWidth: 1, borderColor: '#EBEBF0' },
+  removeImg: { position: 'absolute', top: -6, right: -6, width: 20, height: 20, borderRadius: 10, backgroundColor: '#F87171', justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: '#fff' },
+  modalBtns: { flexDirection: 'row', gap: 10, marginTop: 8 },
   cancelBtn: { flex: 1, borderWidth: 1, borderColor: '#EBEBF0', borderRadius: 10, height: 48, justifyContent: 'center', alignItems: 'center' },
   cancelBtnText: { color: '#888899', fontSize: 14, fontWeight: '500' },
 });

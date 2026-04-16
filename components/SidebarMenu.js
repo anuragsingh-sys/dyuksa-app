@@ -39,8 +39,14 @@ export default function SidebarMenu({ activeScreen }) {
       .start(() => { setOpen(false); cb && cb(); });
   };
 
-  const goToDashboard = () => closeSidebar(() => navigation.navigate('Main', { screen: 'Dashboard' }));
-  const goToTab   = (tab)    => closeSidebar(() => navigation.navigate('Main', { screen: tab }));
+  const goToDashboard = () => closeSidebar(() => {
+    try { navigation.jumpTo('Dashboard'); }
+    catch { navigation.navigate('Main', { screen: 'Dashboard' }); }
+  });
+  const goToTab = (tab) => closeSidebar(() => {
+    try { navigation.jumpTo(tab); }
+    catch { navigation.navigate('Main', { screen: tab }); }
+  });
   const goToStack = (screen) => closeSidebar(() => navigation.navigate(screen));
 
   return (
@@ -74,7 +80,7 @@ export default function SidebarMenu({ activeScreen }) {
                 <SidebarItem icon="📋" label="My Tasks"        active={activeScreen === 'Tasks'}     hasArrow onPress={() => goToTab('Tasks')} />
                 <SidebarItem icon="📄" label="Documents"       active={activeScreen === 'Docs'}               onPress={() => goToStack('Docs')} />
                 <SidebarItem icon="⚡" label="Quick Notes"     active={activeScreen === 'QuickNotes'}
-                  onPress={() => closeSidebar(() => navigation.navigate('Main', { screen: 'Dashboard', params: { scrollToNotes: true } }))} />
+                  onPress={() => closeSidebar(() => (() => { try { navigation.jumpTo('Dashboard', { scrollToNotes: true }); } catch { navigation.navigate('Main', { screen: 'Dashboard', params: { scrollToNotes: true } }); } })())} />
                 <SidebarItem icon="👥" label="Team Management" hasArrow
                   onPress={() => closeSidebar(() => navigation.navigate('TeamManagement'))} />
                 <SidebarItem icon="💬" label="Chats"           active={activeScreen === 'Chat'}      hasArrow onPress={() => goToStack('Chat')} />

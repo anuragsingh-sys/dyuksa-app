@@ -15,9 +15,6 @@ const SecureStore = {
   deleteItemAsync: (key)        => AsyncStorage.removeItem(key),
 };
 
-const EMAIL_RE    = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const PASSWORD_RE = /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]).{8,}$/;
-
 // ── Input sanitization ─────────────────────────────────────────────────────
 export const sanitize = (str) =>
   String(str ?? '')
@@ -89,25 +86,8 @@ export function AuthProvider({ children }) {
   }, [token]);
 
   // ── Validators ────────────────────────────────────────────────────────
-  const validateEmail = (email) => {
-    const e = sanitize(email);
-    if (!e) return ['Email is required.'];
-    if (!EMAIL_RE.test(e)) return ['Enter a valid email address.'];
-    return [];
-  };
-
-  const validatePassword = (password) => {
-    const errors = [];
-    if (!password)                errors.push('Password is required.');
-    else {
-      if (password.length < 8)   errors.push('At least 8 characters.');
-      if (!/[A-Z]/.test(password)) errors.push('At least 1 uppercase letter.');
-      if (!/\d/.test(password))  errors.push('At least 1 number.');
-      if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password))
-                                  errors.push('At least 1 special character.');
-    }
-    return errors;
-  };
+  const validateEmail    = () => [];
+  const validatePassword = () => [];
 
   const validateName = (name) => {
     const n = sanitize(name);
@@ -148,23 +128,19 @@ export function AuthProvider({ children }) {
       const refreshTok = await SecureStore.getItemAsync(AUTH_REFRESH_KEY);
       if (!refreshTok) return false;
 
-      // ── BACKEND INTEGRATION POINT ──────────────────────────────────
-      // const res = await fetch('https://api.dyuksa.com/auth/refresh', {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({ refreshToken: refreshTok }),
-      // });
-      // if (!res.ok) return false;
-      // const { token, refreshToken, expiresIn, user } = await res.json();
-      // await persistSession(token, user, refreshToken, expiresIn);
-      // return true;
-      // ─────────────────────────────────────────────────────────────
+      const res = await fetch('http://192.168.1.164:8000/api/v1/auth/token/refresh/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh: refreshTok }),
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+      const newAccess = data.access;
+      if (!newAccess) return false;
 
-      // MOCK: simulate successful refresh
       const storedUser = await SecureStore.getItemAsync(AUTH_USER_KEY);
       if (!storedUser) return false;
-      const mockNewToken = `refreshed_token_${Date.now()}`;
-      await persistSession(mockNewToken, JSON.parse(storedUser), refreshTok, 3600);
+      await persistSession(newAccess, JSON.parse(storedUser), refreshTok, 3600);
       return true;
     } catch {
       return false;
@@ -174,40 +150,34 @@ export function AuthProvider({ children }) {
   const refreshToken = attemptRefresh;
 
   // ── Login ─────────────────────────────────────────────────────────────
-  const login = async (email, password) => {
-    const cleanEmail = sanitize(email);
-    const emailErrors = validateEmail(cleanEmail);
-    const passErrors  = validatePassword(password);
-    const errors = [...emailErrors, ...passErrors];
-    if (errors.length) return { success: false, errors };
-
+  const login = async (username, password) => {
+    const cleanUsername = sanitize(username);
+    if (!cleanUsername) return { success: false, errors: ['Username is required.'] };
+    if (!password)      return { success: false, errors: ['Password is required.'] };
     try {
-      // ── BACKEND INTEGRATION POINT ──────────────────────────────────
-      // const res = await fetch('https://api.dyuksa.com/auth/login', {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({ email: cleanEmail, password }),
-      // });
-      // const data = await res.json();
-      // if (!res.ok) return { success: false, errors: [data.message || 'Login failed.'] };
-      // await persistSession(data.token, data.user, data.refreshToken, data.expiresIn);
-      // ─────────────────────────────────────────────────────────────
-
-      await new Promise(r => setTimeout(r, 800));
-      const mockToken   = `mock_token_${Date.now()}`;
-      const mockRefresh = `mock_refresh_${Date.now()}`;
-      const mockUser    = {
-        id: 'user_001',
-        name: cleanEmail.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
-        email: cleanEmail.toLowerCase(),
-        role: 'Manager',
-        avatar: cleanEmail[0].toUpperCase(),
+      const res  = await fetch('http://192.168.1.164:8000/api/v1/auth/login/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: cleanUsername, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        const msg = data.detail || data.message || data.non_field_errors?.[0] || 'Login failed.';
+        return { success: false, errors: [msg] };
+      }
+      const mockUser = {
+        id:        data.user_id || cleanUsername,
+        name:      cleanUsername.replace(/[._]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+        username:  cleanUsername,
+        email:     data.email || '',
+        role:      data.role  || 'Member',
+        avatar:    cleanUsername[0].toUpperCase(),
         createdAt: new Date().toISOString(),
       };
-      await persistSession(mockToken, mockUser, mockRefresh, 3600);
+      await persistSession(data.access, mockUser, data.refresh, 3600);
       return { success: true, errors: [] };
     } catch {
-      return { success: false, errors: ['Login failed. Please try again.'] };
+      return { success: false, errors: ['Network error. Make sure you are on the same WiFi.'] };
     }
   };
 

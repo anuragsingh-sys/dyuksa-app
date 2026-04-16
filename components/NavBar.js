@@ -47,13 +47,15 @@ export default function NavBar({ title, activeScreen }) {
       if (['Chat', 'Settings'].includes(screen)) {
         navigation.navigate(screen);
       } else {
-        navigation.navigate('Main', { screen });
+        try { navigation.jumpTo(screen); }
+        catch { navigation.navigate('Main', { screen }); }
       }
     });
   };
 
   const goToDashboard = () => {
-    navigation.navigate('Main', { screen: 'Dashboard' });
+    try { navigation.jumpTo('Dashboard'); }
+    catch { navigation.navigate('Main', { screen: 'Dashboard' }); }
   };
 
   return (

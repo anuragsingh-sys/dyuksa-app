@@ -9,22 +9,20 @@ import { AuthContext } from '../context/AuthContext';
 export default function LoginScreen({ navigation }) {
   const { login } = useContext(AuthContext);
 
-  const [email,        setEmail]        = useState('');
+  const [username,     setUsername]     = useState('');
   const [password,     setPassword]     = useState('');
   const [showPass,     setShowPass]     = useState(false);
   const [emailFocused, setEmailFocused] = useState(false);
   const [passFocused,  setPassFocused]  = useState(false);
   const [loading,      setLoading]      = useState(false);
   const [errors,       setErrors]       = useState([]);
-  const [fieldErrors,  setFieldErrors]  = useState({ email: '', password: '' });
+  const [fieldErrors,  setFieldErrors]  = useState({ username: '', password: '' });
 
   const validateFields = () => {
-    const fe = { email: '', password: '' };
+    const fe = { username: '', password: '' };
     let valid = true;
-    if (!email.trim()) { fe.email = 'Email is required.'; valid = false; }
-    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) { fe.email = 'Enter a valid email.'; valid = false; }
+    if (!username.trim()) { fe.username = 'Username is required.'; valid = false; }
     if (!password) { fe.password = 'Password is required.'; valid = false; }
-    else if (password.length < 8) { fe.password = 'Password must be at least 8 characters.'; valid = false; }
     setFieldErrors(fe);
     return valid;
   };
@@ -33,12 +31,11 @@ export default function LoginScreen({ navigation }) {
     setErrors([]);
     if (!validateFields()) return;
     setLoading(true);
-    const result = await login(email.trim(), password);
+    const result = await login(username.trim(), password);
     setLoading(false);
     if (!result.success) {
-      setErrors(result.errors);
+      setErrors(result.errors || ['Login failed.']);
     }
-    // On success, AuthContext sets token → App.js auto-navigates to Main
   };
 
   return (
@@ -65,30 +62,29 @@ export default function LoginScreen({ navigation }) {
               </View>
             )}
 
-            {/* Email */}
-            <Text style={styles.fieldLabel}>Email Address</Text>
-            <View style={[styles.inputWrap, emailFocused && styles.inputFocused, !!fieldErrors.email && styles.inputError]}>
+            {/* Username */}
+            <Text style={styles.fieldLabel}>Username</Text>
+            <View style={[styles.inputWrap, emailFocused && styles.inputFocused, !!fieldErrors.username && styles.inputError]}>
               <TextInput
                 style={styles.input}
-                placeholder="you@example.com"
+                placeholder="Enter your username"
                 placeholderTextColor="#AAAABC"
-                value={email}
-                onChangeText={t => { setEmail(t); setFieldErrors(f => ({ ...f, email: '' })); }}
+                value={username}
+                onChangeText={t => { setUsername(t); setFieldErrors(f => ({ ...f, username: '' })); }}
                 autoCapitalize="none"
-                keyboardType="email-address"
-                autoComplete="email"
+                autoComplete="username"
                 onFocus={() => setEmailFocused(true)}
                 onBlur={() => setEmailFocused(false)}
               />
             </View>
-            {!!fieldErrors.email && <Text style={styles.fieldError}>{fieldErrors.email}</Text>}
+            {!!fieldErrors.username && <Text style={styles.fieldError}>{fieldErrors.username}</Text>}
 
             {/* Password */}
             <Text style={styles.fieldLabel}>Password</Text>
             <View style={[styles.inputWrap, passFocused && styles.inputFocused, !!fieldErrors.password && styles.inputError]}>
               <TextInput
                 style={[styles.input, { flex: 1 }]}
-                placeholder="Min. 8 characters"
+                placeholder="Enter your password"
                 placeholderTextColor="#AAAABC"
                 value={password}
                 onChangeText={t => { setPassword(t); setFieldErrors(f => ({ ...f, password: '' })); }}
