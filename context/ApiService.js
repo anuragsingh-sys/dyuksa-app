@@ -59,13 +59,18 @@ export const createProject = async (body) => {
 
 // ── Tasks ─────────────────────────────────────────────────────────────────────
 export const getTasks = async () => {
+  const token = await getAccessToken();
   const res = await fetch(`${BASE_URL}/tasksite/`, {
     method: 'GET',
-    headers: await authHeaders(),
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+    },
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.detail || 'Failed to fetch tasks');
-  return Array.isArray(data) ? data : (data.tasks || data.results || []);
+  // API returns { count, next, previous, results: [...] }
+  return data.results || (Array.isArray(data) ? data : []);
 };
 
 export const createTask = async (formData) => {
@@ -76,4 +81,16 @@ export const createTask = async (formData) => {
     body: formData,
   });
   return handleResponse(res);
+};
+
+// ── AI Text Enhancer ──────────────────────────────────────────────────────────
+export const refineTextAI = async (text, type) => {
+  const res = await fetch(`${BASE_URL}/task-ai/refine-text/`, {
+    method: 'POST',
+    headers: await authHeaders(),
+    body: JSON.stringify({ text, type }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || 'AI request failed');
+  return data.refined_text || data.data || data.enhanced_text || '';
 };

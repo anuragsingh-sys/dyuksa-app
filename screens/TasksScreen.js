@@ -8,7 +8,7 @@ import { useState, useCallback, useRef, useContext, useEffect } from 'react';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { NotificationsContext } from '../context/NotificationsContext';
-import { getUsers, getProjects, getAccessToken } from '../services/ApiService';
+import { getUsers, getProjects, getAccessToken, refineTextAI } from '../services/ApiService';
 import SidebarMenu from '../components/SidebarMenu';
 import { ThemeContext } from '../context/ThemeContext';
 import NotificationBell from '../components/NotificationBell';
@@ -112,7 +112,10 @@ export default function TasksScreen() {
         headers: { 'Authorization': `Bearer ${token}` },
       });
       const data = await res.json();
-      if (res.ok) setTasks(Array.isArray(data) ? data : (data.tasks || data.results || []));
+      if (res.ok) {
+        // API returns { count, next, previous, results: [...] }
+        setTasks(data.results || (Array.isArray(data) ? data : []));
+      }
     } catch (e) {
       console.error('fetchTasks error:', e.message);
     } finally {
@@ -189,6 +192,101 @@ export default function TasksScreen() {
     }
   };
 
+  const [enhancingTitle, setEnhancingTitle] = useState(false);
+  const [enhancingDesc,  setEnhancingDesc]  = useState(false);
+  const [generatingDesc, setGeneratingDesc] = useState(false);
+
+  const enhanceTitle = async () => {
+    if (!heading.trim()) { Alert.alert('Empty', 'Enter a task title first.'); return; }
+    setEnhancingTitle(true);
+    try {
+      const result = await refineTextAI(heading, 'optimize_title');
+      if (result) setHeading(result);
+      else Alert.alert('Error', 'Could not enhance title.');
+    } catch (e) { Alert.alert('Error', e.message); }
+    finally { setEnhancingTitle(false); }
+  };
+
+  const generateDescription = async () => {
+    if (!heading.trim()) { Alert.alert('Empty', 'Enter a task title first to generate description.'); return; }
+    setGeneratingDesc(true);
+    try {
+      const result = await refineTextAI(heading, 'generate_description');
+      if (result) setDescription(result);
+      else Alert.alert('Error', 'Could not generate description.');
+    } catch (e) { Alert.alert('Error', e.message); }
+    finally { setGeneratingDesc(false); }
+  };
+
+  const refineDescription = async () => {
+    if (!description.trim()) { Alert.alert('Empty', 'Enter a description first.'); return; }
+    setEnhancingDesc(true);
+    try {
+      const result = await refineTextAI(description, 'refine_description');
+      if (result) setDescription(result);
+      else Alert.alert('Error', 'Could not refine description.');
+    } catch (e) { Alert.alert('Error', e.message); }
+    finally { setEnhancingDesc(false); }
+  };
+
+  // ── Generate Task by AI ──
+  const [genModalVisible, setGenModalVisible] = useState(false);
+  const [genProject,      setGenProject]      = useState(null);
+  const [genProjectSearch,setGenProjectSearch]= useState('');
+  const [genDescription,  setGenDescription]  = useState('');
+  const [generating,      setGenerating]      = useState(false);
+  const genSlideAnim = useRef(new Animated.Value(-700)).current;
+
+  const openGenModal = () => {
+    setGenModalVisible(true);
+    Animated.spring(genSlideAnim, { toValue: 0, useNativeDriver: true, tension: 80, friction: 12 }).start();
+  };
+
+  const closeGenModal = () => {
+    Animated.timing(genSlideAnim, { toValue: -700, duration: 250, useNativeDriver: true }).start(() => {
+      setGenModalVisible(false);
+      setGenProject(null); setGenProjectSearch(''); setGenDescription('');
+    });
+  };
+
+  const generateTaskByAI = async () => {
+    if (!genProject) { Alert.alert('Required', 'Select a project first.'); return; }
+    if (!genDescription.trim()) { Alert.alert('Required', 'Enter a description.'); return; }
+    setGenerating(true);
+    try {
+      const token = await getAccessToken();
+      const res   = await fetch(`${BASE_URL}/task-ai/suggest-task/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ project_id: genProject.id, description: genDescription.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) { Alert.alert('Error', data.message || data.detail || 'AI generation failed.'); return; }
+
+      // Pre-fill the create task modal with AI response
+      setHeading(data.heading || '');
+      setDescription(data.description || '');
+      setStatus(data.status || null);
+      setPriority(data.priority || 'medium');
+      setStartDate(data.start_date ? data.start_date.split('T')[0] : '');
+      setEndDate(data.end_date ? data.end_date.split('T')[0] : '');
+      setAssignedTo(Array.isArray(data.assigned_to) ? data.assigned_to : []);
+      setProject(genProject);
+
+      // Close gen modal and open create modal
+      closeGenModal();
+      setTimeout(() => openModal(), 400);
+    } catch (e) {
+      Alert.alert('Error', e.message || 'Network error.');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const genFilteredProjects = projects.filter(p =>
+    p.name?.toLowerCase().includes(genProjectSearch.toLowerCase())
+  );
+
   const toggleAssignee = (uid) => {
     setAssignedTo(prev => prev.includes(uid) ? prev.filter(id => id !== uid) : [...prev, uid]);
   };
@@ -229,18 +327,34 @@ export default function TasksScreen() {
           <Text style={[styles.pageTitle, { color: txt }]}>My Tasks</Text>
           <Text style={[styles.pageSub, { color: sub }]}>{tasks.length} task{tasks.length !== 1 ? 's' : ''}</Text>
         </View>
-        <TouchableOpacity style={styles.newBtn} onPress={openModal}>
-          <Text style={styles.newBtnText}>+ Create Task</Text>
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <TouchableOpacity style={styles.aiBtn} onPress={openGenModal}>
+            <Text style={styles.aiBtnText}>✦ AI</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.newBtn} onPress={openModal}>
+            <Text style={styles.newBtnText}>+ Create Task</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Filter chips */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={[styles.filtersWrap, { backgroundColor: card, borderBottomColor: bdr }]} contentContainerStyle={styles.filters}>
-        {['All', ...STATUS_OPTIONS].map(f => (
-          <TouchableOpacity key={f} style={[styles.chip, { borderColor: bdr }, filter === f && styles.chipActive]} onPress={() => setFilter(f)}>
-            <Text style={[styles.chipText, filter === f && styles.chipTextActive]}>
-              {f === 'All' ? 'All' : STATUS_LABELS[f]}
-            </Text>
+        {[
+          { key: 'All',         label: 'All' },
+          { key: 'pending',     label: 'Pending' },
+          { key: 'in_progress', label: 'In Progress' },
+          { key: 'completed',   label: 'Completed' },
+          { key: 'backlog',     label: 'Backlog' },
+          { key: 'deployed',    label: 'Deployed' },
+          { key: 'deferred',    label: 'Deferred' },
+          { key: 'review',      label: 'Review' },
+        ].map(({ key, label }) => (
+          <TouchableOpacity
+            key={key}
+            style={[styles.chip, { borderColor: bdr }, filter === key && styles.chipActive]}
+            onPress={() => setFilter(key)}
+          >
+            <Text style={[styles.chipText, filter === key && styles.chipTextActive]}>{label}</Text>
           </TouchableOpacity>
         ))}
       </ScrollView>
@@ -285,9 +399,12 @@ export default function TasksScreen() {
                   </Text>
                 </View>
               </View>
-              {!!item.description && (
-                <Text style={[styles.taskDesc, { color: sub }]} numberOfLines={2}>{item.description}</Text>
-              )}
+              {!!item.description && (() => {
+                // Strip HTML tags like <p></p> from description
+                const clean = item.description.replace(/<[^>]*>/g, '').trim();
+                if (!clean) return null;
+                return <Text style={[styles.taskDesc, { color: sub }]} numberOfLines={2}>{clean}</Text>;
+              })()}
               {item.priority && (
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
                   <View style={[styles.priorityDot, { backgroundColor: PRIORITY_COLORS[item.priority] || '#888' }]} />
@@ -340,25 +457,51 @@ export default function TasksScreen() {
 
                 {/* Task Title */}
                 <Text style={styles.fieldLabel}>Task Title *</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Enter a concise task title"
-                  placeholderTextColor="#AAAABC"
-                  value={heading}
-                  onChangeText={setHeading}
-                />
+                <View style={styles.enhanceWrap}>
+                  <TextInput
+                    style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                    placeholder="Enter a concise task title"
+                    placeholderTextColor="#AAAABC"
+                    value={heading}
+                    onChangeText={setHeading}
+                  />
+                  <TouchableOpacity style={styles.enhanceBtn} onPress={enhanceTitle} disabled={enhancingTitle}>
+                    {enhancingTitle
+                      ? <ActivityIndicator size="small" color="#A78BFA" />
+                      : <Text style={styles.enhanceIcon}>✨</Text>
+                    }
+                  </TouchableOpacity>
+                </View>
+                <Text style={styles.enhanceHint}>✨ Optimize title with Nova AI</Text>
 
                 {/* Description */}
-                <Text style={styles.fieldLabel}>Description</Text>
-                <TextInput
-                  style={[styles.input, { height: 90, paddingTop: 12 }]}
-                  placeholder="Add task details..."
-                  placeholderTextColor="#AAAABC"
-                  value={description}
-                  onChangeText={setDescription}
-                  multiline
-                  textAlignVertical="top"
-                />
+                <Text style={[styles.fieldLabel, { marginTop: 10 }]}>Description</Text>
+                <View style={styles.enhanceWrap}>
+                  <TextInput
+                    style={[styles.input, { flex: 1, height: 90, paddingTop: 12, marginBottom: 0 }]}
+                    placeholder="Add task details..."
+                    placeholderTextColor="#AAAABC"
+                    value={description}
+                    onChangeText={setDescription}
+                    multiline
+                    textAlignVertical="top"
+                  />
+                  <View style={{ gap: 6 }}>
+                    <TouchableOpacity style={styles.enhanceBtn} onPress={refineDescription} disabled={enhancingDesc}>
+                      {enhancingDesc
+                        ? <ActivityIndicator size="small" color="#A78BFA" />
+                        : <Text style={styles.enhanceIcon}>✨</Text>
+                      }
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.enhanceBtn, { backgroundColor: 'rgba(78,205,196,0.1)', borderColor: 'rgba(78,205,196,0.3)' }]} onPress={generateDescription} disabled={generatingDesc}>
+                      {generatingDesc
+                        ? <ActivityIndicator size="small" color="#4ECDC4" />
+                        : <Text style={styles.enhanceIcon}>⚡</Text>
+                      }
+                    </TouchableOpacity>
+                  </View>
+                </View>
+                <Text style={styles.enhanceHint}>✨ Refine · ⚡ Generate from title</Text>
 
                 {/* Status + Priority */}
                 <View style={{ flexDirection: 'row', gap: 10, marginBottom: 14 }}>
@@ -466,6 +609,82 @@ export default function TasksScreen() {
           </Animated.View>
         </Modal>
       )}
+
+      {/* ── Generate Task by AI Modal ── */}
+      {genModalVisible && (
+        <Modal transparent visible animationType="none" onRequestClose={closeGenModal}>
+          <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={closeGenModal} />
+          <Animated.View style={[styles.topModal, { transform: [{ translateY: genSlideAnim }] }]}>
+            <SafeAreaView>
+              <View style={styles.handle} />
+              <ScrollView style={styles.modalScroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+
+                <View style={styles.modalHeader}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.modalTitle}>✦ Generate Task by AI</Text>
+                    <Text style={{ fontSize: 12, color: '#A78BFA', marginTop: 2 }}>Let Nova AI create a comprehensive task</Text>
+                  </View>
+                  <TouchableOpacity style={styles.closeCircle} onPress={closeGenModal}>
+                    <Text style={styles.closeCircleText}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <Text style={styles.fieldLabel}>Project *</Text>
+                <TextInput
+                  style={[styles.input, genProject && { borderColor: '#A78BFA', backgroundColor: '#fff' }]}
+                  placeholder="Search project..."
+                  placeholderTextColor="#AAAABC"
+                  value={genProject ? genProject.name : genProjectSearch}
+                  onChangeText={t => { setGenProjectSearch(t); setGenProject(null); }}
+                />
+                {!genProject && genProjectSearch.length > 0 && genFilteredProjects.length > 0 && (
+                  <View style={styles.searchList}>
+                    {genFilteredProjects.slice(0, 5).map((p, i) => (
+                      <TouchableOpacity
+                        key={p.id}
+                        style={[styles.searchItem, i === Math.min(genFilteredProjects.length, 5) - 1 && { borderBottomWidth: 0 }]}
+                        onPress={() => { setGenProject(p); setGenProjectSearch(''); }}
+                      >
+                        <Text style={styles.searchItemText}>{p.name}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+
+                <Text style={styles.fieldLabel}>Description *</Text>
+                <TextInput
+                  style={[styles.input, { height: 120, paddingTop: 12 }]}
+                  placeholder="Describe what you want AI to generate. Be specific about requirements and deliverables..."
+                  placeholderTextColor="#AAAABC"
+                  value={genDescription}
+                  onChangeText={setGenDescription}
+                  multiline
+                  textAlignVertical="top"
+                />
+
+                <View style={{ backgroundColor: 'rgba(167,139,250,0.08)', borderWidth: 1, borderColor: 'rgba(167,139,250,0.3)', borderRadius: 10, padding: 12, marginBottom: 16 }}>
+                  <Text style={{ fontSize: 12, color: '#A78BFA', lineHeight: 18 }}>
+                    ✦ Nova AI will automatically set the title, description, priority, dates and assign team members based on your project.
+                  </Text>
+                </View>
+
+                <View style={[styles.modalBtns, { marginBottom: 28 }]}>
+                  <TouchableOpacity style={styles.cancelBtn} onPress={closeGenModal} disabled={generating}>
+                    <Text style={styles.cancelBtnText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.aiGenerateBtn, generating && { opacity: 0.7 }]} onPress={generateTaskByAI} disabled={generating}>
+                    {generating
+                      ? <ActivityIndicator color="#fff" size="small" />
+                      : <Text style={styles.newBtnText}>✦ Generate Task</Text>
+                    }
+                  </TouchableOpacity>
+                </View>
+
+              </ScrollView>
+            </SafeAreaView>
+          </Animated.View>
+        </Modal>
+      )}
     </SafeAreaView>
   );
 }
@@ -485,9 +704,12 @@ const styles = StyleSheet.create({
   pageSub: { fontSize: 12, marginTop: 2 },
   newBtn: { backgroundColor: '#1A1A2E', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
   newBtnText: { color: '#fff', fontSize: 13, fontWeight: '600' },
-  filtersWrap: { maxHeight: 52, borderBottomWidth: 1 },
-  filters: { paddingHorizontal: 12, paddingVertical: 10, gap: 8 },
-  chip: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20, borderWidth: 1, backgroundColor: '#fff' },
+  aiBtn: { backgroundColor: 'rgba(167,139,250,0.15)', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, borderWidth: 1, borderColor: 'rgba(167,139,250,0.4)' },
+  aiBtnText: { color: '#A78BFA', fontSize: 13, fontWeight: '700' },
+  aiGenerateBtn: { flex: 1, backgroundColor: '#7C3AED', borderRadius: 10, height: 48, justifyContent: 'center', alignItems: 'center' },
+  filtersWrap: { borderBottomWidth: 1, maxHeight: 50 },
+  filters: { paddingHorizontal: 12, paddingVertical: 8, gap: 8, alignItems: 'center', flexDirection: 'row' },
+  chip: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20, borderWidth: 1, backgroundColor: '#fff', height: 32, justifyContent: 'center', alignItems: 'center' },
   chipActive: { backgroundColor: '#1A1A2E', borderColor: '#1A1A2E' },
   chipText: { fontSize: 12, color: '#888899', fontWeight: '500' },
   chipTextActive: { color: '#fff', fontWeight: '700' },
@@ -506,9 +728,9 @@ const styles = StyleSheet.create({
   priorityDot: { width: 8, height: 8, borderRadius: 4 },
   overlay: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.45)' },
   topModal: { position: 'absolute', top: 0, left: 0, right: 0, backgroundColor: '#fff', borderBottomLeftRadius: 24, borderBottomRightRadius: 24, maxHeight: '95%', shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 16, elevation: 20 },
-  handle: { width: 40, height: 4, backgroundColor: '#DEDEE8', borderRadius: 2, alignSelf: 'center', marginTop: 8, marginBottom: 4 },
+  handle: { width: 40, height: 4, backgroundColor: '#DEDEE8', borderRadius: 2, alignSelf: 'center', marginTop: 16, marginBottom: 8 },
   modalScroll: { paddingHorizontal: 20 },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, marginTop: 4 },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, marginTop: 8 },
   modalTitle: { fontSize: 20, fontWeight: '700', color: '#1A1A2E' },
   closeCircle: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#F5F5F7', justifyContent: 'center', alignItems: 'center' },
   closeCircleText: { color: '#888899', fontSize: 13, fontWeight: '600' },
@@ -530,5 +752,9 @@ const styles = StyleSheet.create({
   removeImg: { position: 'absolute', top: -6, right: -6, width: 20, height: 20, borderRadius: 10, backgroundColor: '#F87171', justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: '#fff' },
   modalBtns: { flexDirection: 'row', gap: 10, marginTop: 8 },
   cancelBtn: { flex: 1, borderWidth: 1, borderColor: '#EBEBF0', borderRadius: 10, height: 48, justifyContent: 'center', alignItems: 'center' },
+  enhanceWrap: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
+  enhanceBtn: { width: 38, height: 46, borderRadius: 10, backgroundColor: 'rgba(167,139,250,0.1)', borderWidth: 1.5, borderColor: 'rgba(167,139,250,0.3)', justifyContent: 'center', alignItems: 'center' },
+  enhanceIcon: { fontSize: 18 },
+  enhanceHint: { fontSize: 10, color: '#A78BFA', marginBottom: 12, marginLeft: 2 },
   cancelBtnText: { color: '#888899', fontSize: 14, fontWeight: '500' },
 });

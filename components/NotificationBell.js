@@ -42,7 +42,13 @@ export default function NotificationBell() {
         )}
       </TouchableOpacity>
 
-      <Modal visible={open} transparent animationType="slide" onRequestClose={() => setOpen(false)}>
+      <Modal
+        visible={open}
+        transparent
+        animationType="slide"
+        statusBarTranslucent
+        onRequestClose={() => setOpen(false)}
+      >
         <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setOpen(false)} />
         <SafeAreaView style={styles.panel}>
           {/* Header */}
@@ -109,6 +115,7 @@ const styles = StyleSheet.create({
   overlay: {
     position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
     backgroundColor: 'rgba(0,0,0,0.35)',
+    zIndex: 9998,
   },
   panel: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
@@ -116,7 +123,8 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 24, borderTopRightRadius: 24,
     maxHeight: '75%',
     shadowColor: '#000', shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.1, shadowRadius: 12, elevation: 20,
+    shadowOpacity: 0.1, shadowRadius: 12, elevation: 9999,
+    zIndex: 9999,
   },
   panelHeader: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
