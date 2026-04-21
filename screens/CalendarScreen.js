@@ -3,14 +3,15 @@ import {
   TextInput, StatusBar, Platform, Alert, Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useState, useCallback, useContext, useRef } from 'react';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useState, useCallback, useContext, useRef, useEffect } from 'react';
+import { useNavigation, useFocusEffect, useRoute } from '@react-navigation/native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import SidebarMenu from '../components/SidebarMenu';
 import { ThemeContext } from '../context/ThemeContext';
 import NotificationBell from '../components/NotificationBell';
 import { NotificationsContext } from '../context/NotificationsContext';
+import { getUsers } from '../services/ApiService';
 
 const STORAGE_KEY = 'DYUKSA_QUICK_TASKS';
 const HOURS = Array.from({ length: 16 }, (_, i) => i + 7); // 07:00 to 22:00
@@ -18,9 +19,16 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const STATUS_COLORS = { pending: '#FBBF24', in_progress: '#4ECDC4', completed: '#4ADE80', deployed: '#3B82F6', deferred: '#888899', review: '#A78BFA' };
+const EVENT_TYPES = [
+  { id: 'Meeting',   icon: '👥', label: 'Meeting' },
+  { id: 'Review',    icon: '📋', label: 'Review' },
+  { id: 'Interview', icon: '🎯', label: 'Interview' },
+  { id: 'Training',  icon: '📚', label: 'Training' },
+];
 
 export default function CalendarScreen() {
   const navigation  = useNavigation();
+  const route       = useRoute();
   const { theme }   = useContext(ThemeContext);
   const { addNotification } = useContext(NotificationsContext);
   const isDark = theme === 'Dark';
@@ -51,6 +59,23 @@ export default function CalendarScreen() {
   const [tempPickerDate, setTempPickerDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
+  // End time (30 min after start by default)
+  const [endPickerDate,     setEndPickerDate]     = useState(new Date());
+  const [tempEndPickerDate, setTempEndPickerDate] = useState(new Date());
+  const [showEndTimePicker, setShowEndTimePicker] = useState(false);
+  // Event type
+  const [eventType,       setEventType]       = useState('Meeting'); // Meeting, Review, Interview, Training, Other
+  const [customType,      setCustomType]      = useState('');
+  const [showTypeDropdown, setShowTypeDropdown] = useState(false);
+  // Teams meeting toggle
+  const [teamsMeeting,    setTeamsMeeting]    = useState(false);
+  // Location
+  const [location,        setLocation]        = useState('');
+  // Participants
+  const [participants,    setParticipants]    = useState([]); // [{id, name, avatar}]
+  const [showParticipants,setShowParticipants]= useState(false);
+  const [participantSearch, setParticipantSearch] = useState('');
+  const [allUsers,        setAllUsers]        = useState([]);
   const slideAnim = useRef(new Animated.Value(-600)).current;
 
   useFocusEffect(useCallback(() => {
@@ -59,6 +84,21 @@ export default function CalendarScreen() {
       else setEvents([]);
     });
   }, []));
+
+  // Fetch all users once for participants list
+  useEffect(() => {
+    getUsers().then(setAllUsers).catch(() => setAllUsers([]));
+  }, []);
+
+  // Auto-open New Event modal when triggered by center "+" FAB (Quick Add → Event)
+  useFocusEffect(
+    useCallback(() => {
+      if (route.params?.openCreateModal) {
+        openModal();
+        navigation.setParams({ openCreateModal: false });
+      }
+    }, [route.params?.openCreateModal])
+  );
 
   // ── Navigation helpers ──
   const goToday  = () => setCurrentDate(new Date());
@@ -132,10 +172,26 @@ export default function CalendarScreen() {
 
   // ── Modal ──
   const openModal = (date) => {
-    const d = date ? new Date(date) : new Date(currentDate);
-    d.setHours(9, 0, 0, 0);
+    let d;
+    if (date) {
+      d = new Date(date);
+    } else {
+      d = new Date(currentDate);
+      const now = new Date();
+      if (d.toDateString() === now.toDateString()) {
+        d.setHours(now.getHours(), 0, 0, 0);
+      } else {
+        d.setHours(9, 0, 0, 0);
+      }
+    }
+    // End time defaults to 30 min after start
+    const end = new Date(d);
+    end.setMinutes(end.getMinutes() + 30);
+
     setPickerDate(d); setTempPickerDate(d);
-    setShowDatePicker(false); setShowTimePicker(false);
+    setEndPickerDate(end); setTempEndPickerDate(end);
+    setShowDatePicker(false); setShowTimePicker(false); setShowEndTimePicker(false);
+    setShowTypeDropdown(false); setShowParticipants(false);
     setModalVisible(true);
     Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, tension: 80, friction: 12 }).start();
   };
@@ -145,18 +201,55 @@ export default function CalendarScreen() {
       .start(() => {
         setModalVisible(false);
         setEventName(''); setEventDesc('');
-        setShowDatePicker(false); setShowTimePicker(false);
+        setEventType('Meeting'); setCustomType('');
+        setTeamsMeeting(false); setLocation('');
+        setParticipants([]); setParticipantSearch('');
+        setShowDatePicker(false); setShowTimePicker(false); setShowEndTimePicker(false);
+        setShowTypeDropdown(false); setShowParticipants(false);
+
+        // If opened from center "+" FAB, return user to the tab they came from
+        const returnTo = route.params?.returnTo;
+        if (returnTo && returnTo !== 'Calendar') {
+          navigation.setParams({ returnTo: null });
+          try { navigation.jumpTo(returnTo); } catch {}
+        }
       });
   };
 
   const saveEvent = async () => {
     if (!eventName.trim()) { Alert.alert('Required', 'Enter an event name.'); return; }
+
+    // Prevent creating events in the past
+    const now = new Date();
+    if (pickerDate.getTime() < now.getTime()) {
+      Alert.alert(
+        "Can't schedule in the past",
+        "Events can only be created for the current time or a future date. Please pick a date and time that has not already passed.",
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    // End time must be after start time
+    if (endPickerDate.getTime() <= pickerDate.getTime()) {
+      Alert.alert('Invalid time', 'End time must be after the start time.', [{ text: 'OK' }]);
+      return;
+    }
+
+    const resolvedType = eventType === 'Other' ? (customType.trim() || 'Other') : eventType;
+
     const newEvent = {
       id: Date.now().toString(), type: 'event',
-      name: eventName.trim(), description: eventDesc.trim(),
+      name: eventName.trim(),
+      description: eventDesc.trim(),
       eventDate: pickerDate.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) + ' at ' +
         pickerDate.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }),
-      eventTimestamp: pickerDate.toISOString(),
+      eventTimestamp:     pickerDate.toISOString(),
+      eventEndTimestamp:  endPickerDate.toISOString(),
+      eventType:          resolvedType,
+      teamsMeeting:       teamsMeeting,
+      location:           location.trim(),
+      participants:       participants, // [{id, name, avatar}]
       images: [], createdAt: new Date().toISOString(), status: 'Todo',
     };
     try {
@@ -165,10 +258,47 @@ export default function CalendarScreen() {
       const updated = [newEvent, ...all];
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
       setEvents(updated.filter(e => e.type === 'event'));
-      addNotification({ type: 'event', icon: '📅', title: 'Event Created', body: `"${newEvent.name}" scheduled.` });
+
+      // Send notification ONLY to selected participants (if any)
+      // When no participants selected, fire a general notification for the creator
+      if (participants.length > 0) {
+        participants.forEach(p => {
+          addNotification({
+            type: 'event', icon: '📅',
+            title: `Event: ${newEvent.name}`,
+            body: `${resolvedType} scheduled for ${newEvent.eventDate}. You've been invited.`,
+            recipientId: p.id, // backend will route this
+          });
+        });
+      } else {
+        addNotification({
+          type: 'event', icon: '📅',
+          title: 'Event Created',
+          body: `"${newEvent.name}" scheduled.`,
+        });
+      }
       closeModal();
     } catch { Alert.alert('Error', 'Could not save event.'); }
   };
+
+  // Participant helpers
+  const toggleParticipant = (user) => {
+    setParticipants(prev => {
+      const exists = prev.find(p => p.id === user.id);
+      if (exists) return prev.filter(p => p.id !== user.id);
+      return [...prev, {
+        id: user.id,
+        name: user.first_name || user.username || 'User',
+        avatar: (user.first_name || user.username || 'U')[0].toUpperCase(),
+      }];
+    });
+  };
+
+  const filteredUsers = allUsers.filter(u => {
+    const q = participantSearch.toLowerCase().trim();
+    if (!q) return true;
+    return (u.first_name || '').toLowerCase().includes(q) || (u.username || '').toLowerCase().includes(q);
+  });
 
   const deleteEvent = (id) => {
     Alert.alert('Delete Event', 'Remove this event?', [
@@ -303,11 +433,28 @@ export default function CalendarScreen() {
           {weekDays.map((d, di) => {
             const hourEvs = eventsForHour(d, hour);
             const isNow = d.toDateString() === today.toDateString() && today.getHours() === hour;
+            // Check if this cell is in the past
+            const cellTime = new Date(d);
+            cellTime.setHours(hour, 0, 0, 0);
+            const isPast = cellTime.getTime() < new Date().getTime() && !isNow;
             return (
               <TouchableOpacity
                 key={di}
-                style={[styles.dayCol, { borderColor: bdr }, isNow && styles.currentHourCol]}
+                style={[
+                  styles.dayCol,
+                  { borderColor: bdr },
+                  isNow && styles.currentHourCol,
+                  isPast && { backgroundColor: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)' },
+                ]}
                 onPress={() => {
+                  if (isPast) {
+                    Alert.alert(
+                      "Can't schedule in the past",
+                      "Events can only be created for the current time or a future date.",
+                      [{ text: 'OK' }]
+                    );
+                    return;
+                  }
                   const nd = new Date(d);
                   nd.setHours(hour, 0, 0, 0);
                   openModal(nd);
@@ -468,7 +615,7 @@ export default function CalendarScreen() {
           {viewMode === 'month' ? renderMonthView() : renderTimeGrid()}
       </View>
 
-      {/* ── New Event Modal ── */}
+      {/* ── Create Event Modal ── */}
       {modalVisible && (
         <Modal transparent visible animationType="none" onRequestClose={closeModal}>
           <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={closeModal} />
@@ -478,37 +625,52 @@ export default function CalendarScreen() {
               <ScrollView style={styles.panelScroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
 
                 <View style={styles.panelHeader}>
-                  <Text style={styles.modalTitle}>New Event</Text>
+                  <Text style={styles.modalTitle}>Create event</Text>
                   <TouchableOpacity style={styles.closeCircle} onPress={closeModal}>
                     <Text style={styles.closeCircleText}>✕</Text>
                   </TouchableOpacity>
                 </View>
 
-                {/* Event Name */}
-                <Text style={styles.fieldLabel}>Event Name *</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Enter event name..."
-                  placeholderTextColor="#AAAABC"
-                  value={eventName}
-                  onChangeText={setEventName}
-                  autoFocus
-                />
+                {/* ── Row: Date + Start — End Time ── */}
+                <View style={styles.dateTimeRow}>
+                  <TouchableOpacity
+                    style={[styles.miniPickerBtn, { flex: 1.4 }]}
+                    onPress={() => { setShowDatePicker(s => !s); setShowTimePicker(false); setShowEndTimePicker(false); }}
+                  >
+                    <Text style={styles.miniPickerText} numberOfLines={1}>
+                      📅  {pickerDate.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}
+                    </Text>
+                    <Text style={styles.miniPickerChevron}>▾</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.miniPickerBtn, { flex: 1 }]}
+                    onPress={() => { setShowTimePicker(s => !s); setShowDatePicker(false); setShowEndTimePicker(false); }}
+                  >
+                    <Text style={styles.miniPickerText}>
+                      {pickerDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}
+                    </Text>
+                    <Text style={styles.miniPickerChevron}>▾</Text>
+                  </TouchableOpacity>
+                  <Text style={styles.dash}>—</Text>
+                  <TouchableOpacity
+                    style={[styles.miniPickerBtn, { flex: 1 }]}
+                    onPress={() => { setShowEndTimePicker(s => !s); setShowDatePicker(false); setShowTimePicker(false); }}
+                  >
+                    <Text style={styles.miniPickerText}>
+                      {endPickerDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}
+                    </Text>
+                    <Text style={styles.miniPickerChevron}>▾</Text>
+                  </TouchableOpacity>
+                </View>
 
-                {/* Date picker */}
-                <Text style={styles.fieldLabel}>Date</Text>
-                <TouchableOpacity style={styles.pickerBtn} onPress={() => { setShowDatePicker(s => !s); setShowTimePicker(false); }}>
-                  <Text style={styles.pickerBtnText}>
-                    📅  {pickerDate.toLocaleDateString('en-US', { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })}
-                  </Text>
-                  <Text style={styles.pickerChevron}>{showDatePicker ? '▲' : '▾'}</Text>
-                </TouchableOpacity>
+                {/* Date Picker expanded */}
                 {showDatePicker && (
                   <View style={styles.pickerCard}>
                     <DateTimePicker
                       value={tempPickerDate}
                       mode="date"
                       display="inline"
+                      minimumDate={new Date(new Date().setHours(0, 0, 0, 0))}
                       onChange={(_, date) => { if (date) setTempPickerDate(date); }}
                       style={{ width: '100%' }}
                     />
@@ -517,9 +679,13 @@ export default function CalendarScreen() {
                         <Text style={styles.pickerCancelText}>Cancel</Text>
                       </TouchableOpacity>
                       <TouchableOpacity style={styles.pickerDoneBtn} onPress={() => {
-                        const nd = new Date(tempPickerDate);
+                        const nd  = new Date(tempPickerDate);
                         nd.setHours(pickerDate.getHours(), pickerDate.getMinutes());
-                        setPickerDate(nd); setShowDatePicker(false);
+                        const nde = new Date(nd);
+                        nde.setHours(endPickerDate.getHours(), endPickerDate.getMinutes());
+                        setPickerDate(nd);
+                        setEndPickerDate(nde);
+                        setShowDatePicker(false);
                       }}>
                         <Text style={styles.pickerDoneText}>Done</Text>
                       </TouchableOpacity>
@@ -527,14 +693,7 @@ export default function CalendarScreen() {
                   </View>
                 )}
 
-                {/* Time picker */}
-                <Text style={[styles.fieldLabel, { marginTop: showDatePicker ? 0 : 4 }]}>Time</Text>
-                <TouchableOpacity style={styles.pickerBtn} onPress={() => { setShowTimePicker(s => !s); setShowDatePicker(false); }}>
-                  <Text style={styles.pickerBtnText}>
-                    🕐  {pickerDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}
-                  </Text>
-                  <Text style={styles.pickerChevron}>{showTimePicker ? '▲' : '▾'}</Text>
-                </TouchableOpacity>
+                {/* Start Time Picker expanded */}
                 {showTimePicker && (
                   <View style={styles.pickerCard}>
                     <DateTimePicker
@@ -551,7 +710,15 @@ export default function CalendarScreen() {
                       <TouchableOpacity style={styles.pickerDoneBtn} onPress={() => {
                         const nd = new Date(pickerDate);
                         nd.setHours(tempPickerDate.getHours(), tempPickerDate.getMinutes());
-                        setPickerDate(nd); setShowTimePicker(false);
+                        setPickerDate(nd);
+                        // Auto-adjust end time to be 30 min after new start if end is now before start
+                        if (endPickerDate.getTime() <= nd.getTime()) {
+                          const ne = new Date(nd);
+                          ne.setMinutes(ne.getMinutes() + 30);
+                          setEndPickerDate(ne);
+                          setTempEndPickerDate(ne);
+                        }
+                        setShowTimePicker(false);
                       }}>
                         <Text style={styles.pickerDoneText}>Done</Text>
                       </TouchableOpacity>
@@ -559,16 +726,107 @@ export default function CalendarScreen() {
                   </View>
                 )}
 
-                {/* Alert info */}
-                <View style={styles.alertInfoBox}>
-                  <Text style={styles.alertInfoText}>🔔  You'll receive an alert 1 hour before this event</Text>
-                </View>
+                {/* End Time Picker expanded */}
+                {showEndTimePicker && (
+                  <View style={styles.pickerCard}>
+                    <DateTimePicker
+                      value={tempEndPickerDate}
+                      mode="time"
+                      display="spinner"
+                      onChange={(_, date) => { if (date) setTempEndPickerDate(date); }}
+                      style={{ width: '100%' }}
+                    />
+                    <View style={styles.pickerActions}>
+                      <TouchableOpacity style={styles.pickerCancelBtn} onPress={() => setShowEndTimePicker(false)}>
+                        <Text style={styles.pickerCancelText}>Cancel</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={styles.pickerDoneBtn} onPress={() => {
+                        const ne = new Date(pickerDate);
+                        ne.setHours(tempEndPickerDate.getHours(), tempEndPickerDate.getMinutes());
+                        setEndPickerDate(ne);
+                        setShowEndTimePicker(false);
+                      }}>
+                        <Text style={styles.pickerDoneText}>Done</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                )}
+
+                {/* Event Name */}
+                <Text style={styles.fieldLabel}>EVENT NAME</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Enter event name"
+                  placeholderTextColor="#AAAABC"
+                  value={eventName}
+                  onChangeText={setEventName}
+                />
+
+                {/* Event Type Dropdown */}
+                <Text style={styles.fieldLabel}>EVENT TYPE</Text>
+                <TouchableOpacity
+                  style={[styles.typeTrigger, showTypeDropdown && styles.typeTriggerOpen]}
+                  onPress={() => setShowTypeDropdown(s => !s)}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Text style={{ fontSize: 16 }}>
+                      {(EVENT_TYPES.find(t => t.id === eventType)?.icon) || '✏️'}
+                    </Text>
+                    <Text style={styles.typeTriggerText}>
+                      {eventType === 'Other' ? (customType.trim() || 'Other') : eventType}
+                    </Text>
+                  </View>
+                  <Text style={styles.typeTriggerChevron}>{showTypeDropdown ? '▲' : '▾'}</Text>
+                </TouchableOpacity>
+
+                {showTypeDropdown && (
+                  <View style={styles.typeDropdown}>
+                    {EVENT_TYPES.map((t, i) => (
+                      <TouchableOpacity
+                        key={t.id}
+                        style={[styles.typeOption, eventType === t.id && styles.typeOptionActive]}
+                        onPress={() => { setEventType(t.id); setShowTypeDropdown(false); }}
+                      >
+                        <Text style={{ fontSize: 16, marginRight: 10 }}>{t.icon}</Text>
+                        <Text style={[styles.typeOptionText, eventType === t.id && styles.typeOptionTextActive]}>
+                          {t.label}
+                        </Text>
+                        {eventType === t.id && <Text style={styles.typeCheck}>✓</Text>}
+                      </TouchableOpacity>
+                    ))}
+                    {/* Custom 'Other' input */}
+                    <View style={styles.typeCustomRow}>
+                      <Text style={{ fontSize: 16, marginRight: 8 }}>✏️</Text>
+                      <TextInput
+                        style={styles.typeCustomInput}
+                        placeholder="Other (type custom name)"
+                        placeholderTextColor="#AAAABC"
+                        value={customType}
+                        onChangeText={t => { setCustomType(t); setEventType('Other'); }}
+                        onFocus={() => setEventType('Other')}
+                      />
+                    </View>
+                  </View>
+                )}
+
+                {/* Teams meeting toggle */}
+                <TouchableOpacity
+                  style={[styles.teamsBtn, teamsMeeting && styles.teamsBtnOn]}
+                  onPress={() => setTeamsMeeting(v => !v)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={{ fontSize: 14, marginRight: 8 }}>📹</Text>
+                  <Text style={[styles.teamsBtnText, teamsMeeting && styles.teamsBtnTextOn]}>
+                    Teams meeting
+                  </Text>
+                  {teamsMeeting && <Text style={{ marginLeft: 8, color: '#4ECDC4', fontWeight: '700' }}>✓</Text>}
+                </TouchableOpacity>
 
                 {/* Description */}
-                <Text style={styles.fieldLabel}>Description</Text>
+                <Text style={styles.fieldLabel}>DESCRIPTION</Text>
                 <TextInput
                   style={[styles.input, { height: 80, paddingTop: 12 }]}
-                  placeholder="Add details..."
+                  placeholder="Let's discuss"
                   placeholderTextColor="#AAAABC"
                   value={eventDesc}
                   onChangeText={setEventDesc}
@@ -576,13 +834,107 @@ export default function CalendarScreen() {
                   textAlignVertical="top"
                 />
 
+                {/* Location */}
+                <View style={styles.locationWrap}>
+                  <Text style={styles.locationIcon}>📍</Text>
+                  <TextInput
+                    style={styles.locationInput}
+                    placeholder="Add location (optional)"
+                    placeholderTextColor="#AAAABC"
+                    value={location}
+                    onChangeText={setLocation}
+                  />
+                </View>
+
+                {/* Participants */}
+                <View style={styles.participantsHeaderRow}>
+                  <Text style={styles.fieldLabel}>PARTICIPANTS</Text>
+                  <TouchableOpacity onPress={() => setShowParticipants(s => !s)}>
+                    <Text style={styles.participantsToggle}>
+                      {showParticipants ? 'Hide' : '+ Add'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Selected participant chips */}
+                {participants.length > 0 ? (
+                  <View style={styles.participantChipsRow}>
+                    {participants.map(p => (
+                      <View key={p.id} style={styles.participantChip}>
+                        <View style={styles.participantChipAvatar}>
+                          <Text style={styles.participantChipAvatarText}>{p.avatar}</Text>
+                        </View>
+                        <Text style={styles.participantChipName}>{p.name}</Text>
+                        <TouchableOpacity onPress={() => toggleParticipant({ id: p.id, first_name: p.name })}>
+                          <Text style={styles.participantChipRemove}>✕</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                  </View>
+                ) : (
+                  !showParticipants && (
+                    <View style={styles.noParticipants}>
+                      <Text style={styles.noParticipantsIcon}>👥</Text>
+                      <Text style={styles.noParticipantsText}>No participants yet</Text>
+                    </View>
+                  )
+                )}
+
+                {/* Participants picker */}
+                {showParticipants && (
+                  <View style={styles.participantsPicker}>
+                    <TextInput
+                      style={styles.participantSearchInput}
+                      placeholder="Search users..."
+                      placeholderTextColor="#AAAABC"
+                      value={participantSearch}
+                      onChangeText={setParticipantSearch}
+                    />
+                    <ScrollView style={{ maxHeight: 180 }} nestedScrollEnabled>
+                      {filteredUsers.length === 0 ? (
+                        <Text style={styles.noUsersText}>No users found</Text>
+                      ) : (
+                        filteredUsers.map(u => {
+                          const isSelected = participants.some(p => p.id === u.id);
+                          return (
+                            <TouchableOpacity
+                              key={u.id}
+                              style={styles.userRow}
+                              onPress={() => toggleParticipant(u)}
+                            >
+                              <View style={styles.userAvatar}>
+                                <Text style={styles.userAvatarText}>
+                                  {((u.first_name || u.username || 'U')[0] || 'U').toUpperCase()}
+                                </Text>
+                              </View>
+                              <Text style={styles.userName}>{u.first_name || u.username || 'User'}</Text>
+                              <View style={[styles.userCheckbox, isSelected && styles.userCheckboxActive]}>
+                                {isSelected && <Text style={styles.userCheckmark}>✓</Text>}
+                              </View>
+                            </TouchableOpacity>
+                          );
+                        })
+                      )}
+                    </ScrollView>
+                  </View>
+                )}
+
+                {/* Alert info */}
+                <View style={styles.alertInfoBox}>
+                  <Text style={styles.alertInfoText}>
+                    🔔  {participants.length > 0
+                      ? `${participants.length} participant${participants.length > 1 ? 's' : ''} will be notified 1 hour before`
+                      : "You'll receive an alert 1 hour before this event"}
+                  </Text>
+                </View>
+
                 {/* Buttons */}
                 <View style={[styles.modalBtns, { marginBottom: 28 }]}>
                   <TouchableOpacity style={styles.cancelBtn} onPress={closeModal}>
                     <Text style={styles.cancelBtnText}>Cancel</Text>
                   </TouchableOpacity>
                   <TouchableOpacity style={styles.saveBtn} onPress={saveEvent}>
-                    <Text style={styles.saveBtnText}>Save Event</Text>
+                    <Text style={styles.saveBtnText}>Create event</Text>
                   </TouchableOpacity>
                 </View>
 
@@ -692,7 +1044,7 @@ const styles = StyleSheet.create({
 
   // Modal
   overlay: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.45)' },
-  topPanel: { position: 'absolute', top: 0, left: 0, right: 0, backgroundColor: '#fff', borderBottomLeftRadius: 24, borderBottomRightRadius: 24, maxHeight: '92%', shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 16, elevation: 20 },
+  topPanel: { position: 'absolute', top: 0, left: 0, right: 0, backgroundColor: '#fff', borderBottomLeftRadius: 24, borderBottomRightRadius: 24, maxHeight: '92%', paddingTop: Platform.OS === 'ios' ? 44 : (StatusBar.currentHeight || 24), shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 16, elevation: 20 },
   handle: { width: 40, height: 4, backgroundColor: '#DEDEE8', borderRadius: 2, alignSelf: 'center', marginTop: 8, marginBottom: 4 },
   panelScroll: { paddingHorizontal: 20 },
   panelHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, marginTop: 4 },
@@ -717,4 +1069,143 @@ const styles = StyleSheet.create({
   cancelBtnText: { color: '#888899', fontSize: 14, fontWeight: '500' },
   saveBtn: { flex: 1, height: 48, borderRadius: 10, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center' },
   saveBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
+
+  // Date + Time row
+  dateTimeRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 14 },
+  miniPickerBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: '#F5F5F7', borderRadius: 10, borderWidth: 1,
+    borderColor: '#EBEBF0', paddingHorizontal: 10, height: 40,
+  },
+  miniPickerText: { fontSize: 13, color: '#1A1A2E', fontWeight: '500' },
+  miniPickerChevron: { fontSize: 10, color: '#888899', marginLeft: 4 },
+  dash: { color: '#AAAABC', fontSize: 16, fontWeight: '500' },
+
+  // Event type
+  typeTrigger: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: 'rgba(100,140,255,0.08)',
+    borderRadius: 10, borderWidth: 1, borderColor: 'rgba(100,140,255,0.25)',
+    paddingHorizontal: 14, height: 48, marginBottom: 8,
+  },
+  typeTriggerOpen: { borderColor: '#648CFF' },
+  typeTriggerText: { fontSize: 14, color: '#4A6FDB', fontWeight: '600' },
+  typeTriggerChevron: { fontSize: 12, color: '#4A6FDB' },
+  typeDropdown: {
+    backgroundColor: '#fff', borderRadius: 12,
+    borderWidth: 1, borderColor: '#EBEBF0',
+    paddingVertical: 4, marginBottom: 14,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08, shadowRadius: 8, elevation: 4,
+  },
+  typeOption: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 14, paddingVertical: 12,
+  },
+  typeOptionActive: { backgroundColor: 'rgba(100,140,255,0.08)' },
+  typeOptionText: { flex: 1, fontSize: 14, color: '#1A1A2E', fontWeight: '500' },
+  typeOptionTextActive: { color: '#4A6FDB', fontWeight: '700' },
+  typeCheck: { color: '#4A6FDB', fontSize: 16, fontWeight: '700' },
+  typeCustomRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 14, paddingVertical: 10,
+    borderTopWidth: 1, borderTopColor: '#F0F0F5',
+  },
+  typeCustomInput: {
+    flex: 1, fontSize: 14, color: '#1A1A2E',
+    paddingVertical: 6,
+  },
+
+  // Teams button
+  teamsBtn: {
+    flexDirection: 'row', alignItems: 'center',
+    alignSelf: 'flex-start',
+    borderWidth: 1, borderColor: '#EBEBF0',
+    borderRadius: 10, paddingHorizontal: 14, height: 40,
+    marginBottom: 14, backgroundColor: '#FAFAFA',
+  },
+  teamsBtnOn: {
+    borderColor: '#4ECDC4', backgroundColor: 'rgba(78,205,196,0.08)',
+  },
+  teamsBtnText: { fontSize: 13, color: '#5C5C6E', fontWeight: '600' },
+  teamsBtnTextOn: { color: '#4ECDC4' },
+
+  // Location
+  locationWrap: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#F5F5F7', borderRadius: 10,
+    borderWidth: 1.5, borderColor: '#EBEBF0',
+    paddingHorizontal: 14, height: 48, marginBottom: 14,
+  },
+  locationIcon: { fontSize: 14, marginRight: 8 },
+  locationInput: { flex: 1, fontSize: 14, color: '#1A1A2E' },
+
+  // Participants
+  participantsHeaderRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    marginBottom: 8, marginTop: 4,
+  },
+  participantsToggle: {
+    fontSize: 13, color: '#4ECDC4', fontWeight: '700',
+  },
+  noParticipants: {
+    alignItems: 'center', paddingVertical: 18, gap: 6,
+    backgroundColor: '#FAFAFA',
+    borderRadius: 10, borderWidth: 1, borderColor: '#F0F0F5',
+    marginBottom: 14,
+  },
+  noParticipantsIcon: { fontSize: 26, opacity: 0.3 },
+  noParticipantsText: { fontSize: 12, color: '#AAAABC' },
+  participantChipsRow: {
+    flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 14,
+  },
+  participantChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: 'rgba(78,205,196,0.1)',
+    borderRadius: 16, paddingLeft: 4, paddingRight: 10, paddingVertical: 3,
+  },
+  participantChipAvatar: {
+    width: 22, height: 22, borderRadius: 11,
+    backgroundColor: '#1A1A2E',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  participantChipAvatarText: { color: '#4ECDC4', fontSize: 10, fontWeight: '700' },
+  participantChipName: { fontSize: 12, color: '#1A1A2E', fontWeight: '600' },
+  participantChipRemove: { color: '#888899', fontSize: 11, fontWeight: '700', paddingHorizontal: 2 },
+  participantsPicker: {
+    backgroundColor: '#FAFAFA', borderRadius: 10,
+    borderWidth: 1, borderColor: '#EBEBF0',
+    padding: 10, marginBottom: 14,
+  },
+  participantSearchInput: {
+    backgroundColor: '#fff', borderRadius: 8,
+    borderWidth: 1, borderColor: '#EBEBF0',
+    paddingHorizontal: 12, height: 40,
+    fontSize: 13, color: '#1A1A2E', marginBottom: 8,
+  },
+  noUsersText: {
+    textAlign: 'center', paddingVertical: 12,
+    fontSize: 12, color: '#AAAABC',
+  },
+  userRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 8, paddingHorizontal: 4,
+    borderBottomWidth: 1, borderBottomColor: '#F0F0F5',
+  },
+  userAvatar: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: '#1A1A2E',
+    justifyContent: 'center', alignItems: 'center', marginRight: 10,
+  },
+  userAvatarText: { color: '#4ECDC4', fontSize: 12, fontWeight: '700' },
+  userName: { flex: 1, fontSize: 13, color: '#1A1A2E', fontWeight: '500' },
+  userCheckbox: {
+    width: 22, height: 22, borderRadius: 11,
+    borderWidth: 1.5, borderColor: '#DEDEE8',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  userCheckboxActive: {
+    backgroundColor: '#4ECDC4', borderColor: '#4ECDC4',
+  },
+  userCheckmark: { color: '#fff', fontSize: 13, fontWeight: '700' },
 });

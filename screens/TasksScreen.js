@@ -5,11 +5,12 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useState, useCallback, useRef, useContext, useEffect } from 'react';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { NotificationsContext } from '../context/NotificationsContext';
 import { getUsers, getProjects, getAccessToken, refineTextAI } from '../services/ApiService';
 import SidebarMenu from '../components/SidebarMenu';
+import TaskDetailModal from '../components/TaskDetailModal';
 import { ThemeContext } from '../context/ThemeContext';
 import NotificationBell from '../components/NotificationBell';
 
@@ -66,7 +67,8 @@ const dd = StyleSheet.create({
 // ── Main Screen ──────────────────────────────────────────────────────────────
 export default function TasksScreen() {
   const navigation = useNavigation();
-  const { theme } = useContext(ThemeContext);
+  const route = useRoute();
+  const { theme } = useContext(ThemeContext);;
   const { addNotification } = useContext(NotificationsContext);
   const isDark = theme === 'Dark';
   const bg   = isDark ? '#0D0D0F' : '#F5F5F7';
@@ -83,7 +85,13 @@ export default function TasksScreen() {
 
   const [modalVisible,   setModalVisible]   = useState(false);
   const [saving,         setSaving]         = useState(false);
+  // Task detail modal
+  const [detailTask,     setDetailTask]     = useState(null);
   const slideAnim = useRef(new Animated.Value(-700)).current;
+
+  // Track which project to return to after a task is successfully created
+  // (set when Create Task was triggered from inside a Project Details screen)
+  const returnToProjectIdRef = useRef(null);
 
   const [heading,       setHeading]       = useState('');
   const [description,   setDescription]   = useState('');
@@ -97,12 +105,46 @@ export default function TasksScreen() {
   const [images,        setImages]        = useState([]);
   const [projectSearch, setProjectSearch] = useState('');
 
-  useFocusEffect(useCallback(() => { fetchTasks(); }, []));
+ useFocusEffect(useCallback(() => { fetchTasks(); }, []));
 
   useEffect(() => {
     getProjects().then(setProjects).catch(() => {});
     getUsers().then(setUsers).catch(() => {});
   }, []);
+
+  // Auto-open Create Task modal when center "+" FAB triggers us
+  // Also pre-select project if presetProjectId is passed (from Project Details screen)
+  useFocusEffect(
+    useCallback(() => {
+      if (route.params?.openCreateModal) {
+        openModal();
+
+        // If project preset is passed, try to select it immediately
+        const presetId = route.params?.presetProjectId;
+        if (presetId) {
+          // Remember where to return after successful task creation
+          returnToProjectIdRef.current = presetId;
+
+          // Try to find project in already-loaded list
+          const found = projects.find(p => String(p.id) === String(presetId));
+          if (found) {
+            setProject(found);
+          } else {
+            // Projects not loaded yet — retry after a short delay
+            setTimeout(() => {
+              setProjects(current => {
+                const p = current.find(p => String(p.id) === String(presetId));
+                if (p) setProject(p);
+                return current;
+              });
+            }, 600);
+          }
+        }
+
+        navigation.setParams({ openCreateModal: false, presetProjectId: null });
+      }
+    }, [route.params?.openCreateModal, route.params?.presetProjectId, projects])
+  );
 
   const fetchTasks = async () => {
     setLoading(true);
@@ -128,12 +170,22 @@ export default function TasksScreen() {
     Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, tension: 80, friction: 12 }).start();
   };
 
-  const closeModal = () => {
+  const closeModal = (fromCancel) => {
+    // If user is cancelling AND they came from a project, grab the return id
+    // BEFORE the animation starts — then navigate back after the animation.
+    const returnId = fromCancel ? returnToProjectIdRef.current : null;
+    if (fromCancel) returnToProjectIdRef.current = null;
+
     Animated.timing(slideAnim, { toValue: -700, duration: 250, useNativeDriver: true }).start(() => {
       setModalVisible(false);
       setHeading(''); setDescription(''); setProject(null); setStatus(null);
       setPriority('medium'); setStartDate(''); setEndDate('');
       setAssignedTo([]); setLinks(''); setImages([]); setProjectSearch('');
+
+      // After the close animation, take the user back to the project they came from
+      if (returnId) {
+        navigation.navigate('Projects', { reopenProjectId: returnId });
+      }
     });
   };
 
@@ -182,6 +234,16 @@ export default function TasksScreen() {
         addNotification({ type: 'task', icon: '📋', title: 'Task Created', body: `"${heading.trim()}" added successfully.` });
         await fetchTasks();
         closeModal();
+
+        // If Create Task was triggered from inside a Project Details screen,
+        // bring the user back to that project so they stay in context.
+        const returnId = returnToProjectIdRef.current;
+        if (returnId) {
+          returnToProjectIdRef.current = null;
+          setTimeout(() => {
+            navigation.navigate('Projects', { reopenProjectId: returnId });
+          }, 300); // wait for close animation
+        }
       } else {
         Alert.alert('Error', data.message || data.detail || JSON.stringify(data));
       }
@@ -379,7 +441,11 @@ export default function TasksScreen() {
           onRefresh={fetchTasks}
           refreshing={loading}
           renderItem={({ item }) => (
-            <View style={[styles.taskCard, { backgroundColor: card, borderColor: bdr }]}>
+            <TouchableOpacity
+              style={[styles.taskCard, { backgroundColor: card, borderColor: bdr }]}
+              onPress={() => setDetailTask(item)}
+              activeOpacity={0.7}
+            >
               <View style={styles.cardTop}>
                 <View style={[styles.typeIcon, { backgroundColor: (STATUS_COLORS[item.status] || '#888') + '20' }]}>
                   <Text style={{ fontSize: 18 }}>📋</Text>
@@ -393,10 +459,17 @@ export default function TasksScreen() {
                     <Text style={[styles.taskDate, { color: sub }]}>{formatDate(item.start_date || item.created_at)}</Text>
                   )}
                 </View>
-                <View style={[styles.statusBadge, { backgroundColor: (STATUS_COLORS[item.status] || '#888') + '20' }]}>
-                  <Text style={[styles.statusText, { color: STATUS_COLORS[item.status] || '#888' }]}>
-                    {STATUS_LABELS[item.status] || item.status}
-                  </Text>
+                <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                  <View style={[styles.statusBadge, { backgroundColor: (STATUS_COLORS[item.status] || '#888') + '20' }]}>
+                    <Text style={[styles.statusText, { color: STATUS_COLORS[item.status] || '#888' }]}>
+                      {STATUS_LABELS[item.status] || item.status}
+                    </Text>
+                  </View>
+                  {item.end_date && (
+                    <Text style={[styles.dueDateText, { color: sub }]}>
+                      {formatDate(item.end_date)}
+                    </Text>
+                  )}
                 </View>
               </View>
               {!!item.description && (() => {
@@ -411,7 +484,7 @@ export default function TasksScreen() {
                   <Text style={{ fontSize: 11, color: sub, fontWeight: '500' }}>{item.priority?.toUpperCase()}</Text>
                 </View>
               )}
-            </View>
+            </TouchableOpacity>
           )}
         />
       )}
@@ -419,7 +492,7 @@ export default function TasksScreen() {
       {/* ── Create Task Modal ── */}
       {modalVisible && (
         <Modal transparent visible animationType="none" onRequestClose={closeModal}>
-          <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={closeModal} />
+          <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => closeModal(true)} />
           <Animated.View style={[styles.topModal, { transform: [{ translateY: slideAnim }] }]}>
             <SafeAreaView>
               <View style={styles.handle} />
@@ -427,7 +500,7 @@ export default function TasksScreen() {
 
                 <View style={styles.modalHeader}>
                   <Text style={styles.modalTitle}>Create Task</Text>
-                  <TouchableOpacity style={styles.closeCircle} onPress={closeModal}>
+                  <TouchableOpacity style={styles.closeCircle} onPress={() => closeModal(true)}>
                     <Text style={styles.closeCircleText}>✕</Text>
                   </TouchableOpacity>
                 </View>
@@ -596,7 +669,7 @@ export default function TasksScreen() {
 
                 {/* Buttons */}
                 <View style={[styles.modalBtns, { marginBottom: 28 }]}>
-                  <TouchableOpacity style={styles.cancelBtn} onPress={closeModal} disabled={saving}>
+                  <TouchableOpacity style={styles.cancelBtn} onPress={() => closeModal(true)} disabled={saving}>
                     <Text style={styles.cancelBtnText}>Cancel</Text>
                   </TouchableOpacity>
                   <TouchableOpacity style={[styles.newBtn, saving && { opacity: 0.7 }]} onPress={createTask} disabled={saving}>
@@ -685,6 +758,18 @@ export default function TasksScreen() {
           </Animated.View>
         </Modal>
       )}
+
+      {/* Task Detail Modal (full-screen slide-in from right) */}
+      <TaskDetailModal
+        visible={!!detailTask}
+        task={detailTask}
+        onClose={() => setDetailTask(null)}
+        onUpdated={(updatedTask) => {
+          // Refresh task list and update the currently-open task with server response
+          fetchTasks();
+          if (updatedTask) setDetailTask(updatedTask);
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -724,6 +809,7 @@ const styles = StyleSheet.create({
   taskDate: { fontSize: 11, marginTop: 2 },
   statusBadge: { borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 },
   statusText: { fontSize: 11, fontWeight: '600' },
+  dueDateText: { fontSize: 10, fontWeight: '600' },
   taskDesc: { fontSize: 13, lineHeight: 20, marginBottom: 4 },
   priorityDot: { width: 8, height: 8, borderRadius: 4 },
   overlay: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.45)' },

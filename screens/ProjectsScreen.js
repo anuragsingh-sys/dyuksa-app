@@ -1,16 +1,19 @@
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   Modal, TextInput, StatusBar, Platform,
-  ScrollView, Animated, Image, Alert, ActivityIndicator,
+  ScrollView, Animated, Image, Alert, ActivityIndicator, Dimensions, Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useState, useRef, useContext, useEffect } from 'react';
-import { useNavigation } from '@react-navigation/native';
+import { useState, useRef, useContext, useEffect, useCallback } from 'react';
+import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NotificationsContext } from '../context/NotificationsContext';
 import { AuthContext } from '../context/AuthContext';
-import { getUsers, getProjects, createProject } from '../services/ApiService';
+import { getUsers, getProjects, createProject, getTasks, createTask } from '../services/ApiService';
 import SidebarMenu from '../components/SidebarMenu';
+import TaskDetailModal from '../components/TaskDetailModal';
 import { ThemeContext } from '../context/ThemeContext';
 import NotificationBell from '../components/NotificationBell';
 
@@ -24,6 +27,24 @@ const TASK_TYPE_LABELS = {
 const ROLES = ['manager', 'annotator', 'viewer', 'admin'];
 const FILTER_COLORS = { client: '#3B82F6', internal: '#4ADE80', content_creation: '#F472B6', ideas: '#FBBF24' };
 const STATUS_COLORS = { 'In Progress': '#4ECDC4', Completed: '#4ADE80', 'On Hold': '#FBBF24' };
+
+// Task status colors — matches TasksScreen
+const TASK_STATUS_LABELS = { pending: 'Pending', in_progress: 'In Progress', completed: 'Completed', backlog: 'Backlog', deployed: 'Deployed', deferred: 'Deferred', review: 'Review' };
+const TASK_STATUS_COLORS = { pending: '#888899', in_progress: '#4ECDC4', completed: '#4ADE80', backlog: '#F472B6', deployed: '#3B82F6', deferred: '#FBBF24', review: '#A78BFA' };
+
+// Task priority colors — matches TasksScreen
+const PRIORITY_COLORS = { low: '#4ADE80', medium: '#FBBF24', high: '#F97316', urgent: '#EF4444' };
+
+const SCREEN_WIDTH = Dimensions.get('window').width;
+const PROJECT_DOCS_STORAGE_KEY = 'DYUKSA_PROJECT_DOCS'; // local-only for now, until backend is wired
+
+// Helper: get member array from project (backend uses `members`, legacy code used `assigned_members`)
+const getProjectMembers = (project) => {
+  if (!project) return [];
+  if (Array.isArray(project.members)) return project.members;
+  if (Array.isArray(project.assigned_members)) return project.assigned_members;
+  return [];
+};
 
 // ── Inline dropdown (no nested Modal — works inside Modal on iOS) ────────────
 function InlineDropdown({ options, selected, onSelect, placeholder }) {
@@ -73,6 +94,7 @@ const pk = StyleSheet.create({
 // ── Main Screen ──────────────────────────────────────────────────────────────
 export default function ProjectsScreen() {
   const navigation = useNavigation();
+  const route      = useRoute();
   const { theme, projectView } = useContext(ThemeContext);
   const isDark = theme === 'Dark';
   const bg   = isDark ? '#0D0D0F' : '#F5F5F7';
@@ -93,6 +115,26 @@ export default function ProjectsScreen() {
   // ── Modal ──
   const [modalVisible, setModalVisible] = useState(false);
   const [saving,       setSaving]       = useState(false);
+
+  // ── Project details modal ──
+  const [detailsVisible,   setDetailsVisible]   = useState(false);
+  const [selectedProject,  setSelectedProject]  = useState(null);
+  const [projectTasks,     setProjectTasks]     = useState([]);
+  const [loadingTasks,     setLoadingTasks]     = useState(false);
+  const [detailsTab,       setDetailsTab]       = useState('tasks'); // tasks | members | documents
+  const [taskSearch,       setTaskSearch]       = useState('');
+  // Documents (local-only until backend wired)
+  const [projectDocs,      setProjectDocs]      = useState([]);
+  const [uploadModalOpen,  setUploadModalOpen]  = useState(false);
+  const [uploading,        setUploading]        = useState(false);
+  // Import tasks from JSON
+  const [importModalOpen,  setImportModalOpen]  = useState(false);
+  const [importJsonText,   setImportJsonText]   = useState('');
+  const [importing,        setImporting]        = useState(false);
+  const [importProgress,   setImportProgress]   = useState(''); // e.g. "Creating 3 of 10..."
+  // Task detail modal
+  const [detailTask,       setDetailTask]       = useState(null);
+  const detailsSlideAnim = useRef(new Animated.Value(0)).current; // 0 = hidden (off-screen right), 1 = visible
 
   // ── Form fields ──
   const [projectName,   setProjectName]   = useState('');
@@ -129,6 +171,37 @@ export default function ProjectsScreen() {
     }
   };
 
+  // When user comes back to Projects tab after creating a task inside a project,
+  // auto-reopen that project's details so they stay in context.
+  useFocusEffect(
+    useCallback(() => {
+      const reopenId = route.params?.reopenProjectId;
+      if (!reopenId) return;
+
+      // Clear the param immediately so it doesn't re-trigger
+      navigation.setParams({ reopenProjectId: null });
+
+      const tryReopen = async () => {
+        // Refresh projects list first so the newly-created task's project
+        // carries the up-to-date task_count, members, etc.
+        try {
+          const list = await getProjects();
+          setProjects(list);
+          const found = list.find(p => String(p.id) === String(reopenId));
+          if (found) {
+            openDetails(found);
+          }
+        } catch (e) {
+          // If fetch fails, try to open from current state
+          const found = projects.find(p => String(p.id) === String(reopenId));
+          if (found) openDetails(found);
+        }
+      };
+      // Small delay to let tab-switch animation settle
+      setTimeout(tryReopen, 200);
+    }, [route.params?.reopenProjectId])
+  );
+
   // ── Modal open/close ──
   const openModal = () => {
     setModalVisible(true);
@@ -141,6 +214,369 @@ export default function ProjectsScreen() {
       setProjectName(''); setTaskType(null); setProjectImages([]);
       setMembers([{ user: null, role: null }]);
     });
+  };
+
+  // ── Project details modal open/close ──
+  const openDetails = async (project) => {
+    setSelectedProject(project);
+    setDetailsVisible(true);
+    setProjectTasks([]);
+    setProjectDocs([]);
+    setDetailsTab('tasks');
+    setTaskSearch('');
+    Animated.timing(detailsSlideAnim, { toValue: 1, duration: 280, useNativeDriver: true }).start();
+
+    // Load locally-stored documents for this project
+    try {
+      const raw = await AsyncStorage.getItem(PROJECT_DOCS_STORAGE_KEY);
+      const allDocs = raw ? JSON.parse(raw) : {};
+      setProjectDocs(allDocs[String(project.id)] || []);
+    } catch (e) {
+      setProjectDocs([]);
+    }
+
+    // Fetch tasks and filter by project id
+    setLoadingTasks(true);
+    try {
+      const all = await getTasks();
+      const forThisProject = (all || []).filter(t => {
+        // Backend returns task.project as id + task.project_details.id
+        const pid = t.project_details?.id ?? t.project ?? t.project_id;
+        return String(pid) === String(project.id);
+      });
+      setProjectTasks(forThisProject);
+    } catch (e) {
+      console.error('fetch project tasks:', e.message);
+      setProjectTasks([]);
+    } finally {
+      setLoadingTasks(false);
+    }
+  };
+
+  const closeDetails = () => {
+    Animated.timing(detailsSlideAnim, { toValue: 0, duration: 250, useNativeDriver: true }).start(() => {
+      setDetailsVisible(false);
+      setSelectedProject(null);
+      setProjectTasks([]);
+      setProjectDocs([]);
+      setUploadModalOpen(false);
+      setDetailsTab('tasks');
+    });
+  };
+
+  // ── Document upload helpers ──
+  const saveDocs = async (docs) => {
+    if (!selectedProject) return;
+    try {
+      const raw = await AsyncStorage.getItem(PROJECT_DOCS_STORAGE_KEY);
+      const allDocs = raw ? JSON.parse(raw) : {};
+      allDocs[String(selectedProject.id)] = docs;
+      await AsyncStorage.setItem(PROJECT_DOCS_STORAGE_KEY, JSON.stringify(allDocs));
+    } catch (e) {
+      console.error('saveDocs error:', e.message);
+    }
+  };
+
+  const addDocument = async (doc) => {
+    // doc shape: { id, name, uri, mimeType, size, type: 'image'|'file', uploadedAt, uploadedBy }
+    const updated = [doc, ...projectDocs];
+    setProjectDocs(updated);
+    await saveDocs(updated);
+    addNotification({
+      type: 'project', icon: '📄',
+      title: 'Document Uploaded',
+      body: `"${doc.name}" added to ${selectedProject?.name || 'project'}.`,
+    });
+  };
+
+  const deleteDocument = (docId) => {
+    Alert.alert('Delete Document', 'Remove this document from the project?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: async () => {
+        const updated = projectDocs.filter(d => d.id !== docId);
+        setProjectDocs(updated);
+        await saveDocs(updated);
+      }},
+    ]);
+  };
+
+  const pickFromCamera = async () => {
+    setUploadModalOpen(false);
+    try {
+      const { status, canAskAgain } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert(
+          'Camera Access Needed',
+          canAskAgain
+            ? 'Please allow camera access to take photos.'
+            : 'Camera access was denied earlier. Please enable it in Settings.',
+          canAskAgain
+            ? [{ text: 'OK' }]
+            : [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Open Settings', onPress: () => Linking.openSettings() },
+              ]
+        );
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({ allowsEditing: false, quality: 0.85 });
+      if (result.canceled || !result.assets?.[0]) return;
+      const a = result.assets[0];
+      setUploading(true);
+      await addDocument({
+        id: `doc_${Date.now()}`,
+        name: `Photo_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.jpg`,
+        uri: a.uri,
+        mimeType: 'image/jpeg',
+        size: a.fileSize || null,
+        type: 'image',
+        uploadedAt: new Date().toISOString(),
+        uploadedBy: 'You',
+      });
+    } catch (e) {
+      Alert.alert('Error', e.message || 'Could not take photo.');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const pickFromGallery = async () => {
+    setUploadModalOpen(false);
+    try {
+      const { status, canAskAgain } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert(
+          'Photo Access Needed',
+          canAskAgain
+            ? 'Please allow photo library access to pick images.'
+            : 'Photo library access was denied earlier. To fix this: open iOS Settings → Expo Go → Photos → choose "All Photos".',
+          canAskAgain
+            ? [{ text: 'OK' }]
+            : [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Open Settings', onPress: () => Linking.openSettings() },
+              ]
+        );
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({ allowsMultipleSelection: true, quality: 0.85 });
+      if (result.canceled || !result.assets?.length) return;
+      setUploading(true);
+      for (const a of result.assets) {
+        await addDocument({
+          id: `doc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          name: a.fileName || `Image_${Date.now()}.jpg`,
+          uri: a.uri,
+          mimeType: a.mimeType || 'image/jpeg',
+          size: a.fileSize || null,
+          type: 'image',
+          uploadedAt: new Date().toISOString(),
+          uploadedBy: 'You',
+        });
+      }
+    } catch (e) {
+      Alert.alert('Error', e.message || 'Could not select images.');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const pickFromFiles = async () => {
+    setUploadModalOpen(false);
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        multiple: true,
+        copyToCacheDirectory: true,
+      });
+      if (result.canceled || !result.assets?.length) return;
+      setUploading(true);
+      for (const a of result.assets) {
+        await addDocument({
+          id: `doc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          name: a.name,
+          uri: a.uri,
+          mimeType: a.mimeType || 'application/octet-stream',
+          size: a.size || null,
+          type: 'file',
+          uploadedAt: new Date().toISOString(),
+          uploadedBy: 'You',
+        });
+      }
+    } catch (e) {
+      Alert.alert('Error', e.message || 'Could not select files.');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  // Helper: get file type label + icon from mime type / filename
+  const getFileKind = (doc) => {
+    const mt = (doc.mimeType || '').toLowerCase();
+    const name = (doc.name || '').toLowerCase();
+    if (mt.startsWith('image/'))       return { label: 'IMG',  icon: '🖼️' };
+    if (mt.includes('pdf'))            return { label: 'PDF',  icon: '📕' };
+    if (mt.includes('json') || name.endsWith('.json'))   return { label: 'JSON', icon: '📋' };
+    if (mt.includes('word') || name.endsWith('.docx') || name.endsWith('.doc'))  return { label: 'DOC',  icon: '📘' };
+    if (mt.includes('sheet')|| name.endsWith('.xlsx') || name.endsWith('.csv'))  return { label: 'XLS',  icon: '📗' };
+    if (mt.includes('text') || name.endsWith('.txt'))    return { label: 'TXT',  icon: '📄' };
+    if (mt.startsWith('video/'))        return { label: 'VID',  icon: '🎬' };
+    if (mt.startsWith('audio/'))        return { label: 'AUD',  icon: '🎵' };
+    return { label: 'FILE', icon: '📎' };
+  };
+
+  const formatSize = (bytes) => {
+    if (!bytes) return '';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const formatDocDate = (iso) => {
+    try {
+      const d = new Date(iso);
+      const diff = Date.now() - d.getTime();
+      const m = Math.floor(diff / 60000);
+      if (m < 1)  return 'Just now';
+      if (m < 60) return `${m}m ago`;
+      const h = Math.floor(m / 60);
+      if (h < 24) return `${h}h ago`;
+      const days = Math.floor(h / 24);
+      if (days < 7) return `${days}d ago`;
+      return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    } catch { return ''; }
+  };
+
+  // ── Import Tasks via JSON ──
+  const openImportModal = () => {
+    setImportJsonText('');
+    setImportProgress('');
+    setImportModalOpen(true);
+  };
+
+  const closeImportModal = () => {
+    if (importing) return; // don't close mid-import
+    setImportModalOpen(false);
+    setImportJsonText('');
+    setImportProgress('');
+  };
+
+  const pickJsonFile = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['application/json', 'text/plain', '*/*'],
+        multiple: false,
+        copyToCacheDirectory: true,
+      });
+      if (result.canceled || !result.assets?.[0]) return;
+      const file = result.assets[0];
+      // Read the file content
+      const response = await fetch(file.uri);
+      const text = await response.text();
+      setImportJsonText(text);
+    } catch (e) {
+      Alert.alert('Error', e.message || 'Could not read JSON file.');
+    }
+  };
+
+  const submitImportTasks = async () => {
+    if (!importJsonText.trim()) {
+      Alert.alert('Required', 'Paste JSON or pick a .json file.');
+      return;
+    }
+    if (!selectedProject) return;
+
+    // Parse JSON
+    let parsed;
+    try {
+      parsed = JSON.parse(importJsonText.trim());
+    } catch (e) {
+      Alert.alert('Invalid JSON', 'The pasted text is not valid JSON. Please check and try again.');
+      return;
+    }
+
+    // Accept either { tasks: [...] } OR a plain array [...]
+    const tasksList = Array.isArray(parsed)
+      ? parsed
+      : (Array.isArray(parsed?.tasks) ? parsed.tasks : null);
+
+    if (!tasksList || tasksList.length === 0) {
+      Alert.alert('Invalid Format', 'JSON should contain a "tasks" array with at least one task.');
+      return;
+    }
+
+    setImporting(true);
+    let successCount = 0;
+    let failCount = 0;
+    const failReasons = [];
+
+    for (let i = 0; i < tasksList.length; i++) {
+      const t = tasksList[i];
+      setImportProgress(`Creating ${i + 1} of ${tasksList.length}...`);
+
+      try {
+        // Resolve assignees: convert assignee_emails → user ids (match against loaded users list)
+        const assigneeIds = [];
+        if (Array.isArray(t.assignee_emails)) {
+          t.assignee_emails.forEach(email => {
+            const u = users.find(u => (u.email || '').toLowerCase() === String(email).toLowerCase());
+            if (u) assigneeIds.push(u.id);
+          });
+        }
+        // Also accept assigned_to array of ids if provided
+        if (Array.isArray(t.assigned_to)) {
+          t.assigned_to.forEach(id => { if (!assigneeIds.includes(id)) assigneeIds.push(id); });
+        }
+
+        const formData = new FormData();
+        formData.append('heading', String(t.heading || t.title || 'Untitled'));
+        formData.append('project', String(selectedProject.id));
+        if (t.description) formData.append('description', t.description);
+        if (t.status)      formData.append('status', t.status);
+        if (t.priority)    formData.append('priority', t.priority);
+        if (t.start_date)  formData.append('start_date', t.start_date);
+        if (t.end_date)    formData.append('end_date', t.end_date);
+        assigneeIds.forEach(id => formData.append('assigned_to', String(id)));
+
+        await createTask(formData);
+        successCount++;
+      } catch (e) {
+        failCount++;
+        failReasons.push(`Task ${i + 1}: ${e.message || 'unknown error'}`);
+      }
+    }
+
+    setImporting(false);
+    setImportProgress('');
+
+    // Refresh task list
+    try {
+      const all = await getTasks();
+      const forThisProject = (all || []).filter(tk => {
+        const pid = tk.project_details?.id ?? tk.project ?? tk.project_id;
+        return String(pid) === String(selectedProject.id);
+      });
+      setProjectTasks(forThisProject);
+    } catch {}
+
+    closeImportModal();
+
+    // Notify + feedback
+    if (successCount > 0) {
+      addNotification({
+        type: 'task', icon: '📋',
+        title: 'Tasks Imported',
+        body: `${successCount} task${successCount !== 1 ? 's' : ''} created in ${selectedProject.name}${failCount > 0 ? ` (${failCount} failed)` : ''}.`,
+      });
+    }
+
+    if (failCount > 0 && successCount === 0) {
+      Alert.alert('Import Failed', `No tasks were created.\n\n${failReasons.slice(0, 3).join('\n')}`);
+    } else if (failCount > 0) {
+      Alert.alert('Partial Success', `${successCount} created, ${failCount} failed.\n\n${failReasons.slice(0, 2).join('\n')}`);
+    } else {
+      Alert.alert('Success', `${successCount} task${successCount !== 1 ? 's' : ''} imported successfully.`);
+    }
   };
 
   // ── Camera / Gallery ──
@@ -283,7 +719,11 @@ export default function ProjectsScreen() {
           onRefresh={fetchProjects}
           refreshing={loadingProjects}
           renderItem={({ item }) => (
-            <View style={[styles.card, { backgroundColor: card, borderColor: bdr }]}>
+            <TouchableOpacity
+              style={[styles.card, { backgroundColor: card, borderColor: bdr }]}
+              onPress={() => openDetails(item)}
+              activeOpacity={0.75}
+            >
               <View style={styles.cardTop}>
                 <View style={styles.projectIcon}>
                   <Text style={styles.projectIconText}>{item.name?.charAt(0).toUpperCase()}</Text>
@@ -304,7 +744,43 @@ export default function ProjectsScreen() {
               <View style={[styles.progressBg, { backgroundColor: bdr }]}>
                 <View style={[styles.progressFill, { width: `${item.progress || 0}%` }]} />
               </View>
-            </View>
+
+              {/* Member preview row */}
+              {(() => {
+                const memberList = getProjectMembers(item);
+                if (memberList.length === 0) return null;
+                return (
+                  <View style={styles.cardMembersRow}>
+                    <View style={styles.cardAvatarStack}>
+                      {memberList.slice(0, 4).map((m, idx) => {
+                        const name = m.user?.full_name || m.user?.username || m.user_details?.full_name || m.user_details?.username || 'U';
+                        const initial = String(name).charAt(0).toUpperCase();
+                        return (
+                          <View
+                            key={m.id || idx}
+                            style={[
+                              styles.cardAvatar,
+                              { marginLeft: idx === 0 ? 0 : -8, zIndex: 4 - idx, borderColor: card },
+                            ]}
+                          >
+                            <Text style={styles.cardAvatarText}>{initial}</Text>
+                          </View>
+                        );
+                      })}
+                      {memberList.length > 4 && (
+                        <View style={[styles.cardAvatar, styles.cardAvatarExtra, { marginLeft: -8, borderColor: card }]}>
+                          <Text style={styles.cardAvatarExtraText}>+{memberList.length - 4}</Text>
+                        </View>
+                      )}
+                    </View>
+                    <Text style={[styles.cardMembersLabel, { color: sub }]}>
+                      {memberList.length} member{memberList.length !== 1 ? 's' : ''}
+                    </Text>
+                    <Text style={[styles.cardChevron, { color: sub }]}>›</Text>
+                  </View>
+                );
+              })()}
+            </TouchableOpacity>
           )}
         />
       )}
@@ -430,6 +906,507 @@ export default function ProjectsScreen() {
           </Animated.View>
         </Modal>
       )}
+
+      {/* ── Project Details Full-Screen Modal ── */}
+      {detailsVisible && selectedProject && (
+        <Modal transparent visible animationType="none" onRequestClose={closeDetails} statusBarTranslucent>
+          <Animated.View
+            style={[
+              styles.pd_screen,
+              {
+                transform: [{
+                  translateX: detailsSlideAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [SCREEN_WIDTH, 0],
+                  }),
+                }],
+              },
+            ]}
+          >
+            <SafeAreaView style={{ flex: 1 }}>
+              <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={card} translucent={false} />
+
+              {/* Header bar with back button + project name */}
+              <View style={[styles.pd_header, { backgroundColor: card, borderBottomColor: bdr }]}>
+                <TouchableOpacity style={styles.pd_backBtn} onPress={closeDetails} activeOpacity={0.7}>
+                  <Text style={[styles.pd_backIcon, { color: txt }]}>‹</Text>
+                </TouchableOpacity>
+                <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <View style={[styles.pd_headerIcon, { backgroundColor: FILTER_COLORS[selectedProject.task_type] || '#4ADE80' }]}>
+                    <Text style={styles.pd_headerIconText}>
+                      {selectedProject.name?.charAt(0).toUpperCase()}
+                    </Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.pd_headerName, { color: txt }]} numberOfLines={1}>
+                      {selectedProject.name}
+                    </Text>
+                    <Text style={[styles.pd_headerType, { color: sub }]}>
+                      {TASK_TYPE_LABELS[selectedProject.task_type] || selectedProject.task_type}
+                    </Text>
+                  </View>
+                </View>
+                <View style={[styles.statusChip, { backgroundColor: (STATUS_COLORS[selectedProject.status] || '#4ECDC4') + '20' }]}>
+                  <Text style={{ fontSize: 10, fontWeight: '600', color: STATUS_COLORS[selectedProject.status] || '#4ECDC4' }}>
+                    {selectedProject.status || 'In Progress'}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Tabs */}
+              <View style={[styles.pd_tabsRow, { backgroundColor: card, borderBottomColor: bdr }]}>
+                {[
+                  { id: 'tasks',     label: 'Tasks',     count: projectTasks.length },
+                  { id: 'members',   label: 'Members',   count: getProjectMembers(selectedProject).length },
+                  { id: 'documents', label: 'Documents', count: projectDocs.length + (selectedProject.document_count ?? 0) },
+                ].map(t => (
+                  <TouchableOpacity
+                    key={t.id}
+                    style={[styles.pd_tab, detailsTab === t.id && styles.pd_tabActive]}
+                    onPress={() => setDetailsTab(t.id)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.pd_tabText, detailsTab === t.id && styles.pd_tabTextActive]}>
+                      {t.label}
+                    </Text>
+                    <View style={[styles.pd_tabCount, detailsTab === t.id && styles.pd_tabCountActive]}>
+                      <Text style={[styles.pd_tabCountText, detailsTab === t.id && styles.pd_tabCountTextActive]}>
+                        {t.count}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              {/* Tab content */}
+              <ScrollView style={{ flex: 1, backgroundColor: bg }} contentContainerStyle={{ padding: 12 }}>
+
+                {/* ── TASKS TAB ── */}
+                {detailsTab === 'tasks' && (
+                  <>
+                    {/* Search on its own row */}
+                    <View style={[styles.pd_searchWrap, { backgroundColor: card, borderColor: bdr, marginBottom: 10 }]}>
+                      <Text style={{ fontSize: 13, marginRight: 6 }}>🔍</Text>
+                      <TextInput
+                        style={[styles.pd_searchInput, { color: txt }]}
+                        placeholder="Search tasks..."
+                        placeholderTextColor={sub}
+                        value={taskSearch}
+                        onChangeText={setTaskSearch}
+                      />
+                    </View>
+
+                    {/* Create + Import buttons row */}
+                    <View style={styles.pd_taskActionsRow}>
+                      <TouchableOpacity
+                        style={[styles.pd_createTaskBtn, { flex: 1 }]}
+                        onPress={() => {
+                          closeDetails();
+                          // Brief delay so the close animation finishes before navigating
+                          setTimeout(() => {
+                            navigation.navigate('Main', {
+                              screen: 'Tasks',
+                              params: { openCreateModal: true, presetProjectId: selectedProject.id },
+                            });
+                          }, 260);
+                        }}
+                      >
+                        <Text style={styles.pd_createTaskBtnText}>+ Create Task</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.pd_importBtn, { flex: 1 }]}
+                        onPress={openImportModal}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.pd_importBtnText}>⬆ Import Tasks</Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    {loadingTasks ? (
+                      <View style={styles.pd_loadingState}>
+                        <ActivityIndicator size="large" color="#4ECDC4" />
+                        <Text style={[styles.pd_emptyText, { color: sub }]}>Loading tasks...</Text>
+                      </View>
+                    ) : (() => {
+                      const q = taskSearch.trim().toLowerCase();
+                      const filtered = q
+                        ? projectTasks.filter(t => (t.heading || t.title || '').toLowerCase().includes(q))
+                        : projectTasks;
+
+                      if (filtered.length === 0) {
+                        return (
+                          <View style={styles.pd_emptyState}>
+                            <Text style={{ fontSize: 48, opacity: 0.3 }}>📋</Text>
+                            <Text style={[styles.pd_emptyTitle, { color: txt }]}>
+                              {projectTasks.length === 0 ? 'No tasks yet' : 'No matches'}
+                            </Text>
+                            <Text style={[styles.pd_emptyText, { color: sub }]}>
+                              {projectTasks.length === 0 ? 'Tap + Create Task to add one' : 'Try a different search'}
+                            </Text>
+                          </View>
+                        );
+                      }
+
+                      return filtered.map((t, i) => {
+                        const statusKey = t.status || 'pending';
+                        const statusColor = TASK_STATUS_COLORS[statusKey] || '#888';
+                        const statusLabel = TASK_STATUS_LABELS[statusKey] || statusKey;
+                        const priorityKey = t.priority || 'medium';
+                        const priorityColor = PRIORITY_COLORS[priorityKey] || '#888';
+
+                        const rawAssignees = Array.isArray(t.assigned_to_user_details) && t.assigned_to_user_details.length > 0
+                          ? t.assigned_to_user_details
+                          : (Array.isArray(t.assigned_to)
+                              ? t.assigned_to
+                              : (Array.isArray(t.assignees) ? t.assignees : []));
+                        const assigneeUsers = rawAssignees.map(a => {
+                          if (typeof a === 'object' && a !== null) return a;
+                          return users.find(u => String(u.id) === String(a)) || { id: a, first_name: '?' };
+                        });
+
+                        const dueDate = t.end_date || t.due_date;
+                        const fmtDate = (d) => {
+                          try { return new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }); }
+                          catch { return d; }
+                        };
+
+                        return (
+                          <TouchableOpacity
+                            key={t.id || i}
+                            style={[styles.taskCard, { backgroundColor: card, borderColor: bdr }]}
+                            onPress={() => setDetailTask(t)}
+                            activeOpacity={0.7}
+                          >
+                            <View style={styles.taskCardTop}>
+                              <Text style={[styles.taskCardTitle, { color: txt }]} numberOfLines={2}>
+                                {t.heading || t.title || 'Untitled task'}
+                              </Text>
+                              <View style={[styles.taskStatusChip, { backgroundColor: statusColor + '20' }]}>
+                                <Text style={[styles.taskStatusText, { color: statusColor }]}>
+                                  {statusLabel}
+                                </Text>
+                              </View>
+                            </View>
+                            <View style={styles.taskCardBottom}>
+                              <View style={styles.taskCardMeta}>
+                                {assigneeUsers.length > 0 ? (
+                                  <View style={styles.taskAssigneeStack}>
+                                    {assigneeUsers.slice(0, 3).map((u, idx) => {
+                                      const initial = (u.first_name || u.username || '?').charAt(0).toUpperCase();
+                                      return (
+                                        <View
+                                          key={u.id || idx}
+                                          style={[
+                                            styles.taskAssigneeAvatar,
+                                            { marginLeft: idx === 0 ? 0 : -6, zIndex: 3 - idx, borderColor: card },
+                                          ]}
+                                        >
+                                          <Text style={styles.taskAssigneeText}>{initial}</Text>
+                                        </View>
+                                      );
+                                    })}
+                                    {assigneeUsers.length > 3 && (
+                                      <View style={[styles.taskAssigneeAvatar, styles.taskAssigneeExtra, { marginLeft: -6, borderColor: card }]}>
+                                        <Text style={styles.taskAssigneeExtraText}>+{assigneeUsers.length - 3}</Text>
+                                      </View>
+                                    )}
+                                  </View>
+                                ) : (
+                                  <Text style={[styles.taskMetaDim, { color: sub }]}>Unassigned</Text>
+                                )}
+                              </View>
+                              <View style={styles.taskCardMeta}>
+                                <View style={[styles.priorityDot, { backgroundColor: priorityColor }]} />
+                                <Text style={[styles.taskMetaText, { color: priorityColor, fontWeight: '600' }]}>
+                                  {priorityKey.charAt(0).toUpperCase() + priorityKey.slice(1)}
+                                </Text>
+                              </View>
+                              <View style={styles.taskCardMeta}>
+                                <Text style={styles.taskMetaIcon}>📅</Text>
+                                <Text style={[styles.taskMetaText, { color: dueDate ? sub : '#AAAABC' }]}>
+                                  {dueDate ? fmtDate(dueDate) : '—'}
+                                </Text>
+                              </View>
+                            </View>
+                          </TouchableOpacity>
+                        );
+                      });
+                    })()}
+                  </>
+                )}
+
+                {/* ── MEMBERS TAB ── */}
+                {detailsTab === 'members' && (() => {
+                  const memberList = getProjectMembers(selectedProject);
+                  if (memberList.length === 0) {
+                    return (
+                      <View style={styles.pd_emptyState}>
+                        <Text style={{ fontSize: 48, opacity: 0.3 }}>👥</Text>
+                        <Text style={[styles.pd_emptyTitle, { color: txt }]}>No members yet</Text>
+                        <Text style={[styles.pd_emptyText, { color: sub }]}>This project doesn't have any members assigned</Text>
+                      </View>
+                    );
+                  }
+                  return memberList.map((m, i) => {
+                    // Backend shape: { id, user: { id, username, full_name, avatar }, role, joined_at }
+                    const userObj  = m.user || m.user_details || m;
+                    const fullName = userObj.full_name
+                      || `${userObj.first_name || ''} ${userObj.last_name || ''}`.trim()
+                      || userObj.username
+                      || 'Unknown';
+                    const username = userObj.username || '';
+                    const initial  = (fullName || username || 'U').charAt(0).toUpperCase();
+                    const role     = m.role || userObj.role || 'member';
+                    const email    = userObj.email || '';
+
+                    return (
+                      <View key={m.id || i} style={[styles.pd_memberCard, { backgroundColor: card, borderColor: bdr }]}>
+                        <View style={styles.pd_memberAvatar}>
+                          <Text style={styles.pd_memberAvatarText}>{initial}</Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.pd_memberName, { color: txt }]}>{fullName}</Text>
+                          {!!username && <Text style={[styles.pd_memberUsername, { color: sub }]}>@{username}</Text>}
+                          {!!email && <Text style={[styles.pd_memberEmail, { color: sub }]}>{email}</Text>}
+                        </View>
+                        <View style={[styles.dm_roleChip, styles[`dm_role_${role}`] || styles.dm_role_member]}>
+                          <Text style={[styles.dm_roleText, styles[`dm_roleText_${role}`] || styles.dm_roleText_member]}>
+                            {role.charAt(0).toUpperCase() + role.slice(1)}
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  });
+                })()}
+
+                {/* ── DOCUMENTS TAB ── */}
+                {detailsTab === 'documents' && (
+                  <>
+                    {/* Upload button row */}
+                    <View style={styles.pd_taskActions}>
+                      <TouchableOpacity
+                        style={[styles.pd_createTaskBtn, { flex: 1, flexDirection: 'row', gap: 6 }]}
+                        onPress={() => setUploadModalOpen(true)}
+                        disabled={uploading}
+                        activeOpacity={0.8}
+                      >
+                        {uploading ? (
+                          <ActivityIndicator color="#fff" size="small" />
+                        ) : (
+                          <>
+                            <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>⬆</Text>
+                            <Text style={styles.pd_createTaskBtnText}>Upload Documents</Text>
+                          </>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+
+                    {/* Document list */}
+                    {projectDocs.length === 0 ? (
+                      <View style={styles.pd_emptyState}>
+                        <Text style={{ fontSize: 48, opacity: 0.3 }}>📄</Text>
+                        <Text style={[styles.pd_emptyTitle, { color: txt }]}>
+                          {(selectedProject.document_count ?? 0) > 0
+                            ? `${selectedProject.document_count} document${selectedProject.document_count !== 1 ? 's' : ''} on server`
+                            : 'No documents yet'}
+                        </Text>
+                        <Text style={[styles.pd_emptyText, { color: sub }]}>
+                          Tap Upload Documents to add from Camera, Gallery or Files
+                        </Text>
+                      </View>
+                    ) : (
+                      projectDocs.map((d) => {
+                        const kind = getFileKind(d);
+                        return (
+                          <View key={d.id} style={[styles.docCard, { backgroundColor: card, borderColor: bdr }]}>
+                            {d.type === 'image' ? (
+                              <Image source={{ uri: d.uri }} style={styles.docThumb} />
+                            ) : (
+                              <View style={[styles.docThumb, styles.docThumbIcon]}>
+                                <Text style={{ fontSize: 22 }}>{kind.icon}</Text>
+                              </View>
+                            )}
+                            <View style={{ flex: 1 }}>
+                              <Text style={[styles.docName, { color: txt }]} numberOfLines={1}>{d.name}</Text>
+                              <View style={styles.docMetaRow}>
+                                <View style={styles.docTypePill}>
+                                  <Text style={styles.docTypePillText}>{kind.label}</Text>
+                                </View>
+                                {!!d.size && <Text style={[styles.docMetaText, { color: sub }]}>{formatSize(d.size)}</Text>}
+                                <Text style={[styles.docMetaText, { color: sub }]}>{formatDocDate(d.uploadedAt)}</Text>
+                              </View>
+                            </View>
+                            <TouchableOpacity
+                              style={styles.docDeleteBtn}
+                              onPress={() => deleteDocument(d.id)}
+                              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                            >
+                              <Text style={{ fontSize: 14, color: '#EF4444' }}>✕</Text>
+                            </TouchableOpacity>
+                          </View>
+                        );
+                      })
+                    )}
+                  </>
+                )}
+
+              </ScrollView>
+
+              {/* ── Upload Source Picker (inline, renders on top of details screen) ── */}
+              {uploadModalOpen && (
+                <>
+                  <TouchableOpacity
+                    style={styles.uploadModalOverlay}
+                    activeOpacity={1}
+                    onPress={() => setUploadModalOpen(false)}
+                  />
+                  <View style={styles.uploadModalWrap} pointerEvents="box-none">
+                    <View style={styles.uploadModalCard}>
+                      <View style={styles.uploadHandle} />
+                      <Text style={styles.uploadTitle}>Upload Documents</Text>
+                      <Text style={styles.uploadSubtitle}>Choose a source</Text>
+
+                      <TouchableOpacity style={styles.uploadOption} onPress={pickFromCamera} activeOpacity={0.7}>
+                        <View style={[styles.uploadOptionIcon, { backgroundColor: '#FEF2F2' }]}>
+                          <Text style={{ fontSize: 22 }}>📷</Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.uploadOptionTitle}>Camera</Text>
+                          <Text style={styles.uploadOptionDesc}>Take a photo right now</Text>
+                        </View>
+                        <Text style={styles.uploadChevron}>›</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity style={styles.uploadOption} onPress={pickFromGallery} activeOpacity={0.7}>
+                        <View style={[styles.uploadOptionIcon, { backgroundColor: '#EFF6FF' }]}>
+                          <Text style={{ fontSize: 22 }}>🖼️</Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.uploadOptionTitle}>Gallery</Text>
+                          <Text style={styles.uploadOptionDesc}>Pick photos from your library</Text>
+                        </View>
+                        <Text style={styles.uploadChevron}>›</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity style={styles.uploadOption} onPress={pickFromFiles} activeOpacity={0.7}>
+                        <View style={[styles.uploadOptionIcon, { backgroundColor: '#F0FDF4' }]}>
+                          <Text style={{ fontSize: 22 }}>📁</Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.uploadOptionTitle}>Files</Text>
+                          <Text style={styles.uploadOptionDesc}>PDF, JSON, DOCX, and any other</Text>
+                        </View>
+                        <Text style={styles.uploadChevron}>›</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.uploadCancelBtn}
+                        onPress={() => setUploadModalOpen(false)}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={styles.uploadCancelText}>Cancel</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </>
+              )}
+
+              {/* ── Import Tasks via JSON Modal (inline) ── */}
+              {importModalOpen && (
+                <>
+                  <TouchableOpacity
+                    style={styles.uploadModalOverlay}
+                    activeOpacity={1}
+                    onPress={closeImportModal}
+                  />
+                  <View style={styles.uploadModalWrap} pointerEvents="box-none">
+                    <View style={[styles.uploadModalCard, { maxWidth: 440 }]}>
+                      <Text style={styles.uploadTitle}>⬆ Import Tasks via JSON</Text>
+                      <Text style={styles.uploadSubtitle}>
+                        Paste JSON or pick a .json file
+                      </Text>
+
+                      {/* JSON textarea */}
+                      <TextInput
+                        style={styles.importTextarea}
+                        placeholder='Paste your JSON here... e.g. {"tasks":[{"heading":"...","priority":"high"}]}'
+                        placeholderTextColor="#AAAABC"
+                        value={importJsonText}
+                        onChangeText={setImportJsonText}
+                        multiline
+                        textAlignVertical="top"
+                        editable={!importing}
+                      />
+
+                      {/* Select .json file button */}
+                      <TouchableOpacity
+                        style={styles.importFileBtn}
+                        onPress={pickJsonFile}
+                        disabled={importing}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={styles.importFileBtnText}>📄 Select .json File</Text>
+                      </TouchableOpacity>
+
+                      {/* Progress indicator */}
+                      {importing && (
+                        <View style={styles.importProgress}>
+                          <ActivityIndicator size="small" color="#4ECDC4" />
+                          <Text style={styles.importProgressText}>{importProgress || 'Creating tasks...'}</Text>
+                        </View>
+                      )}
+
+                      {/* Action buttons */}
+                      <View style={{ flexDirection: 'row', gap: 10, marginTop: 14 }}>
+                        <TouchableOpacity
+                          style={styles.importCancelBtn}
+                          onPress={closeImportModal}
+                          disabled={importing}
+                          activeOpacity={0.7}
+                        >
+                          <Text style={styles.uploadCancelText}>Cancel</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.importSubmitBtn, { opacity: importing ? 0.5 : 1 }]}
+                          onPress={submitImportTasks}
+                          disabled={importing}
+                          activeOpacity={0.8}
+                        >
+                          {importing ? (
+                            <ActivityIndicator color="#fff" size="small" />
+                          ) : (
+                            <Text style={styles.pd_createTaskBtnText}>Create Tasks</Text>
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  </View>
+                </>
+              )}
+            </SafeAreaView>
+          </Animated.View>
+        </Modal>
+      )}
+
+      {/* Task Detail Modal (full-screen) */}
+      <TaskDetailModal
+        visible={!!detailTask}
+        task={detailTask}
+        onClose={() => setDetailTask(null)}
+        onUpdated={(updatedTask) => {
+          // Refresh the project's task list and keep modal open with updated data
+          if (selectedProject) {
+            getTasks().then(all => {
+              const forThisProject = (all || []).filter(t => {
+                const pid = t.project_details?.id ?? t.project ?? t.project_id;
+                return String(pid) === String(selectedProject.id);
+              });
+              setProjectTasks(forThisProject);
+            }).catch(() => {});
+          }
+          if (updatedTask) setDetailTask(updatedTask);
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -497,4 +1474,478 @@ const styles = StyleSheet.create({
   modalBtns: { flexDirection: 'row', gap: 10, marginTop: 14 },
   cancelBtn: { flex: 1, borderWidth: 1, borderColor: '#EBEBF0', borderRadius: 10, height: 48, justifyContent: 'center', alignItems: 'center' },
   cancelBtnText: { color: '#888899', fontSize: 14, fontWeight: '500' },
+
+  // ── Card member preview (stacked avatars on list item) ──
+  cardMembersRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#F0F0F5',
+  },
+  cardAvatarStack: { flexDirection: 'row', alignItems: 'center' },
+  cardAvatar: {
+    width: 24, height: 24, borderRadius: 12,
+    backgroundColor: '#E9D5FF',
+    justifyContent: 'center', alignItems: 'center',
+    borderWidth: 2, borderColor: '#fff',
+  },
+  cardAvatarText: { color: '#7C3AED', fontSize: 10, fontWeight: '700' },
+  cardAvatarExtra: { backgroundColor: '#EBEBF0' },
+  cardAvatarExtraText: { color: '#888899', fontSize: 9, fontWeight: '700' },
+  cardMembersLabel: {
+    fontSize: 11, fontWeight: '500', marginLeft: 10, flex: 1,
+  },
+  cardChevron: { fontSize: 20, fontWeight: '300' },
+
+  // ── Project Details Modal ──
+  detailsHeaderCard: {
+    alignItems: 'center',
+    paddingVertical: 16,
+    marginBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F5',
+  },
+  detailsIconLarge: {
+    width: 64, height: 64, borderRadius: 32,
+    backgroundColor: '#4ADE80',
+    justifyContent: 'center', alignItems: 'center',
+    marginBottom: 10,
+  },
+  detailsIconText: { color: '#fff', fontSize: 28, fontWeight: '800' },
+  detailsProjectName: { fontSize: 18, fontWeight: '700', color: '#1A1A2E' },
+  detailsProjectType: { fontSize: 13, color: '#888899', fontWeight: '500' },
+
+  detailsSection: {
+    marginBottom: 18,
+  },
+  detailsSectionHeader: {
+    flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  detailsSectionTitle: {
+    fontSize: 14, fontWeight: '700', color: '#1A1A2E',
+  },
+  detailsCountPill: {
+    backgroundColor: 'rgba(78,205,196,0.12)',
+    minWidth: 26, height: 22, borderRadius: 11,
+    paddingHorizontal: 8,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  detailsCountText: { fontSize: 11, color: '#4ECDC4', fontWeight: '700' },
+
+  // Member row in details modal
+  dm_memberRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: '#FAFAFA',
+    borderRadius: 12,
+    borderWidth: 1, borderColor: '#F0F0F5',
+    padding: 10, marginBottom: 8,
+  },
+  dm_memberAvatar: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: '#E9D5FF',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  dm_memberAvatarText: { color: '#7C3AED', fontSize: 16, fontWeight: '700' },
+  dm_memberName: { fontSize: 14, fontWeight: '600', color: '#1A1A2E' },
+  dm_memberUsername: { fontSize: 12, color: '#888899', marginTop: 1 },
+  dm_roleChip: {
+    paddingHorizontal: 10, paddingVertical: 4,
+    borderRadius: 12,
+  },
+  dm_roleText: { fontSize: 11, fontWeight: '700' },
+  // role-specific colors
+  dm_role_owner:      { backgroundColor: 'rgba(168,139,250,0.15)' },
+  dm_roleText_owner:  { color: '#A78BFA' },
+  dm_role_manager:    { backgroundColor: 'rgba(59,130,246,0.12)' },
+  dm_roleText_manager:{ color: '#3B82F6' },
+  dm_role_annotator:  { backgroundColor: 'rgba(78,205,196,0.12)' },
+  dm_roleText_annotator:{ color: '#4ECDC4' },
+  dm_role_viewer:     { backgroundColor: 'rgba(136,136,153,0.15)' },
+  dm_roleText_viewer: { color: '#888899' },
+  dm_role_admin:      { backgroundColor: 'rgba(239,68,68,0.12)' },
+  dm_roleText_admin:  { color: '#EF4444' },
+  dm_role_member:     { backgroundColor: '#EBEBF0' },
+  dm_roleText_member: { color: '#5C5C6E' },
+
+  dm_memberEmpty: {
+    alignItems: 'center', paddingVertical: 20, gap: 6,
+    backgroundColor: '#FAFAFA',
+    borderRadius: 12, borderWidth: 1, borderColor: '#F0F0F5',
+  },
+  dm_memberEmptyText: { fontSize: 12, color: '#AAAABC' },
+
+  metaRow: {
+    flexDirection: 'row', justifyContent: 'space-between',
+    paddingVertical: 8,
+    borderBottomWidth: 1, borderBottomColor: '#F0F0F5',
+  },
+  metaLabel: { fontSize: 13, color: '#888899' },
+  metaValue: { fontSize: 13, color: '#1A1A2E', fontWeight: '600' },
+
+  // Task card inside project details modal
+  taskCard: {
+    backgroundColor: '#FAFAFA',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#F0F0F5',
+    padding: 12,
+    marginBottom: 8,
+  },
+  taskCardTop: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginBottom: 10,
+  },
+  taskCardTitle: {
+    flex: 1,
+    fontSize: 14,
+    color: '#1A1A2E',
+    fontWeight: '600',
+    lineHeight: 19,
+  },
+  taskCardBottom: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  taskCardMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  taskMetaIcon: { fontSize: 11 },
+  taskMetaText: { fontSize: 11, color: '#5C5C6E', fontWeight: '500' },
+  taskMetaDim: { fontSize: 11, color: '#AAAABC', fontWeight: '500' },
+  priorityDot: { width: 7, height: 7, borderRadius: 4 },
+  taskStatusChip: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+  },
+  taskStatusText: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  // Assignee stack inside task cards
+  taskAssigneeStack: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  taskAssigneeAvatar: {
+    width: 20, height: 20, borderRadius: 10,
+    backgroundColor: '#E9D5FF',
+    justifyContent: 'center', alignItems: 'center',
+    borderWidth: 1.5, borderColor: '#FAFAFA',
+  },
+  taskAssigneeText: { color: '#7C3AED', fontSize: 9, fontWeight: '700' },
+  taskAssigneeExtra: { backgroundColor: '#EBEBF0' },
+  taskAssigneeExtraText: { color: '#888899', fontSize: 8, fontWeight: '700' },
+
+  // ── Project Detail Full-Screen Modal ──
+  pd_screen: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: '#F5F5F7',
+    paddingTop: Platform.OS === 'ios' ? 44 : (StatusBar.currentHeight || 24),
+  },
+  pd_header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+  },
+  pd_backBtn: {
+    width: 40, height: 40,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  pd_backIcon: { fontSize: 32, fontWeight: '300', marginTop: -3 },
+  pd_headerIcon: {
+    width: 36, height: 36, borderRadius: 18,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  pd_headerIconText: { color: '#fff', fontSize: 15, fontWeight: '800' },
+  pd_headerName: { fontSize: 16, fontWeight: '700' },
+  pd_headerType: { fontSize: 11, fontWeight: '500', marginTop: 1 },
+
+  // Tabs
+  pd_tabsRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 12,
+    paddingTop: 8,
+    borderBottomWidth: 1,
+  },
+  pd_tab: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginRight: 6,
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
+  },
+  pd_tabActive: { borderBottomColor: '#1A1A2E' },
+  pd_tabText: { fontSize: 13, color: '#888899', fontWeight: '600' },
+  pd_tabTextActive: { color: '#1A1A2E', fontWeight: '700' },
+  pd_tabCount: {
+    minWidth: 20, height: 18, borderRadius: 9,
+    paddingHorizontal: 6,
+    justifyContent: 'center', alignItems: 'center',
+    backgroundColor: '#EBEBF0',
+  },
+  pd_tabCountActive: { backgroundColor: '#1A1A2E' },
+  pd_tabCountText: { fontSize: 10, color: '#888899', fontWeight: '700' },
+  pd_tabCountTextActive: { color: '#4ECDC4' },
+
+  // Task actions (search + create)
+  pd_taskActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  pd_searchWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    height: 40,
+  },
+  pd_searchInput: {
+    flex: 1,
+    fontSize: 13,
+    paddingVertical: 0,
+  },
+  pd_createTaskBtn: {
+    backgroundColor: '#1A1A2E',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pd_createTaskBtnText: {
+    color: '#fff', fontSize: 13, fontWeight: '700',
+  },
+
+  // Empty / loading states in tabs
+  pd_emptyState: {
+    alignItems: 'center',
+    paddingVertical: 56,
+    gap: 8,
+  },
+  pd_loadingState: {
+    alignItems: 'center',
+    paddingVertical: 36,
+    gap: 10,
+  },
+  pd_emptyTitle: {
+    fontSize: 16, fontWeight: '700',
+  },
+  pd_emptyText: {
+    fontSize: 13,
+    textAlign: 'center',
+    paddingHorizontal: 24,
+  },
+
+  // Member card in members tab
+  pd_memberCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 14,
+    marginBottom: 8,
+  },
+  pd_memberAvatar: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: '#E9D5FF',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  pd_memberAvatarText: { color: '#7C3AED', fontSize: 17, fontWeight: '700' },
+  pd_memberName: { fontSize: 14, fontWeight: '600' },
+  pd_memberUsername: { fontSize: 12, marginTop: 1 },
+  pd_memberEmail: { fontSize: 11, marginTop: 2 },
+
+  // ── Document card in Documents tab ──
+  docCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 10,
+    marginBottom: 8,
+  },
+  docThumb: {
+    width: 48, height: 48, borderRadius: 10,
+    backgroundColor: '#F5F5F7',
+  },
+  docThumbIcon: {
+    justifyContent: 'center', alignItems: 'center',
+    borderWidth: 1, borderColor: '#EBEBF0',
+  },
+  docName: { fontSize: 14, fontWeight: '600', marginBottom: 4 },
+  docMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  docTypePill: {
+    backgroundColor: '#1A1A2E',
+    paddingHorizontal: 6, paddingVertical: 2,
+    borderRadius: 4,
+  },
+  docTypePillText: { color: '#4ECDC4', fontSize: 9, fontWeight: '800', letterSpacing: 0.3 },
+  docMetaText: { fontSize: 11, fontWeight: '500' },
+  docDeleteBtn: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: '#FEF2F2',
+    justifyContent: 'center', alignItems: 'center',
+  },
+
+  // ── Upload source picker modal ──
+  uploadModalOverlay: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    zIndex: 100,
+    elevation: 100,
+  },
+  uploadModalWrap: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    zIndex: 101,
+    elevation: 101,
+  },
+  uploadModalCard: {
+    width: '100%',
+    maxWidth: 400,
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    paddingTop: 20,
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.2,
+    shadowRadius: 20,
+    elevation: 12,
+  },
+  uploadHandle: {
+    display: 'none', // hidden — only needed for bottom sheets
+  },
+  uploadTitle: { fontSize: 18, fontWeight: '700', color: '#1A1A2E', marginBottom: 4 },
+  uploadSubtitle: { fontSize: 13, color: '#888899', marginBottom: 20 },
+  uploadOption: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: '#F0F0F5',
+  },
+  uploadOptionIcon: {
+    width: 48, height: 48, borderRadius: 24,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  uploadOptionTitle: { fontSize: 15, fontWeight: '700', color: '#1A1A2E' },
+  uploadOptionDesc: { fontSize: 12, color: '#888899', marginTop: 2 },
+  uploadChevron: { fontSize: 20, color: '#AAAABC', fontWeight: '300' },
+  uploadCancelBtn: {
+    marginTop: 14,
+    backgroundColor: '#F5F5F7',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  uploadCancelText: { fontSize: 14, fontWeight: '600', color: '#5C5C6E' },
+
+  // ── Tasks tab: buttons row (Create + Import) ──
+  pd_taskActionsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+  },
+  pd_importBtn: {
+    backgroundColor: '#fff',
+    borderWidth: 1.5,
+    borderColor: '#1A1A2E',
+    borderRadius: 10,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pd_importBtnText: {
+    color: '#1A1A2E',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+
+  // ── Import JSON modal ──
+  importTextarea: {
+    backgroundColor: '#F5F5F7',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#EBEBF0',
+    padding: 12,
+    minHeight: 140,
+    maxHeight: 200,
+    fontSize: 12,
+    color: '#1A1A2E',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    marginTop: 4,
+    marginBottom: 10,
+  },
+  importFileBtn: {
+    backgroundColor: '#F0FDF4',
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  importFileBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#16A34A',
+  },
+  importProgress: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    marginTop: 12,
+    padding: 10,
+    backgroundColor: 'rgba(78,205,196,0.08)',
+    borderRadius: 10,
+  },
+  importProgressText: {
+    fontSize: 12,
+    color: '#4ECDC4',
+    fontWeight: '600',
+  },
+  importCancelBtn: {
+    flex: 1,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: '#F5F5F7',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  importSubmitBtn: {
+    flex: 1,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: '#1A1A2E',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
 });

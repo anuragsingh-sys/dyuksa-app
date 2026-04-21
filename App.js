@@ -1,15 +1,13 @@
-import { NavigationContainer, useNavigation } from '@react-navigation/native';
+import { NavigationContainer, useNavigation, useNavigationState } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import {
-  Text, View, TouchableOpacity, StyleSheet, Modal,
-  TextInput, Alert, Animated, Image, ScrollView, Platform,
+  Text, View, TouchableOpacity, StyleSheet, Platform, Modal, Animated, ScrollView,
 } from 'react-native';
-import { SafeAreaView, SafeAreaProvider } from 'react-native-safe-area-context';
-import { useState, useRef, useEffect, useContext } from 'react';
-import * as ImagePicker from 'expo-image-picker';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { useState, useEffect, useContext, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { NotificationsProvider, NotificationsContext } from './context/NotificationsContext';
+import { NotificationsProvider } from './context/NotificationsContext';
 import { AuthProvider, AuthContext } from './context/AuthContext';
 import { registerForPushNotifications, addNotificationListeners, rescheduleAllEvents } from './services/PushNotificationService';
 import { DataService } from './services/DataService';
@@ -46,132 +44,132 @@ function QuickTaskButton({ onPress }) {
   );
 }
 
-function QuickTaskModal({ visible, onClose, navigation }) {
-  const { addNotification } = useContext(NotificationsContext);
+// ─── Quick Add Modal: Task / Event toggle ──────────────────────────────────
+// Task  → opens the AI-enhanced Create Task screen (TasksScreen)
+// Event → opens the New Event screen (CalendarScreen)
+function QuickAddModal({ visible, onClose, onPickTask, onPickEvent }) {
   const [activeTab, setActiveTab] = useState('task');
-  const [taskName,  setTaskName]  = useState('');
-  const [taskDesc,  setTaskDesc]  = useState('');
-  const [eventDate, setEventDate] = useState('');
-  const [images,    setImages]    = useState([]);
   const slideAnim = useRef(new Animated.Value(-700)).current;
-  const animated  = useRef(false);
 
   useEffect(() => {
-    if (visible && !animated.current) {
-      animated.current = true;
+    if (visible) {
+      setActiveTab('task');
       Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, tension: 80, friction: 12 }).start();
+    } else {
+      slideAnim.setValue(-700);
     }
   }, [visible]);
 
-  const closeModal = (cb) => {
-    animated.current = false;
-    Animated.timing(slideAnim, { toValue: -700, duration: 250, useNativeDriver: true })
-      .start(() => { setTaskName(''); setTaskDesc(''); setEventDate(''); setImages([]); setActiveTab('task'); onClose(); cb && cb(); });
+  const handleClose = () => {
+    Animated.timing(slideAnim, { toValue: -700, duration: 240, useNativeDriver: true })
+      .start(() => onClose());
   };
 
-  const openCamera = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') { Alert.alert('Permission Denied', 'Camera access is needed.'); return; }
-    const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.8 });
-    if (!result.canceled && result.assets?.[0]?.uri) setImages(p => [...p, result.assets[0].uri]);
-  };
-
-  const openGallery = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') { Alert.alert('Permission Denied', 'Gallery access is needed.'); return; }
-    const result = await ImagePicker.launchImageLibraryAsync({ allowsMultipleSelection: true, quality: 0.8 });
-    if (!result.canceled && result.assets?.length) setImages(p => [...p, ...result.assets.map(a => a.uri)]);
-  };
-
-  const handleSave = async () => {
-    if (!taskName.trim()) { Alert.alert('Required', activeTab === 'task' ? 'Enter a task name.' : 'Enter an event name.'); return; }
-    const newEntry = { id: Date.now().toString(), type: activeTab, name: taskName.trim(), description: taskDesc.trim(), eventDate: eventDate.trim(), images, createdAt: new Date().toISOString(), status: 'Todo' };
-    try {
-      const existing = await AsyncStorage.getItem(STORAGE_KEY);
-      const updated  = [newEntry, ...(existing ? JSON.parse(existing) : [])];
-      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-      // Fire notification
-      if (activeTab === 'task') {
-        addNotification({ type: 'task', icon: '⚡', title: 'Quick Note Created', body: `"${newEntry.name}" saved to Quick Notes.` });
-      } else {
-        addNotification({ type: 'event', icon: '📅', title: 'Event Created', body: `"${newEntry.name}"${newEntry.eventDate ? ' on ' + newEntry.eventDate : ''} has been scheduled.` });
-      }
-      closeModal(() => {
-        navigation.navigate('Main', {
-          screen: 'Dashboard',
-          params: { scrollToNotes: true },
-        });
+  const handleContinue = () => {
+    Animated.timing(slideAnim, { toValue: -700, duration: 220, useNativeDriver: true })
+      .start(() => {
+        onClose();
+        setTimeout(() => {
+          if (activeTab === 'task') onPickTask();
+          else onPickEvent();
+        }, 120);
       });
-    } catch { Alert.alert('Error', 'Could not save.'); }
   };
+
+  if (!visible) return null;
 
   return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={() => closeModal()}>
-      <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => closeModal()} />
-      <Animated.View style={[styles.topPanel, { transform: [{ translateY: slideAnim }] }]}>
+    <Modal transparent visible animationType="none" onRequestClose={handleClose}>
+      <TouchableOpacity style={styles.qaOverlay} activeOpacity={1} onPress={handleClose} />
+      <Animated.View style={[styles.qaPanel, { transform: [{ translateY: slideAnim }] }]}>
         <SafeAreaView>
-          <View style={styles.handle} />
-          <ScrollView style={styles.panelScroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-            <View style={styles.panelHeader}>
-              <Text style={styles.panelTitle}>Quick Add</Text>
-              <TouchableOpacity style={styles.closeCircle} onPress={() => closeModal()}>
-                <Text style={styles.closeCircleText}>✕</Text>
+          <View style={styles.qaHandle} />
+          <ScrollView style={styles.qaScroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+
+            {/* Header */}
+            <View style={styles.qaHeader}>
+              <Text style={styles.qaTitle}>Quick Add</Text>
+              <TouchableOpacity style={styles.qaCloseCircle} onPress={handleClose}>
+                <Text style={styles.qaCloseText}>✕</Text>
               </TouchableOpacity>
             </View>
-            <View style={styles.toggle}>
+
+            {/* Task / Event Toggle */}
+            <View style={styles.qaToggle}>
               {['task', 'event'].map(t => (
-                <TouchableOpacity key={t} style={[styles.toggleBtn, activeTab === t && styles.toggleBtnOn]} onPress={() => setActiveTab(t)}>
-                  <Text style={[styles.toggleText, activeTab === t && styles.toggleTextOn]}>{t === 'task' ? '📋  Task' : '📅  Event'}</Text>
+                <TouchableOpacity
+                  key={t}
+                  style={[styles.qaToggleBtn, activeTab === t && styles.qaToggleBtnOn]}
+                  onPress={() => setActiveTab(t)}
+                  activeOpacity={0.85}
+                >
+                  <Text style={[styles.qaToggleText, activeTab === t && styles.qaToggleTextOn]}>
+                    {t === 'task' ? '📋  Task' : '📅  Event'}
+                  </Text>
                 </TouchableOpacity>
               ))}
             </View>
-            <Text style={styles.label}>{activeTab === 'task' ? 'Task Name *' : 'Event Name *'}</Text>
-            <TextInput style={styles.input} placeholder={activeTab === 'task' ? 'What needs to be done?' : 'Event title...'} placeholderTextColor="#AAAABC" value={taskName} onChangeText={setTaskName} />
-            {activeTab === 'event' && (<>
-              <Text style={styles.label}>Date & Time</Text>
-              <TextInput style={styles.input} placeholder="e.g. April 20, 2026 at 3:00 PM" placeholderTextColor="#AAAABC" value={eventDate} onChangeText={setEventDate} />
-            </>)}
-            <Text style={styles.label}>Description</Text>
-            <TextInput style={[styles.input, styles.inputMulti]} placeholder="Add details..." placeholderTextColor="#AAAABC" value={taskDesc} onChangeText={setTaskDesc} multiline numberOfLines={3} textAlignVertical="top" />
-            <Text style={styles.label}>Attach Images</Text>
-            <View style={styles.attachRow}>
-              <TouchableOpacity style={styles.attachBtn} onPress={openCamera} activeOpacity={0.8}>
-                <View style={styles.attachIconWrap}><Text style={styles.attachIcon}>📷</Text></View>
-                <Text style={styles.attachLabel}>Camera</Text>
-                <Text style={styles.attachSub}>Take a photo</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.attachBtn} onPress={openGallery} activeOpacity={0.8}>
-                <View style={styles.attachIconWrap}><Text style={styles.attachIcon}>🖼️</Text></View>
-                <Text style={styles.attachLabel}>Gallery</Text>
-                <Text style={styles.attachSub}>Pick from photos</Text>
-              </TouchableOpacity>
-            </View>
-            {images.length > 0 && (
-              <View style={styles.previewSection}>
-                <Text style={styles.previewCount}>{images.length} image{images.length > 1 ? 's' : ''} attached</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                  {images.map((uri, idx) => (
-                    <View key={idx} style={styles.previewWrap}>
-                      <Image source={{ uri }} style={styles.previewImg} />
-                      <TouchableOpacity style={styles.removeImg} onPress={() => setImages(p => p.filter((_, i) => i !== idx))}>
-                        <Text style={styles.removeImgText}>✕</Text>
-                      </TouchableOpacity>
+
+            {/* Preview / Description card — mirrors your old design */}
+            <View style={styles.qaPreviewCard}>
+              {activeTab === 'task' ? (
+                <>
+                  <Text style={styles.qaPreviewTitle}>Create a new task</Text>
+                  <Text style={styles.qaPreviewText}>
+                    Continue to the Create Task screen with AI-assisted fields: Project,
+                    Nova AI title/description refinement, Status, Priority, Start/Due dates,
+                    Assignees, Links, and Attachments.
+                  </Text>
+                  <View style={styles.qaFeatureRow}>
+                    <View style={styles.qaFeatureChip}><Text style={styles.qaFeatureChipText}>✨ Nova AI</Text></View>
+                    <View style={styles.qaFeatureChip}><Text style={styles.qaFeatureChipText}>⚡ Auto-generate</Text></View>
+                    <View style={styles.qaFeatureChip}><Text style={styles.qaFeatureChipText}>👥 Assignees</Text></View>
+                  </View>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.qaPreviewTitle}>Schedule a new event</Text>
+                  <Text style={styles.qaPreviewText}>
+                    Continue to the New Event screen to pick date and time. You'll receive
+                    an alert 1 hour before the event fires.
+                  </Text>
+                  <View style={styles.qaFeatureRow}>
+                    <View style={[styles.qaFeatureChip, { backgroundColor: 'rgba(167,139,250,0.12)' }]}>
+                      <Text style={[styles.qaFeatureChipText, { color: '#A78BFA' }]}>📅 Date picker</Text>
                     </View>
-                  ))}
-                </ScrollView>
-              </View>
-            )}
-            <View style={styles.infoBox}>
-              <Text style={styles.infoText}>💾  Saves to your device → appears in the Tasks tab.{'\n'}Will sync to DYUKSA server once backend is connected.</Text>
+                    <View style={[styles.qaFeatureChip, { backgroundColor: 'rgba(167,139,250,0.12)' }]}>
+                      <Text style={[styles.qaFeatureChipText, { color: '#A78BFA' }]}>🕐 Time picker</Text>
+                    </View>
+                    <View style={[styles.qaFeatureChip, { backgroundColor: 'rgba(167,139,250,0.12)' }]}>
+                      <Text style={[styles.qaFeatureChipText, { color: '#A78BFA' }]}>🔔 Alert</Text>
+                    </View>
+                  </View>
+                </>
+              )}
             </View>
-            <View style={styles.actionRow}>
-              <TouchableOpacity style={styles.cancelBtn} onPress={() => closeModal()}>
-                <Text style={styles.cancelText}>Cancel</Text>
+
+            {/* Info strip */}
+            <View style={styles.qaInfoBox}>
+              <Text style={styles.qaInfoText}>
+                💾  Saves to DYUKSA{'\n'}
+                {activeTab === 'task'
+                  ? 'Task appears in the Tasks tab instantly.'
+                  : 'Event appears in the Calendar tab instantly.'}
+              </Text>
+            </View>
+
+            {/* Buttons */}
+            <View style={styles.qaActionRow}>
+              <TouchableOpacity style={styles.qaCancelBtn} onPress={handleClose}>
+                <Text style={styles.qaCancelText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
-                <Text style={styles.saveText}>{activeTab === 'task' ? 'Save Task' : 'Save Event'}</Text>
+              <TouchableOpacity style={styles.qaSaveBtn} onPress={handleContinue}>
+                <Text style={styles.qaSaveText}>
+                  {activeTab === 'task' ? 'Continue →' : 'Continue →'}
+                </Text>
               </TouchableOpacity>
             </View>
+
           </ScrollView>
         </SafeAreaView>
       </Animated.View>
@@ -179,11 +177,41 @@ function QuickTaskModal({ visible, onClose, navigation }) {
   );
 }
 
-// Bottom bar: Dashboard | Projects | FAB | Calendar | Tasks | Docs
-// Dashboard is the FIRST tab = main screen, bottom bar always visible
+// Bottom bar: Dashboard | Projects | FAB (Quick Add) | Calendar | Tasks
 function MainTabs() {
-  const [modalVisible, setModalVisible] = useState(false);
   const navigation = useNavigation();
+  const [qaVisible, setQaVisible] = useState(false);
+
+  // Remember which tab the user was on before tapping "+"
+  const tabState = useNavigationState(state => state);
+  const currentTabName = (() => {
+    try {
+      const mainRoute = tabState?.routes?.find(r => r.name === 'Main');
+      const tabRoutes = mainRoute?.state?.routes;
+      const idx       = mainRoute?.state?.index ?? 0;
+      const name      = tabRoutes?.[idx]?.name;
+      return name && name !== 'Quick' ? name : 'Dashboard';
+    } catch {
+      return 'Dashboard';
+    }
+  })();
+
+  const openQuickAdd = () => setQaVisible(true);
+
+  const handlePickTask = () => {
+    navigation.navigate('Main', {
+      screen: 'Tasks',
+      params: { openCreateModal: true, returnTo: currentTabName },
+    });
+  };
+
+  const handlePickEvent = () => {
+    navigation.navigate('Main', {
+      screen: 'Calendar',
+      params: { openCreateModal: true, returnTo: currentTabName },
+    });
+  };
+
   return (
     <>
       <Tab.Navigator
@@ -204,32 +232,43 @@ function MainTabs() {
           },
         })}
       >
-        {/* Dashboard = main screen = first tab */}
         <Tab.Screen name="Dashboard" component={DashboardScreen} />
         <Tab.Screen name="Projects"  component={ProjectsScreen} />
 
-        {/* Center FAB */}
+        {/* Center FAB — opens Quick Add modal with Task/Event toggle */}
         <Tab.Screen
           name="Quick"
           component={TasksScreen}
           options={{
             tabBarLabel:  () => null,
             tabBarIcon:   () => null,
-            tabBarButton: () => <QuickTaskButton onPress={() => setModalVisible(true)} />,
+            tabBarButton: () => <QuickTaskButton onPress={openQuickAdd} />,
+          }}
+          listeners={{
+            tabPress: (e) => {
+              e.preventDefault();
+              openQuickAdd();
+            },
           }}
         />
 
         <Tab.Screen name="Calendar" component={CalendarScreen} />
         <Tab.Screen name="Tasks"    component={TasksScreen} />
       </Tab.Navigator>
-      <QuickTaskModal visible={modalVisible} onClose={() => setModalVisible(false)} navigation={navigation} />
+
+      <QuickAddModal
+        visible={qaVisible}
+        onClose={() => setQaVisible(false)}
+        onPickTask={handlePickTask}
+        onPickEvent={handlePickEvent}
+      />
     </>
   );
 }
 
 function RootNavigator() {
   const { isAuthenticated, isLoading } = useContext(AuthContext);
-  const [showOnboarding, setShowOnboarding] = useState(null); // null=checking, true/false
+  const [showOnboarding, setShowOnboarding] = useState(null);
 
   useEffect(() => {
     AsyncStorage.getItem(ONBOARDING_KEY).then(done => {
@@ -239,16 +278,15 @@ function RootNavigator() {
 
   useEffect(() => {
     if (!isAuthenticated) return;
-    // Register push notifications and reschedule event reminders
     registerForPushNotifications().catch(() => {});
-    DataService.Tasks.migrate().catch(() => {}); // migrate existing data to sync schema
+    DataService.Tasks.migrate().catch(() => {});
     DataService.Tasks.getAll().then(tasks => {
       rescheduleAllEvents(tasks).catch(() => {});
     }).catch(() => {});
 
     const unsub = addNotificationListeners(
-      (notification) => { /* notification received while app is open */ },
-      (response)     => { /* user tapped a notification */ }
+      (notification) => {},
+      (response)     => {}
     );
     return unsub;
   }, [isAuthenticated]);
@@ -272,22 +310,20 @@ function RootNavigator() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       {!isAuthenticated ? (
-        // Auth stack — unauthenticated
         <>
           <Stack.Screen name="Login"          component={LoginScreen} />
           <Stack.Screen name="Signup"         component={SignupScreen} />
           <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
         </>
       ) : (
-        // App stack — authenticated
         <>
-          <Stack.Screen name="Main"     component={MainTabs} />
-          <Stack.Screen name="Chat"     component={ChatScreen} />
-          <Stack.Screen name="Settings" component={SettingsScreen} />
-          <Stack.Screen name="Docs"              component={DocumentsScreen} />
-          <Stack.Screen name="TeamManagement"   component={TeamManagementScreen} />
-          <Stack.Screen name="EditProfile"      component={EditProfileScreen} />
-          <Stack.Screen name="ChangePassword"   component={ChangePasswordScreen} />
+          <Stack.Screen name="Main"            component={MainTabs} />
+          <Stack.Screen name="Chat"            component={ChatScreen} />
+          <Stack.Screen name="Settings"        component={SettingsScreen} />
+          <Stack.Screen name="Docs"            component={DocumentsScreen} />
+          <Stack.Screen name="TeamManagement"  component={TeamManagementScreen} />
+          <Stack.Screen name="EditProfile"     component={EditProfileScreen} />
+          <Stack.Screen name="ChangePassword"  component={ChangePasswordScreen} />
         </>
       )}
     </Stack.Navigator>
@@ -313,43 +349,117 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  tabBar: { backgroundColor: '#FFFFFF', borderTopColor: '#EBEBF0', borderTopWidth: 1, height: Platform.OS === 'android' ? 65 : 70, paddingBottom: Platform.OS === 'android' ? 8 : 10, paddingTop: 8, elevation: 10, shadowColor: '#000', shadowOffset: { width: 0, height: -3 }, shadowOpacity: 0.06, shadowRadius: 10 },
+  tabBar: {
+    backgroundColor: '#FFFFFF',
+    borderTopColor: '#EBEBF0',
+    borderTopWidth: 1,
+    height: Platform.OS === 'android' ? 65 : 70,
+    paddingBottom: Platform.OS === 'android' ? 8 : 10,
+    paddingTop: 8,
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+  },
   fabWrapper: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  fab: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center', marginTop: -18, borderWidth: 3, borderColor: '#fff', shadowColor: '#1A1A2E', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10, elevation: 12 },
+  fab: {
+    width: 56, height: 56, borderRadius: 28,
+    backgroundColor: '#1A1A2E',
+    justifyContent: 'center', alignItems: 'center',
+    marginTop: -18,
+    borderWidth: 3, borderColor: '#fff',
+    shadowColor: '#1A1A2E',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
+    elevation: 12,
+  },
   fabIcon: { color: '#4ECDC4', fontSize: 26, lineHeight: 30 },
-  overlay: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.45)' },
-  topPanel: { position: 'absolute', top: 0, left: 0, right: 0, backgroundColor: '#fff', borderBottomLeftRadius: 24, borderBottomRightRadius: 24, maxHeight: '92%', shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 16, elevation: 20 },
-  handle: { width: 40, height: 4, backgroundColor: '#DEDEE8', borderRadius: 2, alignSelf: 'center', marginTop: 8, marginBottom: 4 },
-  panelScroll: { paddingHorizontal: 20 },
-  panelHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, marginTop: 4 },
-  panelTitle: { fontSize: 20, fontWeight: '700', color: '#1A1A2E' },
-  closeCircle: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#F5F5F7', justifyContent: 'center', alignItems: 'center' },
-  closeCircleText: { color: '#888899', fontSize: 13, fontWeight: '600' },
-  toggle: { flexDirection: 'row', backgroundColor: '#F5F5F7', borderRadius: 10, padding: 4, marginBottom: 18 },
-  toggleBtn: { flex: 1, paddingVertical: 9, borderRadius: 8, alignItems: 'center' },
-  toggleBtnOn: { backgroundColor: '#1A1A2E' },
-  toggleText: { fontSize: 13, fontWeight: '600', color: '#888899' },
-  toggleTextOn: { color: '#fff' },
-  label: { fontSize: 12, fontWeight: '600', color: '#888899', marginBottom: 6, letterSpacing: 0.3 },
-  input: { backgroundColor: '#F5F5F7', borderRadius: 10, borderWidth: 1.5, borderColor: '#EBEBF0', paddingHorizontal: 14, height: 48, fontSize: 14, color: '#1A1A2E', marginBottom: 14 },
-  inputMulti: { height: 80, paddingTop: 12 },
-  attachRow: { flexDirection: 'row', gap: 12, marginBottom: 16 },
-  attachBtn: { flex: 1, backgroundColor: '#F5F5F7', borderRadius: 12, borderWidth: 1.5, borderColor: '#EBEBF0', paddingVertical: 14, alignItems: 'center', gap: 4 },
-  attachIconWrap: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', marginBottom: 4, borderWidth: 1, borderColor: '#EBEBF0', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 4, elevation: 2 },
-  attachIcon: { fontSize: 24 },
-  attachLabel: { fontSize: 13, fontWeight: '700', color: '#1A1A2E' },
-  attachSub: { fontSize: 11, color: '#AAAABC' },
-  previewSection: { marginBottom: 14 },
-  previewCount: { fontSize: 12, color: '#888899', fontWeight: '500', marginBottom: 8 },
-  previewWrap: { position: 'relative', marginRight: 10 },
-  previewImg: { width: 88, height: 88, borderRadius: 10, borderWidth: 1, borderColor: '#EBEBF0' },
-  removeImg: { position: 'absolute', top: -6, right: -6, width: 22, height: 22, borderRadius: 11, backgroundColor: '#F87171', justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: '#fff' },
-  removeImgText: { color: '#fff', fontSize: 10, fontWeight: '700' },
-  infoBox: { backgroundColor: 'rgba(78,205,196,0.08)', borderWidth: 1, borderColor: 'rgba(78,205,196,0.25)', borderRadius: 10, padding: 12, marginBottom: 16 },
-  infoText: { fontSize: 12, color: '#4ECDC4', lineHeight: 18 },
-  actionRow: { flexDirection: 'row', gap: 12, marginBottom: 20 },
-  cancelBtn: { flex: 1, height: 50, borderRadius: 12, borderWidth: 1, borderColor: '#EBEBF0', justifyContent: 'center', alignItems: 'center' },
-  cancelText: { color: '#888899', fontSize: 15, fontWeight: '500' },
-  saveBtn: { flex: 1, height: 50, borderRadius: 12, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center' },
-  saveText: { color: '#fff', fontSize: 15, fontWeight: '700' },
+
+  // ── Quick Add modal ──
+  qaOverlay: {
+    position: 'absolute', top: 0, left: 0,
+    width: '100%', height: '100%',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  qaPanel: {
+    position: 'absolute', top: 0, left: 0, right: 0,
+    backgroundColor: '#fff',
+    borderBottomLeftRadius: 24, borderBottomRightRadius: 24,
+    maxHeight: '92%',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15, shadowRadius: 16, elevation: 20,
+  },
+  qaHandle: {
+    width: 40, height: 4, backgroundColor: '#DEDEE8',
+    borderRadius: 2, alignSelf: 'center',
+    marginTop: 8, marginBottom: 4,
+  },
+  qaScroll: { paddingHorizontal: 20 },
+  qaHeader: {
+    flexDirection: 'row', justifyContent: 'space-between',
+    alignItems: 'center', marginBottom: 14, marginTop: 4,
+  },
+  qaTitle: { fontSize: 20, fontWeight: '700', color: '#1A1A2E' },
+  qaCloseCircle: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: '#F5F5F7',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  qaCloseText: { color: '#888899', fontSize: 13, fontWeight: '600' },
+  qaToggle: {
+    flexDirection: 'row', backgroundColor: '#F5F5F7',
+    borderRadius: 10, padding: 4, marginBottom: 18,
+  },
+  qaToggleBtn: {
+    flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center',
+  },
+  qaToggleBtnOn: { backgroundColor: '#1A1A2E' },
+  qaToggleText: { fontSize: 14, fontWeight: '600', color: '#888899' },
+  qaToggleTextOn: { color: '#fff' },
+
+  qaPreviewCard: {
+    backgroundColor: '#FAFAFA',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#EBEBF0',
+    padding: 16,
+    marginBottom: 14,
+  },
+  qaPreviewTitle: {
+    fontSize: 15, fontWeight: '700', color: '#1A1A2E', marginBottom: 6,
+  },
+  qaPreviewText: {
+    fontSize: 13, color: '#5C5C6E', lineHeight: 19, marginBottom: 12,
+  },
+  qaFeatureRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  qaFeatureChip: {
+    backgroundColor: 'rgba(78,205,196,0.12)',
+    borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5,
+  },
+  qaFeatureChipText: {
+    fontSize: 11, fontWeight: '600', color: '#4ECDC4',
+  },
+
+  qaInfoBox: {
+    backgroundColor: 'rgba(78,205,196,0.08)',
+    borderWidth: 1, borderColor: 'rgba(78,205,196,0.25)',
+    borderRadius: 10, padding: 12, marginBottom: 16,
+  },
+  qaInfoText: { fontSize: 12, color: '#4ECDC4', lineHeight: 18 },
+
+  qaActionRow: { flexDirection: 'row', gap: 12, marginBottom: 24 },
+  qaCancelBtn: {
+    flex: 1, height: 50, borderRadius: 12,
+    borderWidth: 1, borderColor: '#EBEBF0',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  qaCancelText: { color: '#888899', fontSize: 15, fontWeight: '500' },
+  qaSaveBtn: {
+    flex: 1, height: 50, borderRadius: 12,
+    backgroundColor: '#1A1A2E',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  qaSaveText: { color: '#fff', fontSize: 15, fontWeight: '700' },
 });
