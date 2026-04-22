@@ -11,7 +11,7 @@ import { NotificationsProvider } from './context/NotificationsContext';
 import { AuthProvider, AuthContext } from './context/AuthContext';
 import { registerForPushNotifications, addNotificationListeners, rescheduleAllEvents } from './services/PushNotificationService';
 import { DataService } from './services/DataService';
-import { ThemeProvider } from './context/ThemeContext';
+import { ThemeProvider, ThemeContext } from './context/ThemeContext';
 import ErrorBoundary from './components/ErrorBoundary';
 import OnboardingScreen, { ONBOARDING_KEY } from './screens/OnboardingScreen';
 
@@ -34,10 +34,14 @@ export const STORAGE_KEY = 'DYUKSA_QUICK_TASKS';
 const Stack = createNativeStackNavigator();
 const Tab   = createBottomTabNavigator();
 
-function QuickTaskButton({ onPress }) {
+function QuickTaskButton({ onPress, borderColor }) {
   return (
     <View style={styles.fabWrapper}>
-      <TouchableOpacity style={styles.fab} onPress={onPress} activeOpacity={0.85}>
+      <TouchableOpacity
+        style={[styles.fab, { borderColor: borderColor || '#fff' }]}
+        onPress={onPress}
+        activeOpacity={0.85}
+      >
         <Text style={styles.fabIcon}>＋</Text>
       </TouchableOpacity>
     </View>
@@ -181,6 +185,14 @@ function QuickAddModal({ visible, onClose, onPickTask, onPickEvent }) {
 function MainTabs() {
   const navigation = useNavigation();
   const [qaVisible, setQaVisible] = useState(false);
+  const { theme } = useContext(ThemeContext);
+  const isDark = theme === 'Dark';
+
+  // Theme-aware tab bar colors (matches Calendar screen's dark palette)
+  const tabBg       = isDark ? '#1A1A20' : '#FFFFFF';
+  const tabBorder   = isDark ? '#252530' : '#EBEBF0';
+  const tabActive   = isDark ? '#FFFFFF' : '#1A1A2E';
+  const tabInactive = isDark ? '#6C6C80' : '#AAAABC';
 
   // Remember which tab the user was on before tapping "+"
   const tabState = useNavigationState(state => state);
@@ -218,9 +230,9 @@ function MainTabs() {
         initialRouteName="Dashboard"
         screenOptions={({ route }) => ({
           headerShown: false,
-          tabBarStyle: styles.tabBar,
-          tabBarActiveTintColor: '#1A1A2E',
-          tabBarInactiveTintColor: '#AAAABC',
+          tabBarStyle: [styles.tabBar, { backgroundColor: tabBg, borderTopColor: tabBorder }],
+          tabBarActiveTintColor: tabActive,
+          tabBarInactiveTintColor: tabInactive,
           tabBarLabel: ({ color, focused }) => (
             <Text style={{ color, fontSize: 10, fontWeight: focused ? '700' : '500', marginTop: -2 }}>
               {route.name}
@@ -242,7 +254,7 @@ function MainTabs() {
           options={{
             tabBarLabel:  () => null,
             tabBarIcon:   () => null,
-            tabBarButton: () => <QuickTaskButton onPress={openQuickAdd} />,
+            tabBarButton: () => <QuickTaskButton onPress={openQuickAdd} borderColor={tabBg} />,
           }}
           listeners={{
             tabPress: (e) => {

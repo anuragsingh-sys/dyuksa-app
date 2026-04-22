@@ -49,27 +49,36 @@ const getProjectMembers = (project) => {
 // ── Inline dropdown (no nested Modal — works inside Modal on iOS) ────────────
 function InlineDropdown({ options, selected, onSelect, placeholder }) {
   const [open, setOpen] = useState(false);
+  const { theme } = useContext(ThemeContext);
+  const isDark = theme === 'Dark';
+  const bg    = isDark ? '#252530' : '#F5F5F7';
+  const bgOpen= isDark ? '#1A1A20' : '#FFFFFF';
+  const bdr   = isDark ? '#2F2F3D' : '#EBEBF0';
+  const txt   = isDark ? '#FFFFFF' : '#1A1A2E';
+  const sub   = isDark ? '#9898A6' : '#888899';
+  const placeholderColor = isDark ? '#6C6C80' : '#AAAABC';
+  const itemBorder = isDark ? '#2F2F3D' : '#F0F0F5';
   return (
     <View>
       <TouchableOpacity
-        style={[pk.trigger, open && pk.triggerOpen]}
+        style={[pk.trigger, { backgroundColor: bg, borderColor: bdr }, open && { borderColor: '#4ECDC4', backgroundColor: bgOpen }]}
         onPress={() => setOpen(o => !o)}
       >
-        <Text style={[pk.triggerText, !selected && { color: '#AAAABC' }]} numberOfLines={1}>
+        <Text style={[pk.triggerText, { color: txt }, !selected && { color: placeholderColor }]} numberOfLines={1}>
           {selected || placeholder}
         </Text>
-        <Text style={pk.arrow}>{open ? '▲' : '▾'}</Text>
+        <Text style={[pk.arrow, { color: sub }]}>{open ? '▲' : '▾'}</Text>
       </TouchableOpacity>
       {open && (
-        <View style={pk.list}>
+        <View style={[pk.list, { backgroundColor: bgOpen, borderColor: '#4ECDC4' }]}>
           <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled">
             {options.map((opt, i) => (
               <TouchableOpacity
                 key={i}
-                style={[pk.item, i === options.length - 1 && { borderBottomWidth: 0 }]}
+                style={[pk.item, { borderBottomColor: itemBorder }, i === options.length - 1 && { borderBottomWidth: 0 }]}
                 onPress={() => { onSelect(opt); setOpen(false); }}
               >
-                <Text style={[pk.itemText, selected === opt.label && { color: '#4ECDC4', fontWeight: '700' }]}>
+                <Text style={[pk.itemText, { color: txt }, selected === opt.label && { color: '#4ECDC4', fontWeight: '700' }]}>
                   {opt.label}
                 </Text>
               </TouchableOpacity>
@@ -657,7 +666,10 @@ export default function ProjectsScreen() {
           <Text style={[styles.brandName, { color: txt }]}>Projects</Text>
         </View>
         <View style={styles.navRight}>
-          <TouchableOpacity style={styles.navIconBtn} onPress={() => navigation.navigate('Chat')}>
+          <TouchableOpacity
+            style={[styles.navIconBtn, { backgroundColor: isDark ? '#252530' : '#FAFAFA', borderColor: bdr }]}
+            onPress={() => navigation.navigate('Chat')}
+          >
             <Text style={styles.navIcon}>💬</Text>
           </TouchableOpacity>
           <NotificationBell />
@@ -787,33 +799,46 @@ export default function ProjectsScreen() {
 
       {/* ── Create Project Modal ── */}
       {modalVisible && (
-        <Modal transparent visible animationType="none" onRequestClose={closeModal}>
+        <Modal transparent visible animationType="none" onRequestClose={closeModal} statusBarTranslucent>
           <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={closeModal} />
-          <Animated.View style={[styles.topModal, { transform: [{ translateY: slideAnim }] }]}>
+          <Animated.View style={[
+            styles.topModal,
+            {
+              backgroundColor: card,
+              paddingTop: Platform.OS === 'ios' ? 44 : (StatusBar.currentHeight || 24),
+              transform: [{ translateY: slideAnim }],
+            },
+          ]}>
             <SafeAreaView>
-              <View style={styles.handle} />
+              <View style={[styles.handle, { backgroundColor: isDark ? '#3A3A48' : '#DEDEE8' }]} />
               <ScrollView style={styles.modalScroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
 
                 <View style={styles.modalHeader}>
-                  <Text style={styles.modalTitle}>Create Project</Text>
-                  <TouchableOpacity style={styles.closeCircle} onPress={closeModal}>
-                    <Text style={styles.closeCircleText}>✕</Text>
+                  <Text style={[styles.modalTitle, { color: txt }]}>Create Project</Text>
+                  <TouchableOpacity
+                    style={[styles.closeCircle, { backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
+                    onPress={closeModal}
+                  >
+                    <Text style={[styles.closeCircleText, { color: sub }]}>✕</Text>
                   </TouchableOpacity>
                 </View>
 
                 {/* Project Name */}
-                <Text style={styles.fieldLabel}>Project Name *</Text>
+                <Text style={[styles.fieldLabel, { color: sub }]}>Project Name *</Text>
                 <TextInput
                   placeholder="Enter project name..."
-                  placeholderTextColor="#AAAABC"
-                  style={styles.input}
+                  placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
+                  style={[
+                    styles.input,
+                    { backgroundColor: isDark ? '#252530' : '#F5F5F7', color: txt },
+                  ]}
                   value={projectName}
                   onChangeText={setProjectName}
                   autoFocus
                 />
 
                 {/* Assigned To */}
-                <Text style={styles.fieldLabel}>Assigned To</Text>
+                <Text style={[styles.fieldLabel, { color: sub }]}>Assigned To</Text>
                 {members.map((m, i) => (
                   <View key={i} style={{ marginBottom: 12 }}>
                     <InlineDropdown
@@ -833,7 +858,10 @@ export default function ProjectsScreen() {
                         />
                       </View>
                       {members.length > 1 && (
-                        <TouchableOpacity style={styles.removeRowBtn} onPress={() => removeMemberRow(i)}>
+                        <TouchableOpacity
+                          style={[styles.removeRowBtn, { backgroundColor: isDark ? 'rgba(239,68,68,0.15)' : '#FFF0F0' }]}
+                          onPress={() => removeMemberRow(i)}
+                        >
                           <Text style={{ color: '#EF4444', fontSize: 16 }}>✕</Text>
                         </TouchableOpacity>
                       )}
@@ -845,7 +873,7 @@ export default function ProjectsScreen() {
                 </TouchableOpacity>
 
                 {/* Task Type */}
-                <Text style={[styles.fieldLabel, { marginTop: 16 }]}>Task Type *</Text>
+                <Text style={[styles.fieldLabel, { color: sub, marginTop: 16 }]}>Task Type *</Text>
                 <View style={{ marginBottom: 14, zIndex: 100 }}>
                   <InlineDropdown
                     placeholder="Select Task Type..."
@@ -856,29 +884,41 @@ export default function ProjectsScreen() {
                 </View>
 
                 {/* Attach Images */}
-                <Text style={styles.fieldLabel}>Attach Images</Text>
+                <Text style={[styles.fieldLabel, { color: sub }]}>Attach Images</Text>
                 <View style={styles.attachRow}>
-                  <TouchableOpacity style={styles.attachBtn} onPress={openCamera} activeOpacity={0.8}>
-                    <View style={styles.attachIconWrap}><Text style={{ fontSize: 22 }}>📷</Text></View>
-                    <Text style={styles.attachLabel}>Camera</Text>
-                    <Text style={styles.attachSub}>Take a photo</Text>
+                  <TouchableOpacity
+                    style={[styles.attachBtn, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}
+                    onPress={openCamera}
+                    activeOpacity={0.8}
+                  >
+                    <View style={[styles.attachIconWrap, { backgroundColor: card, borderColor: bdr }]}>
+                      <Text style={{ fontSize: 22 }}>📷</Text>
+                    </View>
+                    <Text style={[styles.attachLabel, { color: txt }]}>Camera</Text>
+                    <Text style={[styles.attachSub, { color: isDark ? '#6C6C80' : '#AAAABC' }]}>Take a photo</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={styles.attachBtn} onPress={openGallery} activeOpacity={0.8}>
-                    <View style={styles.attachIconWrap}><Text style={{ fontSize: 22 }}>🖼️</Text></View>
-                    <Text style={styles.attachLabel}>Gallery</Text>
-                    <Text style={styles.attachSub}>Pick from photos</Text>
+                  <TouchableOpacity
+                    style={[styles.attachBtn, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}
+                    onPress={openGallery}
+                    activeOpacity={0.8}
+                  >
+                    <View style={[styles.attachIconWrap, { backgroundColor: card, borderColor: bdr }]}>
+                      <Text style={{ fontSize: 22 }}>🖼️</Text>
+                    </View>
+                    <Text style={[styles.attachLabel, { color: txt }]}>Gallery</Text>
+                    <Text style={[styles.attachSub, { color: isDark ? '#6C6C80' : '#AAAABC' }]}>Pick from photos</Text>
                   </TouchableOpacity>
                 </View>
 
                 {projectImages.length > 0 && (
                   <View style={{ marginBottom: 14 }}>
-                    <Text style={[styles.fieldLabel, { marginBottom: 8 }]}>
+                    <Text style={[styles.fieldLabel, { color: sub, marginBottom: 8 }]}>
                       {projectImages.length} image{projectImages.length > 1 ? 's' : ''} attached
                     </Text>
                     <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                       {projectImages.map((uri, i) => (
                         <View key={i} style={{ position: 'relative', marginRight: 10 }}>
-                          <Image source={{ uri }} style={styles.previewImg} />
+                          <Image source={{ uri }} style={[styles.previewImg, { borderColor: bdr }]} />
                           <TouchableOpacity style={styles.removeImg} onPress={() => setProjectImages(p => p.filter((_, idx) => idx !== i))}>
                             <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700' }}>✕</Text>
                           </TouchableOpacity>
@@ -888,15 +928,23 @@ export default function ProjectsScreen() {
                   </View>
                 )}
 
-                {/* Buttons */}
+                {/* Buttons — same size */}
                 <View style={[styles.modalBtns, { marginBottom: 28 }]}>
-                  <TouchableOpacity style={styles.cancelBtn} onPress={closeModal} disabled={saving}>
-                    <Text style={styles.cancelBtnText}>Cancel</Text>
+                  <TouchableOpacity
+                    style={[styles.cancelBtn, { borderColor: bdr, backgroundColor: card }]}
+                    onPress={closeModal}
+                    disabled={saving}
+                  >
+                    <Text style={[styles.cancelBtnText, { color: sub }]}>Cancel</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={[styles.newBtn, saving && { opacity: 0.7 }]} onPress={addProject} disabled={saving}>
+                  <TouchableOpacity
+                    style={[styles.submitBtn, saving && { opacity: 0.7 }]}
+                    onPress={addProject}
+                    disabled={saving}
+                  >
                     {saving
                       ? <ActivityIndicator color="#fff" size="small" />
-                      : <Text style={styles.newBtnText}>Create Project</Text>
+                      : <Text style={styles.submitBtnText}>Create Project</Text>
                     }
                   </TouchableOpacity>
                 </View>
@@ -909,11 +957,15 @@ export default function ProjectsScreen() {
 
       {/* ── Project Details Full-Screen Modal ── */}
       {detailsVisible && selectedProject && (
-        <Modal transparent visible animationType="none" onRequestClose={closeDetails} statusBarTranslucent>
+        <>
+          {/* Full-bleed dark backdrop — covers ALL safe areas */}
+          <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: bg, zIndex: 99 }} />
           <Animated.View
             style={[
               styles.pd_screen,
               {
+                backgroundColor: bg,
+                zIndex: 100,
                 transform: [{
                   translateX: detailsSlideAnim.interpolate({
                     inputRange: [0, 1],
@@ -923,7 +975,7 @@ export default function ProjectsScreen() {
               },
             ]}
           >
-            <SafeAreaView style={{ flex: 1 }}>
+            <View style={{ flex: 1, backgroundColor: bg }}>
               <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={card} translucent={false} />
 
               {/* Header bar with back button + project name */}
@@ -959,23 +1011,49 @@ export default function ProjectsScreen() {
                   { id: 'tasks',     label: 'Tasks',     count: projectTasks.length },
                   { id: 'members',   label: 'Members',   count: getProjectMembers(selectedProject).length },
                   { id: 'documents', label: 'Documents', count: projectDocs.length + (selectedProject.document_count ?? 0) },
-                ].map(t => (
-                  <TouchableOpacity
-                    key={t.id}
-                    style={[styles.pd_tab, detailsTab === t.id && styles.pd_tabActive]}
-                    onPress={() => setDetailsTab(t.id)}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={[styles.pd_tabText, detailsTab === t.id && styles.pd_tabTextActive]}>
-                      {t.label}
-                    </Text>
-                    <View style={[styles.pd_tabCount, detailsTab === t.id && styles.pd_tabCountActive]}>
-                      <Text style={[styles.pd_tabCountText, detailsTab === t.id && styles.pd_tabCountTextActive]}>
-                        {t.count}
+                ].map(t => {
+                  const isActive = detailsTab === t.id;
+                  // Theme-aware active color — cyan in dark, dark-navy in light
+                  const activeColor = isDark ? '#4ECDC4' : '#1A1A2E';
+                  return (
+                    <TouchableOpacity
+                      key={t.id}
+                      style={[
+                        styles.pd_tab,
+                        isActive && { borderBottomColor: activeColor },
+                      ]}
+                      onPress={() => setDetailsTab(t.id)}
+                      activeOpacity={0.7}
+                    >
+                      <Text
+                        style={[
+                          styles.pd_tabText,
+                          { color: sub },
+                          isActive && { color: activeColor, fontWeight: '700' },
+                        ]}
+                      >
+                        {t.label}
                       </Text>
-                    </View>
-                  </TouchableOpacity>
-                ))}
+                      <View
+                        style={[
+                          styles.pd_tabCount,
+                          { backgroundColor: isDark ? '#252530' : '#EBEBF0' },
+                          isActive && { backgroundColor: activeColor },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.pd_tabCountText,
+                            { color: sub },
+                            isActive && { color: isDark ? '#0D0D0F' : '#4ECDC4' },
+                          ]}
+                        >
+                          {t.count}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
 
               {/* Tab content */}
@@ -1383,9 +1461,9 @@ export default function ProjectsScreen() {
                   </View>
                 </>
               )}
-            </SafeAreaView>
+            </View>
           </Animated.View>
-        </Modal>
+        </>
       )}
 
       {/* Task Detail Modal (full-screen) */}
@@ -1474,6 +1552,8 @@ const styles = StyleSheet.create({
   modalBtns: { flexDirection: 'row', gap: 10, marginTop: 14 },
   cancelBtn: { flex: 1, borderWidth: 1, borderColor: '#EBEBF0', borderRadius: 10, height: 48, justifyContent: 'center', alignItems: 'center' },
   cancelBtnText: { color: '#888899', fontSize: 14, fontWeight: '500' },
+  submitBtn: { flex: 1, backgroundColor: '#1A1A2E', borderRadius: 10, height: 48, justifyContent: 'center', alignItems: 'center' },
+  submitBtnText: { color: '#fff', fontSize: 14, fontWeight: '700', textAlign: 'center' },
 
   // ── Card member preview (stacked avatars on list item) ──
   cardMembersRow: {
@@ -1652,7 +1732,6 @@ const styles = StyleSheet.create({
   pd_screen: {
     position: 'absolute',
     top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: '#F5F5F7',
     paddingTop: Platform.OS === 'ios' ? 44 : (StatusBar.currentHeight || 24),
   },
   pd_header: {

@@ -12,6 +12,7 @@ import { ThemeContext } from '../context/ThemeContext';
 import NotificationBell from '../components/NotificationBell';
 import { NotificationsContext } from '../context/NotificationsContext';
 import { getUsers } from '../services/ApiService';
+import * as Notifications from 'expo-notifications';
 
 const STORAGE_KEY = 'DYUKSA_QUICK_TASKS';
 const HOURS = Array.from({ length: 16 }, (_, i) => i + 7); // 07:00 to 22:00
@@ -259,24 +260,83 @@ export default function CalendarScreen() {
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
       setEvents(updated.filter(e => e.type === 'event'));
 
-      // Send notification ONLY to selected participants (if any)
-      // When no participants selected, fire a general notification for the creator
+      // ── 1 hour before reminder timestamp ──
+      const reminderTime = new Date(pickerDate.getTime() - 60 * 60 * 1000);
+      const shouldScheduleReminder = reminderTime.getTime() > Date.now();
+
+      // Helper: schedule a local push notification at a specific time
+      const scheduleReminder = async (title, body, recipientId) => {
+        if (!shouldScheduleReminder) return null;
+        try {
+          const id = await Notifications.scheduleNotificationAsync({
+            content: {
+              title,
+              body,
+              data: {
+                eventId: newEvent.id,
+                recipientId: recipientId || null,
+                type: 'event_reminder',
+              },
+              sound: true,
+            },
+            trigger: { date: reminderTime },
+          });
+          return id;
+        } catch (err) {
+          console.warn('Failed to schedule reminder:', err?.message);
+          return null;
+        }
+      };
+
+      // ── Notifications ──
       if (participants.length > 0) {
-        participants.forEach(p => {
+        // For each participant:
+        //  1) Fire "you've been invited" immediately (in-app)
+        //  2) Schedule a 1-hour-before reminder (local push)
+        const scheduledIds = [];
+        for (const p of participants) {
           addNotification({
-            type: 'event', icon: '📅',
+            type: 'event',
+            icon: '📅',
             title: `Event: ${newEvent.name}`,
             body: `${resolvedType} scheduled for ${newEvent.eventDate}. You've been invited.`,
-            recipientId: p.id, // backend will route this
+            recipientId: p.id,
           });
-        });
+          const rid = await scheduleReminder(
+            `Reminder: ${newEvent.name}`,
+            `${resolvedType} starts in 1 hour${newEvent.location ? ` at ${newEvent.location}` : ''}.`,
+            p.id,
+          );
+          if (rid) scheduledIds.push({ participantId: p.id, notificationId: rid });
+        }
+
+        // Save scheduled IDs onto the event so they can be cancelled if the event is deleted
+        if (scheduledIds.length) {
+          const withIds = updated.map(e =>
+            e.id === newEvent.id ? { ...e, scheduledReminderIds: scheduledIds } : e,
+          );
+          await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(withIds));
+        }
       } else {
+        // No participants — only notify creator
         addNotification({
-          type: 'event', icon: '📅',
+          type: 'event',
+          icon: '📅',
           title: 'Event Created',
           body: `"${newEvent.name}" scheduled.`,
         });
+        const rid = await scheduleReminder(
+          `Reminder: ${newEvent.name}`,
+          `${resolvedType} starts in 1 hour${newEvent.location ? ` at ${newEvent.location}` : ''}.`,
+        );
+        if (rid) {
+          const withIds = updated.map(e =>
+            e.id === newEvent.id ? { ...e, scheduledReminderIds: [{ participantId: null, notificationId: rid }] } : e,
+          );
+          await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(withIds));
+        }
       }
+
       closeModal();
     } catch { Alert.alert('Error', 'Could not save event.'); }
   };
@@ -306,6 +366,13 @@ export default function CalendarScreen() {
       { text: 'Delete', style: 'destructive', onPress: async () => {
         const existing = await AsyncStorage.getItem(STORAGE_KEY);
         const all = existing ? JSON.parse(existing) : [];
+        // Cancel any scheduled reminders for this event before removing it
+        const eventToDelete = all.find(e => e.id === id);
+        if (eventToDelete?.scheduledReminderIds?.length) {
+          for (const { notificationId } of eventToDelete.scheduledReminderIds) {
+            try { await Notifications.cancelScheduledNotificationAsync(notificationId); } catch {}
+          }
+        }
         const updated = all.filter(e => e.id !== id);
         await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
         setEvents(updated.filter(e => e.type === 'event'));
@@ -447,19 +514,13 @@ export default function CalendarScreen() {
                   isPast && { backgroundColor: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)' },
                 ]}
                 onPress={() => {
-                  if (isPast) {
-                    Alert.alert(
-                      "Can't schedule in the past",
-                      "Events can only be created for the current time or a future date.",
-                      [{ text: 'OK' }]
-                    );
-                    return;
-                  }
+                  // Silently ignore taps on past cells (no popup)
+                  if (isPast) return;
                   const nd = new Date(d);
                   nd.setHours(hour, 0, 0, 0);
                   openModal(nd);
                 }}
-                activeOpacity={0.7}
+                activeOpacity={isPast ? 1 : 0.7}
               >
                 {hourEvs.map((ev, ei) => (
                   <TouchableOpacity key={ei} style={styles.eventBlock} onLongPress={() => deleteEvent(ev.id)}>
@@ -488,7 +549,10 @@ export default function CalendarScreen() {
           <Text style={[styles.brandName, { color: txt }]}>Calendar</Text>
         </View>
         <View style={styles.navRight}>
-          <TouchableOpacity style={styles.navIconBtn} onPress={() => navigation.navigate('Chat')}>
+          <TouchableOpacity
+            style={[styles.navIconBtn, { backgroundColor: isDark ? '#252530' : '#FAFAFA', borderColor: bdr }]}
+            onPress={() => navigation.navigate('Chat')}
+          >
             <Text style={styles.navIcon}>💬</Text>
           </TouchableOpacity>
           <NotificationBell />

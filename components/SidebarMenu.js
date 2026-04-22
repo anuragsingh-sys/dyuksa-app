@@ -1,6 +1,6 @@
 import {
   View, Text, StyleSheet, TouchableOpacity, Modal,
-  Animated, ScrollView, StatusBar,
+  Animated, ScrollView, StatusBar, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRef, useState, useContext } from 'react';
@@ -59,10 +59,16 @@ export default function SidebarMenu({ activeScreen }) {
       </TouchableOpacity>
 
       {open && (
-        <Modal transparent visible animationType="none" onRequestClose={() => closeSidebar()}>
+        <Modal transparent visible animationType="none" onRequestClose={() => closeSidebar()} statusBarTranslucent>
           <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => closeSidebar()} />
-          <Animated.View style={[styles.sidebar, { transform: [{ translateX: slideAnim }] }]}>
-            <SafeAreaView style={{ flex: 1 }}>
+          <Animated.View style={[
+            styles.sidebar,
+            {
+              paddingTop: Platform.OS === 'ios' ? 44 : (StatusBar.currentHeight || 24),
+              transform: [{ translateX: slideAnim }],
+            },
+          ]}>
+            <SafeAreaView style={{ flex: 1 }} edges={['bottom']}>
               <StatusBar barStyle="light-content" backgroundColor="#1A1A2E" />
 
               <View style={styles.sidebarHeader}>

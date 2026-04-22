@@ -85,7 +85,10 @@ export default function DashboardScreen() {
           <Text style={[styles.brandName, { color: txt }]}>DYUKSA</Text>
         </View>
         <View style={styles.navRight}>
-          <TouchableOpacity style={styles.navIconBtn} onPress={() => navigation.navigate('Chat')}>
+          <TouchableOpacity
+            style={[styles.navIconBtn, { backgroundColor: isDark ? '#252530' : '#FAFAFA', borderColor: bdr }]}
+            onPress={() => navigation.navigate('Chat')}
+          >
             <Text style={styles.navIcon}>💬</Text>
           </TouchableOpacity>
           <NotificationBell />
@@ -94,83 +97,83 @@ export default function DashboardScreen() {
 
       {/* Welcome Header */}
       <View style={[styles.pageHeader, { backgroundColor: card, borderBottomColor: bdr }]}>
-        <Text style={styles.welcomeText}>Welcome back, Anurag!</Text>
-        <Text style={styles.subText}>Here's a quick overview of your workspace.</Text>
+        <Text style={[styles.welcomeText, { color: txt }]}>Welcome back, Anurag!</Text>
+        <Text style={[styles.subText, { color: sub }]}>Here's a quick overview of your workspace.</Text>
       </View>
 
-      <ScrollView ref={scrollRef} style={styles.scroll} showsVerticalScrollIndicator={false}>
+      <ScrollView ref={scrollRef} style={[styles.scroll, { backgroundColor: bg }]} showsVerticalScrollIndicator={false}>
 
         {/* Section 1 — In Progress */}
-        <View style={[styles.card, styles.fixedCard]}>
+        <View style={[styles.card, styles.fixedCard, { backgroundColor: card, borderColor: bdr }]}>
           <View style={styles.cardHeader}>
-            <Text style={styles.cardTitle}>In Progress ▾</Text>
+            <Text style={[styles.cardTitle, { color: txt }]}>In Progress ▾</Text>
           </View>
           <View style={styles.emptyState}>
             <Text style={styles.emptyIcon}>🕐</Text>
-            <Text style={styles.emptyLabel}>No in-progress tasks assigned to you</Text>
-            <Text style={styles.emptySubLabel}>No tasks are currently assigned to you</Text>
+            <Text style={[styles.emptyLabel, { color: sub }]}>No in-progress tasks assigned to you</Text>
+            <Text style={[styles.emptySubLabel, { color: isDark ? '#6C6C80' : '#AAAABC' }]}>No tasks are currently assigned to you</Text>
           </View>
         </View>
 
         {/* Section 2 — Recent Documents */}
-        <View style={[styles.card, styles.fixedCard]}>
+        <View style={[styles.card, styles.fixedCard, { backgroundColor: card, borderColor: bdr }]}>
           <View style={styles.cardHeader}>
-            <Text style={styles.cardTitle}>Recent Documents</Text>
+            <Text style={[styles.cardTitle, { color: txt }]}>Recent Documents</Text>
             <TouchableOpacity onPress={() => navigation.navigate('Docs')}>
-              <Text style={styles.viewAll}>View All →</Text>
+              <Text style={[styles.viewAll, { color: sub }]}>View All →</Text>
             </TouchableOpacity>
           </View>
           <View style={styles.emptyState}>
             <Text style={styles.emptyIcon}>📋</Text>
-            <Text style={styles.emptyLabel}>No documents yet</Text>
+            <Text style={[styles.emptyLabel, { color: sub }]}>No documents yet</Text>
           </View>
         </View>
 
         {/* Section 3 — Favourite Projects */}
-        <View style={styles.card}>
+        <View style={[styles.card, { backgroundColor: card, borderColor: bdr }]}>
           <View style={styles.cardHeader}>
-            <Text style={styles.cardTitle}>Favourite Projects</Text>
+            <Text style={[styles.cardTitle, { color: txt }]}>Favourite Projects</Text>
             <TouchableOpacity onPress={() => (() => { try { navigation.jumpTo('Projects'); } catch { navigation.navigate('Main', { screen: 'Projects' }); } })()}>
-              <Text style={styles.viewAll}>View All →</Text>
+              <Text style={[styles.viewAll, { color: sub }]}>View All →</Text>
             </TouchableOpacity>
           </View>
           <View style={styles.emptyState}>
             <Text style={styles.emptyIcon}>📊</Text>
-            <Text style={styles.emptyLabel}>No projects yet</Text>
+            <Text style={[styles.emptyLabel, { color: sub }]}>No projects yet</Text>
           </View>
         </View>
 
         {/* Section 4 — Quick Actions (with inline Quick Notes expansion) */}
-        <View ref={quickActionsRef} style={[styles.card, { marginBottom: 24 }]}>
-          <Text style={styles.cardTitle}>Quick Actions</Text>
+        <View ref={quickActionsRef} style={[styles.card, { marginBottom: 24, backgroundColor: card, borderColor: bdr }]}>
+          <Text style={[styles.cardTitle, { color: txt }]}>Quick Actions</Text>
           <View style={styles.quickGrid}>
             <TouchableOpacity
-              style={styles.quickBtn}
+              style={[styles.quickBtn, { borderColor: bdr }]}
               onPress={() => (() => { try { navigation.jumpTo('Calendar'); } catch { navigation.navigate('Main', { screen: 'Calendar' }); } })()}
             >
               <Text style={styles.quickIcon}>📅</Text>
-              <Text style={styles.quickLabel}>Events</Text>
+              <Text style={[styles.quickLabel, { color: sub }]}>Events</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={styles.quickBtn}
+              style={[styles.quickBtn, { borderColor: bdr }]}
               onPress={() => (() => { try { navigation.jumpTo('Tasks'); } catch { navigation.navigate('Main', { screen: 'Tasks' }); } })()}
             >
               <Text style={styles.quickIcon}>📋</Text>
-              <Text style={styles.quickLabel}>My Tasks</Text>
+              <Text style={[styles.quickLabel, { color: sub }]}>My Tasks</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={styles.quickBtn}
+              style={[styles.quickBtn, { borderColor: bdr }]}
               onPress={() => navigation.navigate('Docs')}
             >
               <Text style={styles.quickIcon}>📄</Text>
-              <Text style={styles.quickLabel}>Documents</Text>
+              <Text style={[styles.quickLabel, { color: sub }]}>Documents</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.quickBtn, notesExpanded && styles.quickBtnActive]}
+              style={[styles.quickBtn, { borderColor: bdr }, notesExpanded && styles.quickBtnActive]}
               onPress={handleQuickNotesPress}
             >
               <Text style={styles.quickIcon}>⚡</Text>
-              <Text style={[styles.quickLabel, notesExpanded && styles.quickLabelActive]}>
+              <Text style={[styles.quickLabel, { color: sub }, notesExpanded && styles.quickLabelActive]}>
                 Quick{'\n'}Notes
               </Text>
             </TouchableOpacity>
@@ -178,17 +181,17 @@ export default function DashboardScreen() {
 
           {/* Inline Quick Notes panel — shown when expanded */}
           {notesExpanded && (
-            <View style={styles.notesPanel}>
+            <View style={[styles.notesPanel, { borderTopColor: bdr }]}>
               <View style={styles.notesPanelHeader}>
-                <Text style={styles.notesPanelTitle}>⚡ Quick Notes</Text>
+                <Text style={[styles.notesPanelTitle, { color: txt }]}>⚡ Quick Notes</Text>
                 <TouchableOpacity onPress={() => setNotesExpanded(false)}>
-                  <Text style={styles.notesCollapse}>✕</Text>
+                  <Text style={[styles.notesCollapse, { color: sub }]}>✕</Text>
                 </TouchableOpacity>
               </View>
 
               {quickNotes.length === 0 ? (
                 <View style={styles.notesEmpty}>
-                  <Text style={styles.notesEmptyText}>No notes yet — tap ＋ to create one</Text>
+                  <Text style={[styles.notesEmptyText, { color: sub }]}>No notes yet — tap ＋ to create one</Text>
                 </View>
               ) : (
                 quickNotes.map((note, index) => (
@@ -196,16 +199,17 @@ export default function DashboardScreen() {
                     key={note.id}
                     style={[
                       styles.noteCard,
+                      { borderBottomColor: isDark ? '#252530' : '#F5F5F7' },
                       index === quickNotes.length - 1 && { borderBottomWidth: 0, marginBottom: 0 },
                     ]}
                   >
                     <View style={styles.noteLine} />
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.noteName} numberOfLines={1}>{note.name}</Text>
+                      <Text style={[styles.noteName, { color: txt }]} numberOfLines={1}>{note.name}</Text>
                       {!!note.description && (
-                        <Text style={styles.noteDesc} numberOfLines={2}>{note.description}</Text>
+                        <Text style={[styles.noteDesc, { color: sub }]} numberOfLines={2}>{note.description}</Text>
                       )}
-                      <Text style={styles.noteDate}>{formatDate(note.createdAt)}</Text>
+                      <Text style={[styles.noteDate, { color: isDark ? '#6C6C80' : '#AAAABC' }]}>{formatDate(note.createdAt)}</Text>
                     </View>
                     <View style={[
                       styles.noteBadge,
