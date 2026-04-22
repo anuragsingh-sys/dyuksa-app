@@ -681,66 +681,70 @@ export default function CalendarScreen() {
 
       {/* ── Create Event Modal ── */}
       {modalVisible && (
-        <Modal transparent visible animationType="none" onRequestClose={closeModal}>
+        <Modal transparent visible animationType="none" onRequestClose={closeModal} statusBarTranslucent>
           <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={closeModal} />
-          <Animated.View style={[styles.topPanel, { transform: [{ translateY: slideAnim }] }]}>
+          <Animated.View style={[styles.topPanel, { backgroundColor: card, transform: [{ translateY: slideAnim }] }]}>
             <SafeAreaView>
-              <View style={styles.handle} />
+              <View style={[styles.handle, { backgroundColor: isDark ? '#3A3A48' : '#DEDEE8' }]} />
               <ScrollView style={styles.panelScroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
 
                 <View style={styles.panelHeader}>
-                  <Text style={styles.modalTitle}>Create event</Text>
-                  <TouchableOpacity style={styles.closeCircle} onPress={closeModal}>
-                    <Text style={styles.closeCircleText}>✕</Text>
+                  <Text style={[styles.modalTitle, { color: txt }]}>Create event</Text>
+                  <TouchableOpacity
+                    style={[styles.closeCircle, { backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
+                    onPress={closeModal}
+                  >
+                    <Text style={[styles.closeCircleText, { color: sub }]}>✕</Text>
                   </TouchableOpacity>
                 </View>
 
                 {/* ── Row: Date + Start — End Time ── */}
                 <View style={styles.dateTimeRow}>
                   <TouchableOpacity
-                    style={[styles.miniPickerBtn, { flex: 1.4 }]}
+                    style={[styles.miniPickerBtn, { flex: 1.4, backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}
                     onPress={() => { setShowDatePicker(s => !s); setShowTimePicker(false); setShowEndTimePicker(false); }}
                   >
-                    <Text style={styles.miniPickerText} numberOfLines={1}>
+                    <Text style={[styles.miniPickerText, { color: txt }]} numberOfLines={1}>
                       📅  {pickerDate.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}
                     </Text>
-                    <Text style={styles.miniPickerChevron}>▾</Text>
+                    <Text style={[styles.miniPickerChevron, { color: sub }]}>▾</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={[styles.miniPickerBtn, { flex: 1 }]}
+                    style={[styles.miniPickerBtn, { flex: 1, backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}
                     onPress={() => { setShowTimePicker(s => !s); setShowDatePicker(false); setShowEndTimePicker(false); }}
                   >
-                    <Text style={styles.miniPickerText}>
+                    <Text style={[styles.miniPickerText, { color: txt }]}>
                       {pickerDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}
                     </Text>
-                    <Text style={styles.miniPickerChevron}>▾</Text>
+                    <Text style={[styles.miniPickerChevron, { color: sub }]}>▾</Text>
                   </TouchableOpacity>
-                  <Text style={styles.dash}>—</Text>
+                  <Text style={[styles.dash, { color: sub }]}>—</Text>
                   <TouchableOpacity
-                    style={[styles.miniPickerBtn, { flex: 1 }]}
+                    style={[styles.miniPickerBtn, { flex: 1, backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}
                     onPress={() => { setShowEndTimePicker(s => !s); setShowDatePicker(false); setShowTimePicker(false); }}
                   >
-                    <Text style={styles.miniPickerText}>
+                    <Text style={[styles.miniPickerText, { color: txt }]}>
                       {endPickerDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}
                     </Text>
-                    <Text style={styles.miniPickerChevron}>▾</Text>
+                    <Text style={[styles.miniPickerChevron, { color: sub }]}>▾</Text>
                   </TouchableOpacity>
                 </View>
 
                 {/* Date Picker expanded */}
                 {showDatePicker && (
-                  <View style={styles.pickerCard}>
+                  <View style={[styles.pickerCard, { backgroundColor: card, borderColor: bdr }]}>
                     <DateTimePicker
                       value={tempPickerDate}
                       mode="date"
                       display="inline"
+                      themeVariant={isDark ? 'dark' : 'light'}
                       minimumDate={new Date(new Date().setHours(0, 0, 0, 0))}
                       onChange={(_, date) => { if (date) setTempPickerDate(date); }}
                       style={{ width: '100%' }}
                     />
-                    <View style={styles.pickerActions}>
+                    <View style={[styles.pickerActions, { borderTopColor: bdr }]}>
                       <TouchableOpacity style={styles.pickerCancelBtn} onPress={() => setShowDatePicker(false)}>
-                        <Text style={styles.pickerCancelText}>Cancel</Text>
+                        <Text style={[styles.pickerCancelText, { color: sub }]}>Cancel</Text>
                       </TouchableOpacity>
                       <TouchableOpacity style={styles.pickerDoneBtn} onPress={() => {
                         const nd  = new Date(tempPickerDate);
@@ -759,17 +763,18 @@ export default function CalendarScreen() {
 
                 {/* Start Time Picker expanded */}
                 {showTimePicker && (
-                  <View style={styles.pickerCard}>
+                  <View style={[styles.pickerCard, { backgroundColor: card, borderColor: bdr }]}>
                     <DateTimePicker
                       value={tempPickerDate}
                       mode="time"
                       display="spinner"
+                      themeVariant={isDark ? 'dark' : 'light'}
                       onChange={(_, date) => { if (date) setTempPickerDate(date); }}
                       style={{ width: '100%' }}
                     />
-                    <View style={styles.pickerActions}>
+                    <View style={[styles.pickerActions, { borderTopColor: bdr }]}>
                       <TouchableOpacity style={styles.pickerCancelBtn} onPress={() => setShowTimePicker(false)}>
-                        <Text style={styles.pickerCancelText}>Cancel</Text>
+                        <Text style={[styles.pickerCancelText, { color: sub }]}>Cancel</Text>
                       </TouchableOpacity>
                       <TouchableOpacity style={styles.pickerDoneBtn} onPress={() => {
                         const nd = new Date(pickerDate);
@@ -792,21 +797,32 @@ export default function CalendarScreen() {
 
                 {/* End Time Picker expanded */}
                 {showEndTimePicker && (
-                  <View style={styles.pickerCard}>
+                  <View style={[styles.pickerCard, { backgroundColor: card, borderColor: bdr }]}>
                     <DateTimePicker
                       value={tempEndPickerDate}
                       mode="time"
                       display="spinner"
+                      themeVariant={isDark ? 'dark' : 'light'}
                       onChange={(_, date) => { if (date) setTempEndPickerDate(date); }}
                       style={{ width: '100%' }}
                     />
-                    <View style={styles.pickerActions}>
+                    <View style={[styles.pickerActions, { borderTopColor: bdr }]}>
                       <TouchableOpacity style={styles.pickerCancelBtn} onPress={() => setShowEndTimePicker(false)}>
-                        <Text style={styles.pickerCancelText}>Cancel</Text>
+                        <Text style={[styles.pickerCancelText, { color: sub }]}>Cancel</Text>
                       </TouchableOpacity>
                       <TouchableOpacity style={styles.pickerDoneBtn} onPress={() => {
                         const ne = new Date(pickerDate);
                         ne.setHours(tempEndPickerDate.getHours(), tempEndPickerDate.getMinutes());
+                        // Block end time before or equal to start time
+                        if (ne.getTime() <= pickerDate.getTime()) {
+                          Alert.alert(
+                            'Invalid end time',
+                            'End time must be after the start time. Please pick a time later than ' +
+                            pickerDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }) + '.',
+                            [{ text: 'OK' }]
+                          );
+                          return;
+                        }
                         setEndPickerDate(ne);
                         setShowEndTimePicker(false);
                       }}>
@@ -817,17 +833,20 @@ export default function CalendarScreen() {
                 )}
 
                 {/* Event Name */}
-                <Text style={styles.fieldLabel}>EVENT NAME</Text>
+                <Text style={[styles.fieldLabel, { color: sub }]}>EVENT NAME</Text>
                 <TextInput
-                  style={styles.input}
+                  style={[
+                    styles.input,
+                    { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr, color: txt },
+                  ]}
                   placeholder="Enter event name"
-                  placeholderTextColor="#AAAABC"
+                  placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
                   value={eventName}
                   onChangeText={setEventName}
                 />
 
                 {/* Event Type Dropdown */}
-                <Text style={styles.fieldLabel}>EVENT TYPE</Text>
+                <Text style={[styles.fieldLabel, { color: sub }]}>EVENT TYPE</Text>
                 <TouchableOpacity
                   style={[styles.typeTrigger, showTypeDropdown && styles.typeTriggerOpen]}
                   onPress={() => setShowTypeDropdown(s => !s)}
@@ -844,7 +863,7 @@ export default function CalendarScreen() {
                 </TouchableOpacity>
 
                 {showTypeDropdown && (
-                  <View style={styles.typeDropdown}>
+                  <View style={[styles.typeDropdown, { backgroundColor: card, borderColor: bdr }]}>
                     {EVENT_TYPES.map((t, i) => (
                       <TouchableOpacity
                         key={t.id}
@@ -852,19 +871,19 @@ export default function CalendarScreen() {
                         onPress={() => { setEventType(t.id); setShowTypeDropdown(false); }}
                       >
                         <Text style={{ fontSize: 16, marginRight: 10 }}>{t.icon}</Text>
-                        <Text style={[styles.typeOptionText, eventType === t.id && styles.typeOptionTextActive]}>
+                        <Text style={[styles.typeOptionText, { color: txt }, eventType === t.id && styles.typeOptionTextActive]}>
                           {t.label}
                         </Text>
                         {eventType === t.id && <Text style={styles.typeCheck}>✓</Text>}
                       </TouchableOpacity>
                     ))}
                     {/* Custom 'Other' input */}
-                    <View style={styles.typeCustomRow}>
+                    <View style={[styles.typeCustomRow, { borderTopColor: bdr }]}>
                       <Text style={{ fontSize: 16, marginRight: 8 }}>✏️</Text>
                       <TextInput
-                        style={styles.typeCustomInput}
+                        style={[styles.typeCustomInput, { color: txt }]}
                         placeholder="Other (type custom name)"
-                        placeholderTextColor="#AAAABC"
+                        placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
                         value={customType}
                         onChangeText={t => { setCustomType(t); setEventType('Other'); }}
                         onFocus={() => setEventType('Other')}
@@ -875,23 +894,30 @@ export default function CalendarScreen() {
 
                 {/* Teams meeting toggle */}
                 <TouchableOpacity
-                  style={[styles.teamsBtn, teamsMeeting && styles.teamsBtnOn]}
+                  style={[
+                    styles.teamsBtn,
+                    { backgroundColor: isDark ? '#252530' : '#FAFAFA', borderColor: bdr },
+                    teamsMeeting && styles.teamsBtnOn,
+                  ]}
                   onPress={() => setTeamsMeeting(v => !v)}
                   activeOpacity={0.8}
                 >
                   <Text style={{ fontSize: 14, marginRight: 8 }}>📹</Text>
-                  <Text style={[styles.teamsBtnText, teamsMeeting && styles.teamsBtnTextOn]}>
+                  <Text style={[styles.teamsBtnText, { color: sub }, teamsMeeting && styles.teamsBtnTextOn]}>
                     Teams meeting
                   </Text>
                   {teamsMeeting && <Text style={{ marginLeft: 8, color: '#4ECDC4', fontWeight: '700' }}>✓</Text>}
                 </TouchableOpacity>
 
                 {/* Description */}
-                <Text style={styles.fieldLabel}>DESCRIPTION</Text>
+                <Text style={[styles.fieldLabel, { color: sub }]}>DESCRIPTION</Text>
                 <TextInput
-                  style={[styles.input, { height: 80, paddingTop: 12 }]}
+                  style={[
+                    styles.input,
+                    { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr, color: txt, height: 80, paddingTop: 12 },
+                  ]}
                   placeholder="Let's discuss"
-                  placeholderTextColor="#AAAABC"
+                  placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
                   value={eventDesc}
                   onChangeText={setEventDesc}
                   multiline
@@ -899,12 +925,15 @@ export default function CalendarScreen() {
                 />
 
                 {/* Location */}
-                <View style={styles.locationWrap}>
+                <View style={[
+                  styles.locationWrap,
+                  { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr },
+                ]}>
                   <Text style={styles.locationIcon}>📍</Text>
                   <TextInput
-                    style={styles.locationInput}
+                    style={[styles.locationInput, { color: txt }]}
                     placeholder="Add location (optional)"
-                    placeholderTextColor="#AAAABC"
+                    placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
                     value={location}
                     onChangeText={setLocation}
                   />
@@ -912,7 +941,7 @@ export default function CalendarScreen() {
 
                 {/* Participants */}
                 <View style={styles.participantsHeaderRow}>
-                  <Text style={styles.fieldLabel}>PARTICIPANTS</Text>
+                  <Text style={[styles.fieldLabel, { color: sub }]}>PARTICIPANTS</Text>
                   <TouchableOpacity onPress={() => setShowParticipants(s => !s)}>
                     <Text style={styles.participantsToggle}>
                       {showParticipants ? 'Hide' : '+ Add'}
@@ -928,42 +957,51 @@ export default function CalendarScreen() {
                         <View style={styles.participantChipAvatar}>
                           <Text style={styles.participantChipAvatarText}>{p.avatar}</Text>
                         </View>
-                        <Text style={styles.participantChipName}>{p.name}</Text>
+                        <Text style={[styles.participantChipName, { color: isDark ? '#FFFFFF' : '#1A1A2E' }]}>{p.name}</Text>
                         <TouchableOpacity onPress={() => toggleParticipant({ id: p.id, first_name: p.name })}>
-                          <Text style={styles.participantChipRemove}>✕</Text>
+                          <Text style={[styles.participantChipRemove, { color: sub }]}>✕</Text>
                         </TouchableOpacity>
                       </View>
                     ))}
                   </View>
                 ) : (
                   !showParticipants && (
-                    <View style={styles.noParticipants}>
+                    <View style={[
+                      styles.noParticipants,
+                      { backgroundColor: isDark ? '#252530' : '#FAFAFA', borderColor: bdr },
+                    ]}>
                       <Text style={styles.noParticipantsIcon}>👥</Text>
-                      <Text style={styles.noParticipantsText}>No participants yet</Text>
+                      <Text style={[styles.noParticipantsText, { color: sub }]}>No participants yet</Text>
                     </View>
                   )
                 )}
 
                 {/* Participants picker */}
                 {showParticipants && (
-                  <View style={styles.participantsPicker}>
+                  <View style={[
+                    styles.participantsPicker,
+                    { backgroundColor: isDark ? '#252530' : '#FAFAFA', borderColor: bdr },
+                  ]}>
                     <TextInput
-                      style={styles.participantSearchInput}
+                      style={[
+                        styles.participantSearchInput,
+                        { backgroundColor: card, borderColor: bdr, color: txt },
+                      ]}
                       placeholder="Search users..."
-                      placeholderTextColor="#AAAABC"
+                      placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
                       value={participantSearch}
                       onChangeText={setParticipantSearch}
                     />
                     <ScrollView style={{ maxHeight: 180 }} nestedScrollEnabled>
                       {filteredUsers.length === 0 ? (
-                        <Text style={styles.noUsersText}>No users found</Text>
+                        <Text style={[styles.noUsersText, { color: sub }]}>No users found</Text>
                       ) : (
                         filteredUsers.map(u => {
                           const isSelected = participants.some(p => p.id === u.id);
                           return (
                             <TouchableOpacity
                               key={u.id}
-                              style={styles.userRow}
+                              style={[styles.userRow, { borderBottomColor: bdr }]}
                               onPress={() => toggleParticipant(u)}
                             >
                               <View style={styles.userAvatar}>
@@ -971,8 +1009,12 @@ export default function CalendarScreen() {
                                   {((u.first_name || u.username || 'U')[0] || 'U').toUpperCase()}
                                 </Text>
                               </View>
-                              <Text style={styles.userName}>{u.first_name || u.username || 'User'}</Text>
-                              <View style={[styles.userCheckbox, isSelected && styles.userCheckboxActive]}>
+                              <Text style={[styles.userName, { color: txt }]}>{u.first_name || u.username || 'User'}</Text>
+                              <View style={[
+                                styles.userCheckbox,
+                                { borderColor: isDark ? '#3A3A48' : '#DEDEE8' },
+                                isSelected && styles.userCheckboxActive,
+                              ]}>
                                 {isSelected && <Text style={styles.userCheckmark}>✓</Text>}
                               </View>
                             </TouchableOpacity>
@@ -994,8 +1036,11 @@ export default function CalendarScreen() {
 
                 {/* Buttons */}
                 <View style={[styles.modalBtns, { marginBottom: 28 }]}>
-                  <TouchableOpacity style={styles.cancelBtn} onPress={closeModal}>
-                    <Text style={styles.cancelBtnText}>Cancel</Text>
+                  <TouchableOpacity
+                    style={[styles.cancelBtn, { borderColor: bdr, backgroundColor: card }]}
+                    onPress={closeModal}
+                  >
+                    <Text style={[styles.cancelBtnText, { color: sub }]}>Cancel</Text>
                   </TouchableOpacity>
                   <TouchableOpacity style={styles.saveBtn} onPress={saveEvent}>
                     <Text style={styles.saveBtnText}>Create event</Text>
