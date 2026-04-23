@@ -1,17 +1,105 @@
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity, Modal,
-  TextInput, StatusBar, Platform, Animated, ScrollView,
+  View, Text, StyleSheet, FlatList, TouchableOpacity,
+  TextInput, StatusBar, Platform, ScrollView, ActivityIndicator,
+  Linking, RefreshControl, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useState, useContext, useRef } from 'react';
-import { useNavigation } from '@react-navigation/native';
+import { useState, useContext, useEffect, useCallback } from 'react';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import SidebarMenu from '../components/SidebarMenu';
+import NotificationBell from '../components/NotificationBell';
 import { ThemeContext } from '../context/ThemeContext';
-import { sanitizeLabel, sanitizeBody } from '../services/InputSanitizer';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getAccessToken } from '../services/ApiService';
 
-const DOCS_KEY  = 'DYUKSA_DOCUMENTS';
-const DOC_TYPES = { Doc: '#4ECDC4', Report: '#FBBF24', Note: '#A78BFA' };
+const DOCS_API = 'http://192.168.1.164:8000/api/v1/documents/all/';
+
+// File type → icon + color mapping
+const TYPE_META = {
+  // Images
+  png:  { icon: '🖼️', color: '#A78BFA', group: 'image' },
+  jpg:  { icon: '🖼️', color: '#A78BFA', group: 'image' },
+  jpeg: { icon: '🖼️', color: '#A78BFA', group: 'image' },
+  gif:  { icon: '🖼️', color: '#A78BFA', group: 'image' },
+  webp: { icon: '🖼️', color: '#A78BFA', group: 'image' },
+  svg:  { icon: '🖼️', color: '#A78BFA', group: 'image' },
+  // Documents
+  pdf:  { icon: '📕', color: '#EF4444', group: 'document' },
+  doc:  { icon: '📘', color: '#3B82F6', group: 'document' },
+  docx: { icon: '📘', color: '#3B82F6', group: 'document' },
+  xls:  { icon: '📗', color: '#4ADE80', group: 'document' },
+  xlsx: { icon: '📗', color: '#4ADE80', group: 'document' },
+  csv:  { icon: '📗', color: '#4ADE80', group: 'document' },
+  ppt:  { icon: '📙', color: '#F97316', group: 'document' },
+  pptx: { icon: '📙', color: '#F97316', group: 'document' },
+  txt:  { icon: '📄', color: '#9898A6', group: 'document' },
+  // Code
+  js:   { icon: '💻', color: '#FBBF24', group: 'code' },
+  ts:   { icon: '💻', color: '#3B82F6', group: 'code' },
+  tsx:  { icon: '💻', color: '#4ECDC4', group: 'code' },
+  jsx:  { icon: '💻', color: '#4ECDC4', group: 'code' },
+  py:   { icon: '💻', color: '#4ADE80', group: 'code' },
+  json: { icon: '💻', color: '#FBBF24', group: 'code' },
+  // Archives
+  zip:  { icon: '📦', color: '#888899', group: 'other' },
+  rar:  { icon: '📦', color: '#888899', group: 'other' },
+  '7z': { icon: '📦', color: '#888899', group: 'other' },
+  // Video
+  mp4:  { icon: '🎬', color: '#F472B6', group: 'other' },
+  mov:  { icon: '🎬', color: '#F472B6', group: 'other' },
+  avi:  { icon: '🎬', color: '#F472B6', group: 'other' },
+};
+
+const FALLBACK_META = { icon: '📄', color: '#9898A6', group: 'other' };
+
+// Type groups for filter pills
+const TYPE_GROUPS = [
+  { id: 'all',      label: 'All Types' },
+  { id: 'image',    label: 'Images' },
+  { id: 'document', label: 'Documents' },
+  { id: 'code',     label: 'Code' },
+  { id: 'other',    label: 'Other' },
+];
+
+const SOURCE_GROUPS = [
+  { id: 'all',     label: 'All' },
+  { id: 'Project', label: 'Project' },
+  { id: 'Task',    label: 'Task' },
+];
+
+// Extract file extension (lowercase), handling multi-dot filenames
+const getExt = (name) => {
+  if (!name) return '';
+  const parts = name.split('.');
+  if (parts.length < 2) return '';
+  return parts[parts.length - 1].toLowerCase().trim();
+};
+
+// Extract project ID from S3 URL path like:
+// .../projects/63/documents/... → "63"
+// .../task_documents/task_490/... → null (it's a task doc)
+const extractProjectId = (fileUrl) => {
+  if (!fileUrl) return null;
+  const m = fileUrl.match(/\/projects\/(\d+)\//);
+  return m ? m[1] : null;
+};
+
+// Pretty relative date
+const formatRelative = (iso) => {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    const now = new Date();
+    const diffMs = now - d;
+    const diffMin = Math.floor(diffMs / 60000);
+    const diffHr  = Math.floor(diffMs / 3600000);
+    const diffDay = Math.floor(diffMs / 86400000);
+    if (diffMin < 1)  return 'just now';
+    if (diffMin < 60) return `${diffMin}m ago`;
+    if (diffHr  < 24) return `${diffHr}h ago`;
+    if (diffDay < 7)  return `${diffDay}d ago`;
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  } catch { return ''; }
+};
 
 export default function DocumentsScreen() {
   const navigation = useNavigation();
@@ -24,249 +112,294 @@ export default function DocumentsScreen() {
   const bdr  = isDark ? '#252530' : '#EBEBF0';
   const fs   = s => s * fontScale;
 
-  const [docs,         setDocs]         = useState([]);
-  const [modalVisible, setModalVisible] = useState(false);
-  const [editorDoc,    setEditorDoc]    = useState(null); // null = list, obj = editing
-  const [docName,      setDocName]      = useState('');
-  const [docType,      setDocType]      = useState('Doc');
+  const [docs,       setDocs]       = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error,      setError]      = useState(null);
+  const [search,     setSearch]     = useState('');
+  const [typeFilter, setTypeFilter] = useState('all');   // all / image / document / code / other
+  const [sourceFilter, setSourceFilter] = useState('all'); // all / Project / Task
 
-  // Slide animation for New Doc panel
-  const slideAnim = useRef(new Animated.Value(-500)).current;
-  const animated  = useRef(false);
+  // ── Fetch all documents from backend ──
+  const fetchDocs = useCallback(async () => {
+    try {
+      setError(null);
+      const token = await getAccessToken();
+      const res = await fetch(DOCS_API, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || errData.message || `Error ${res.status}`);
+      }
+      const data = await res.json();
+      // Backend returns { message, total_files, documents: [...] }
+      const list = Array.isArray(data.documents) ? data.documents : [];
+      setDocs(list);
+    } catch (err) {
+      setError(err.message || 'Failed to load documents');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
 
-  const openModal = () => {
-    setModalVisible(true);
-    animated.current = true;
-    Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, tension: 80, friction: 12 }).start();
+  useFocusEffect(useCallback(() => { fetchDocs(); }, [fetchDocs]));
+
+  const onRefresh = () => {
+    setRefreshing(true);
+    fetchDocs();
   };
 
-  const closeModal = () => {
-    animated.current = false;
-    Animated.timing(slideAnim, { toValue: -500, duration: 250, useNativeDriver: true })
-      .start(() => { setModalVisible(false); setDocName(''); setDocType('Doc'); });
+  // ── Open document in native viewer / browser ──
+  const openDoc = async (doc) => {
+    if (!doc.file_url) {
+      Alert.alert('Unavailable', 'This document does not have a viewable URL.');
+      return;
+    }
+    try {
+      const supported = await Linking.canOpenURL(doc.file_url);
+      if (supported) {
+        await Linking.openURL(doc.file_url);
+      } else {
+        Alert.alert('Cannot open', 'Your device cannot open this file type.');
+      }
+    } catch {
+      Alert.alert('Error', 'Unable to open document.');
+    }
   };
 
-  const addDoc = () => {
-    const name = sanitizeLabel(docName);
-    if (!name) return;
-    const newDoc = {
-      id:        Date.now().toString(),
-      name,
-      type:      docType,
-      content:   '',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    const updated = [newDoc, ...docs];
-    setDocs(updated);
-    AsyncStorage.setItem(DOCS_KEY, JSON.stringify(updated));
-    closeModal();
-    // Open editor immediately
-    setEditorDoc(newDoc);
-  };
+  // ── Filter + search logic ──
+  const filtered = docs.filter(d => {
+    // Search match
+    const q = search.trim().toLowerCase();
+    if (q && !(d.file_name || '').toLowerCase().includes(q)) return false;
+    // Type filter
+    if (typeFilter !== 'all') {
+      const ext = getExt(d.file_name);
+      const group = (TYPE_META[ext] || FALLBACK_META).group;
+      if (group !== typeFilter) return false;
+    }
+    // Source filter
+    if (sourceFilter !== 'all' && d.source !== sourceFilter) return false;
+    return true;
+  });
 
-  const saveDocContent = (id, content) => {
-    const sanitized = sanitizeBody(content);
-    const updated = docs.map(d =>
-      d.id === id ? { ...d, content: sanitized, updatedAt: new Date().toISOString() } : d
-    );
-    setDocs(updated);
-    AsyncStorage.setItem(DOCS_KEY, JSON.stringify(updated));
-  };
+  // ── Render row ──
+  const renderItem = ({ item }) => {
+    const ext = getExt(item.file_name);
+    const meta = TYPE_META[ext] || FALLBACK_META;
+    const displayExt = ext ? ext.toUpperCase() : 'FILE';
+    const projectId = extractProjectId(item.file_url);
 
-  const deleteDoc = (id) => {
-    const updated = docs.filter(d => d.id !== id);
-    setDocs(updated);
-    AsyncStorage.setItem(DOCS_KEY, JSON.stringify(updated));
-    if (editorDoc?.id === id) setEditorDoc(null);
-  };
-
-  const formatDate = iso => {
-    try { return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }); }
-    catch { return ''; }
-  };
-
-  // ── Document Editor ────────────────────────────────────────────────────
-  if (editorDoc) {
-    const doc = docs.find(d => d.id === editorDoc.id) || editorDoc;
     return (
-      <SafeAreaView style={[styles.safe, { backgroundColor: bg }]}>
-        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={isDark ? '#0D0D0F' : '#fff'} translucent={false} />
+      <TouchableOpacity
+        style={[styles.row, { backgroundColor: card, borderColor: bdr }]}
+        onPress={() => openDoc(item)}
+        activeOpacity={0.7}
+      >
+        {/* Icon tile */}
+        <View style={[styles.iconTile, { backgroundColor: meta.color + '22' }]}>
+          <Text style={{ fontSize: 20 }}>{meta.icon}</Text>
+        </View>
 
-        {/* Editor navbar */}
-        <View style={[styles.editorNav, { backgroundColor: card, borderBottomColor: bdr }]}>
-          <TouchableOpacity style={styles.backBtn} onPress={() => setEditorDoc(null)}>
-            <Text style={[styles.backText, { color: sub }]}>← Docs</Text>
-          </TouchableOpacity>
-          <View style={{ flex: 1, alignItems: 'center' }}>
-            <Text style={[styles.editorTitle, { color: txt, fontSize: fs(14) }]} numberOfLines={1}>{doc.name}</Text>
-            <Text style={[styles.editorMeta, { color: sub, fontSize: fs(11) }]}>
-              {doc.type} · Edited {formatDate(doc.updatedAt)}
-            </Text>
-          </View>
-          <TouchableOpacity
-            style={styles.deleteDocBtn}
-            onPress={() => {
-              deleteDoc(doc.id);
-            }}
+        {/* Main content */}
+        <View style={{ flex: 1, marginRight: 8 }}>
+          <Text
+            style={[styles.fileName, { color: txt, fontSize: fs(13) }]}
+            numberOfLines={1}
           >
-            <Text style={{ fontSize: 16 }}>🗑</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Toolbar */}
-        <View style={[styles.toolbar, { backgroundColor: card, borderBottomColor: bdr }]}>
-          {['Bold', 'Italic', 'List', 'H1', 'H2'].map(tool => (
-            <TouchableOpacity key={tool} style={[styles.toolBtn, { borderColor: bdr }]}>
-              <Text style={[styles.toolText, { color: sub, fontSize: fs(11) }]}>{tool}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-
-        {/* Content editor */}
-        <ScrollView style={{ flex: 1, padding: 16 }} keyboardShouldPersistTaps="handled">
-          <TextInput
-            style={[styles.editor, { color: txt, fontSize: fs(15) }]}
-            multiline
-            autoFocus={!doc.content}
-            textAlignVertical="top"
-            placeholder="Start writing your document..."
-            placeholderTextColor={sub}
-            value={doc.content}
-            onChangeText={text => saveDocContent(doc.id, text)}
-          />
-        </ScrollView>
-
-        {/* Word count */}
-        <View style={[styles.statusBar, { backgroundColor: card, borderTopColor: bdr }]}>
-          <Text style={[styles.statusText, { color: sub, fontSize: fs(11) }]}>
-            {(doc.content || '').trim().split(/\s+/).filter(Boolean).length} words ·{' '}
-            {(doc.content || '').length} characters
+            {item.file_name}
           </Text>
-          <View style={[styles.typePill, { backgroundColor: DOC_TYPES[doc.type] + '20' }]}>
-            <Text style={[styles.typePillText, { color: DOC_TYPES[doc.type] }]}>{doc.type}</Text>
+          <View style={styles.metaRow}>
+            {/* Type pill */}
+            <View style={[styles.typePill, { backgroundColor: meta.color + '22' }]}>
+              <Text style={[styles.typePillText, { color: meta.color, fontSize: fs(9) }]}>
+                {displayExt}
+              </Text>
+            </View>
+            {/* Source pill */}
+            <View style={[styles.sourcePill, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}>
+              <Text style={[styles.sourcePillText, { color: sub, fontSize: fs(9) }]}>
+                {item.source === 'Task' ? `Task${item.task_id ? ` #${item.task_id}` : ''}` : 'Project'}
+                {projectId ? ` · ${projectId}` : ''}
+              </Text>
+            </View>
           </View>
+          {item.task_heading ? (
+            <Text
+              style={[styles.taskHeading, { color: sub, fontSize: fs(10) }]}
+              numberOfLines={1}
+            >
+              📋 {item.task_heading}
+            </Text>
+          ) : null}
+          <Text style={[styles.dateText, { color: sub, fontSize: fs(10) }]}>
+            {formatRelative(item.updated_at || item.uploaded_at)}
+          </Text>
         </View>
-      </SafeAreaView>
-    );
-  }
 
-  // ── Document List ──────────────────────────────────────────────────────
+        {/* Chevron */}
+        <Text style={{ color: sub, fontSize: 18 }}>›</Text>
+      </TouchableOpacity>
+    );
+  };
+
+  // ── Chip helper ──
+  const Chip = ({ id, label, active, onPress, color }) => (
+    <TouchableOpacity
+      onPress={onPress}
+      style={[
+        styles.chip,
+        { backgroundColor: card, borderColor: bdr },
+        active && { backgroundColor: isDark ? '#4ECDC4' : '#1A1A2E', borderColor: isDark ? '#4ECDC4' : '#1A1A2E' },
+      ]}
+      activeOpacity={0.7}
+    >
+      <Text
+        style={[
+          styles.chipText,
+          { color: sub },
+          active && { color: isDark ? '#0D0D0F' : '#FFFFFF', fontWeight: '700' },
+        ]}
+      >
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: bg }]}>
-      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={isDark ? '#0D0D0F' : '#fff'} translucent={false} />
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={card} translucent={false} />
 
+      {/* Navbar */}
       <View style={[styles.navbar, { backgroundColor: card, borderBottomColor: bdr }]}>
         <View style={styles.navLeft}>
           <SidebarMenu activeScreen="Docs" />
-          <View style={styles.logoBox}><Text style={styles.logoText}>D</Text></View>
-          <Text style={[styles.brandName, { color: txt }]}>Documents</Text>
+          <View style={styles.logoBox}>
+            <Text style={styles.logoText}>D</Text>
+          </View>
+          <Text style={[styles.brandName, { color: txt, fontSize: fs(15) }]}>Documents</Text>
         </View>
         <View style={styles.navRight}>
-          <TouchableOpacity style={[styles.navIconBtn, { borderColor: bdr }]} onPress={() => navigation.navigate('Chat')}>
+          <TouchableOpacity style={[styles.navIconBtn, { backgroundColor: isDark ? '#252530' : '#FAFAFA', borderColor: bdr }]}>
             <Text style={styles.navIcon}>💬</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.navIconBtn, { borderColor: bdr }]}><Text style={styles.navIcon}>🔔</Text></TouchableOpacity>
+          <NotificationBell />
         </View>
       </View>
 
+      {/* Sub header with count */}
       <View style={[styles.subHeader, { backgroundColor: card, borderBottomColor: bdr }]}>
         <View>
-          <Text style={[styles.pageTitle, { color: txt, fontSize: fs(17) }]}>Documents</Text>
-          <Text style={[styles.pageSub, { color: sub, fontSize: fs(12) }]}>{docs.length} document{docs.length !== 1 ? 's' : ''}</Text>
+          <Text style={[styles.pageTitle, { color: txt, fontSize: fs(17) }]}>All Documents</Text>
+          <Text style={[styles.pageSub, { color: sub, fontSize: fs(12) }]}>
+            {loading ? 'Loading…' : `${filtered.length} of ${docs.length} document${docs.length !== 1 ? 's' : ''}`}
+          </Text>
         </View>
-        <TouchableOpacity style={styles.newBtn} onPress={openModal}>
-          <Text style={styles.newBtnText}>+ New Doc</Text>
-        </TouchableOpacity>
       </View>
 
-      {docs.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Text style={{ fontSize: 52, opacity: 0.3 }}>📄</Text>
-          <Text style={[styles.emptyTitle, { color: txt }]}>No documents yet</Text>
-          <Text style={[styles.emptySub, { color: sub }]}>Create your first document</Text>
-          <TouchableOpacity style={[styles.newBtn, { marginTop: 12 }]} onPress={openModal}>
-            <Text style={styles.newBtnText}>+ Create Document</Text>
+      {/* Search bar */}
+      <View style={{ paddingHorizontal: 12, paddingTop: 10 }}>
+        <View style={[styles.searchWrap, { backgroundColor: card, borderColor: bdr }]}>
+          <Text style={{ marginRight: 6, fontSize: 14 }}>🔍</Text>
+          <TextInput
+            style={[styles.searchInput, { color: txt, fontSize: fs(13) }]}
+            placeholder="Search documents..."
+            placeholderTextColor={sub}
+            value={search}
+            onChangeText={setSearch}
+            autoCapitalize="none"
+          />
+          {search.length > 0 && (
+            <TouchableOpacity onPress={() => setSearch('')}>
+              <Text style={{ color: sub, fontSize: 14, paddingHorizontal: 6 }}>✕</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+
+      {/* Type filter chips */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={{ marginTop: 10, maxHeight: 40 }}
+        contentContainerStyle={{ paddingHorizontal: 12, gap: 6 }}
+      >
+        {TYPE_GROUPS.map(g => (
+          <Chip
+            key={g.id}
+            label={g.label}
+            active={typeFilter === g.id}
+            onPress={() => setTypeFilter(g.id)}
+          />
+        ))}
+      </ScrollView>
+
+      {/* Source filter chips */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={{ marginTop: 6, maxHeight: 40 }}
+        contentContainerStyle={{ paddingHorizontal: 12, gap: 6 }}
+      >
+        {SOURCE_GROUPS.map(g => (
+          <Chip
+            key={g.id}
+            label={g.label}
+            active={sourceFilter === g.id}
+            onPress={() => setSourceFilter(g.id)}
+          />
+        ))}
+      </ScrollView>
+
+      {/* List / loading / empty / error */}
+      {loading && docs.length === 0 ? (
+        <View style={styles.centerState}>
+          <ActivityIndicator size="large" color="#4ECDC4" />
+          <Text style={[styles.emptySub, { color: sub, marginTop: 12 }]}>Loading documents…</Text>
+        </View>
+      ) : error ? (
+        <View style={styles.centerState}>
+          <Text style={{ fontSize: 40, opacity: 0.4 }}>⚠️</Text>
+          <Text style={[styles.emptyTitle, { color: txt }]}>Couldn't load documents</Text>
+          <Text style={[styles.emptySub, { color: sub, textAlign: 'center', marginTop: 4 }]}>{error}</Text>
+          <TouchableOpacity style={styles.retryBtn} onPress={() => { setLoading(true); fetchDocs(); }}>
+            <Text style={styles.retryBtnText}>Retry</Text>
           </TouchableOpacity>
+        </View>
+      ) : filtered.length === 0 ? (
+        <View style={styles.centerState}>
+          <Text style={{ fontSize: 52, opacity: 0.3 }}>📄</Text>
+          <Text style={[styles.emptyTitle, { color: txt }]}>
+            {docs.length === 0 ? 'No documents yet' : 'No matching documents'}
+          </Text>
+          <Text style={[styles.emptySub, { color: sub }]}>
+            {docs.length === 0
+              ? 'Upload files from inside any project to see them here.'
+              : 'Try changing filters or search terms.'}
+          </Text>
         </View>
       ) : (
         <FlatList
-          data={docs}
-          keyExtractor={i => i.id}
-          contentContainerStyle={{ padding: 12 }}
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={[styles.card, { backgroundColor: card, borderColor: bdr }]}
-              onPress={() => setEditorDoc(item)}
-            >
-              <View style={[styles.docIcon, { backgroundColor: DOC_TYPES[item.type] + '20' }]}>
-                <Text style={{ fontSize: 18 }}>📄</Text>
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.docName, { color: txt, fontSize: fs(14) }]}>{item.name}</Text>
-                <Text style={[styles.docMeta, { color: sub, fontSize: fs(12) }]}>
-                  {item.content
-                    ? item.content.slice(0, 50) + (item.content.length > 50 ? '…' : '')
-                    : 'Empty document'}
-                </Text>
-                <Text style={[styles.docDate, { color: sub, fontSize: fs(11) }]}>{formatDate(item.updatedAt)}</Text>
-              </View>
-              <View style={[styles.typeBadge, { backgroundColor: DOC_TYPES[item.type] + '20' }]}>
-                <Text style={[styles.typeText, { color: DOC_TYPES[item.type] }]}>{item.type}</Text>
-              </View>
-            </TouchableOpacity>
-          )}
+          data={filtered}
+          keyExtractor={(item, idx) => String(item.id) + '_' + idx}
+          contentContainerStyle={{ padding: 12, paddingBottom: 40 }}
+          renderItem={renderItem}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor="#4ECDC4"
+              colors={['#4ECDC4']}
+            />
+          }
+          ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
         />
-      )}
-
-      {/* New Doc Modal — slides from top */}
-      {modalVisible && (
-        <Modal visible transparent animationType="none" onRequestClose={closeModal}>
-          <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={closeModal} />
-          <Animated.View style={[styles.topPanel, { transform: [{ translateY: slideAnim }] }]}>
-            <SafeAreaView>
-              <View style={styles.handle} />
-              <View style={styles.panelContent}>
-                <View style={styles.panelHeader}>
-                  <Text style={styles.modalTitle}>New Document</Text>
-                  <TouchableOpacity style={styles.closeCircle} onPress={closeModal}>
-                    <Text style={styles.closeCircleText}>✕</Text>
-                  </TouchableOpacity>
-                </View>
-                <Text style={styles.fieldLabel}>Document Name *</Text>
-                <TextInput
-                  placeholder="Enter document name..."
-                  placeholderTextColor="#AAAABC"
-                  style={styles.input}
-                  value={docName}
-                  onChangeText={setDocName}
-                  autoFocus
-                  maxLength={200}
-                />
-                <Text style={styles.fieldLabel}>Type</Text>
-                <View style={{ flexDirection: 'row', gap: 8, marginBottom: 24 }}>
-                  {Object.keys(DOC_TYPES).map(t => (
-                    <TouchableOpacity
-                      key={t}
-                      style={[styles.typeChip, docType === t && { backgroundColor: '#1A1A2E', borderColor: '#1A1A2E' }]}
-                      onPress={() => setDocType(t)}
-                    >
-                      <Text style={[styles.typeChipText, docType === t && { color: '#fff' }]}>{t}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-                <View style={styles.modalBtns}>
-                  <TouchableOpacity style={styles.cancelBtn} onPress={closeModal}>
-                    <Text style={styles.cancelBtnText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.newBtn} onPress={addDoc}>
-                    <Text style={styles.newBtnText}>Create & Edit</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </SafeAreaView>
-          </Animated.View>
-        </Modal>
       )}
     </SafeAreaView>
   );
@@ -274,58 +407,69 @@ export default function DocumentsScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1 },
-  navbar: { backgroundColor: '#fff', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, elevation: 2 },
-  navLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+
+  // Navbar
+  navbar: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, elevation: 2,
+  },
+  navLeft:  { flexDirection: 'row', alignItems: 'center', gap: 10 },
   navRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  logoBox: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center' },
+  logoBox:  { width: 32, height: 32, borderRadius: 8, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center' },
   logoText: { color: '#4ECDC4', fontSize: 15, fontWeight: '800' },
-  brandName: { fontSize: 15, fontWeight: '700' },
-  navIconBtn: { width: 36, height: 36, borderRadius: 8, borderWidth: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#FAFAFA' },
+  brandName:{ fontWeight: '700' },
+  navIconBtn: { width: 36, height: 36, borderRadius: 8, borderWidth: 1, justifyContent: 'center', alignItems: 'center' },
   navIcon: { fontSize: 16 },
-  subHeader: { paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+
+  // Sub header
+  subHeader: { paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1 },
   pageTitle: { fontWeight: '700' },
   pageSub: { marginTop: 2 },
-  newBtn: { backgroundColor: '#1A1A2E', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
-  newBtnText: { color: '#fff', fontSize: 13, fontWeight: '600' },
-  emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 8 },
+
+  // Search
+  searchWrap: {
+    flexDirection: 'row', alignItems: 'center',
+    borderWidth: 1, borderRadius: 10,
+    paddingHorizontal: 12, height: 42,
+  },
+  searchInput: { flex: 1, paddingVertical: 0 },
+
+  // Chips
+  chip: {
+    paddingHorizontal: 12, paddingVertical: 6,
+    borderRadius: 20, borderWidth: 1,
+    height: 30, justifyContent: 'center', alignItems: 'center',
+  },
+  chipText: { fontSize: 12, fontWeight: '500' },
+
+  // Rows
+  row: {
+    flexDirection: 'row', alignItems: 'center',
+    padding: 12, borderRadius: 12, borderWidth: 1, gap: 12,
+  },
+  iconTile: {
+    width: 44, height: 44, borderRadius: 10,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  fileName: { fontWeight: '600', marginBottom: 4 },
+  metaRow:  { flexDirection: 'row', gap: 6, marginBottom: 4 },
+  typePill: { borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
+  typePillText: { fontWeight: '700', letterSpacing: 0.3 },
+  sourcePill: { borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2, borderWidth: 1 },
+  sourcePillText: { fontWeight: '600' },
+  taskHeading: { marginBottom: 2 },
+  dateText:    {},
+
+  // Empty / loading / error states
+  centerState: {
+    flex: 1, justifyContent: 'center', alignItems: 'center',
+    padding: 24, gap: 8,
+  },
   emptyTitle: { fontSize: 16, fontWeight: '600' },
-  emptySub: { fontSize: 13 },
-  card: { borderRadius: 12, padding: 14, marginBottom: 8, borderWidth: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
-  docIcon: { width: 44, height: 44, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
-  docName: { fontWeight: '600', marginBottom: 2 },
-  docMeta: { marginTop: 1 },
-  docDate: { marginTop: 3 },
-  typeBadge: { borderRadius: 20, paddingHorizontal: 10, paddingVertical: 3 },
-  typeText: { fontSize: 11, fontWeight: '600' },
-  // Editor styles
-  editorNav: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1, gap: 8 },
-  backBtn: { paddingRight: 8 },
-  backText: { fontSize: 14, fontWeight: '500' },
-  editorTitle: { fontWeight: '700' },
-  editorMeta: { marginTop: 1 },
-  deleteDocBtn: { width: 36, height: 36, borderRadius: 8, backgroundColor: 'rgba(248,113,113,0.08)', justifyContent: 'center', alignItems: 'center' },
-  toolbar: { flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 6, borderBottomWidth: 1, gap: 6 },
-  toolBtn: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6, borderWidth: 1 },
-  toolText: { fontWeight: '600' },
-  editor: { flex: 1, lineHeight: 26, minHeight: 400 },
-  statusBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 8, borderTopWidth: 1 },
-  statusText: { fontWeight: '400' },
-  typePill: { borderRadius: 20, paddingHorizontal: 10, paddingVertical: 3 },
-  typePillText: { fontSize: 11, fontWeight: '600' },
-  // Modal
-  modalOverlay: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.45)' },
-  topPanel: { position: 'absolute', top: 0, left: 0, right: 0, backgroundColor: '#fff', borderBottomLeftRadius: 24, borderBottomRightRadius: 24, shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 16, elevation: 20 },
-  handle: { width: 40, height: 4, backgroundColor: '#DEDEE8', borderRadius: 2, alignSelf: 'center', marginTop: 8, marginBottom: 4 },
-  panelContent: { paddingHorizontal: 20, paddingBottom: 24 },
-  panelHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, marginTop: 4 },
-  closeCircle: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#F5F5F7', justifyContent: 'center', alignItems: 'center' },
-  closeCircleText: { color: '#888899', fontSize: 13, fontWeight: '600' },
-  modalTitle: { fontSize: 20, fontWeight: '700', color: '#1A1A2E' },
-  fieldLabel: { fontSize: 12, fontWeight: '600', color: '#888899', marginBottom: 8, letterSpacing: 0.3 },
-  input: { backgroundColor: '#F5F5F7', borderRadius: 10, paddingHorizontal: 14, height: 48, fontSize: 14, color: '#1A1A2E', marginBottom: 16, borderWidth: 1.5, borderColor: '#EBEBF0' },
-  typeChip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: '#EBEBF0' },
-  typeChipText: { fontSize: 13, color: '#888899', fontWeight: '500' },
-  modalBtns: { flexDirection: 'row', gap: 10 },
-  cancelBtn: { flex: 1, borderWidth: 1, borderColor: '#EBEBF0', borderRadius: 10, height: 48, justifyContent: 'center', alignItems: 'center' },
-  cancelBtnText: { color: '#888899', fontSize: 14, fontWeight: '500' },
+  emptySub:   { fontSize: 13 },
+  retryBtn: {
+    marginTop: 16, backgroundColor: '#4ECDC4',
+    paddingHorizontal: 24, paddingVertical: 10, borderRadius: 8,
+  },
+  retryBtnText: { color: '#0D0D0F', fontSize: 14, fontWeight: '700' },
 });

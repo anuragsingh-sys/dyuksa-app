@@ -1,6 +1,6 @@
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal,
-  TextInput, StatusBar, Platform, Alert, Animated,
+  TextInput, StatusBar, Platform, Alert, Animated, Dimensions, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useState, useCallback, useContext, useRef, useEffect } from 'react';
@@ -9,10 +9,15 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import SidebarMenu from '../components/SidebarMenu';
 import { ThemeContext } from '../context/ThemeContext';
+import { AuthContext } from '../context/AuthContext';
 import NotificationBell from '../components/NotificationBell';
 import { NotificationsContext } from '../context/NotificationsContext';
-import { getUsers } from '../services/ApiService';
+import { getUsers, getAccessToken } from '../services/ApiService';
 import * as Notifications from 'expo-notifications';
+
+const SCREEN_WIDTH = Dimensions.get('window').width;
+const DAILY_UPDATE_STORAGE_KEY = 'DYUKSA_DAILY_UPDATES'; // local cache: { 'YYYY-MM-DD': { priorities, progress, blockers, upcoming } }
+const DAILY_UPDATE_API = 'http://192.168.1.164:8000/api/v1/daily-updates/';
 
 const STORAGE_KEY = 'DYUKSA_QUICK_TASKS';
 const HOURS = Array.from({ length: 16 }, (_, i) => i + 7); // 07:00 to 22:00
@@ -32,6 +37,8 @@ export default function CalendarScreen() {
   const route       = useRoute();
   const { theme }   = useContext(ThemeContext);
   const { addNotification } = useContext(NotificationsContext);
+  const { user }    = useContext(AuthContext);
+  const currentUserId = user?.id ?? null;
   const isDark = theme === 'Dark';
   const bg   = isDark ? '#0D0D0F' : '#F5F5F7';
   const card = isDark ? '#1A1A20' : '#FFFFFF';
@@ -76,15 +83,53 @@ export default function CalendarScreen() {
   const [participants,    setParticipants]    = useState([]); // [{id, name, avatar}]
   const [showParticipants,setShowParticipants]= useState(false);
   const [participantSearch, setParticipantSearch] = useState('');
+  // Ask Dyuksa AI agent input
+  const [askDyuksaText, setAskDyuksaText] = useState('');
+  const [askDyuksaLoading, setAskDyuksaLoading] = useState(false);
+
+  const handleAskDyuksa = async () => {
+    if (!askDyuksaText.trim()) return;
+    // TODO: Wire to backend AI endpoint later — for now show placeholder
+    setAskDyuksaLoading(true);
+    setTimeout(() => {
+      setAskDyuksaLoading(false);
+      Alert.alert(
+        'Ask Dyuksa',
+        'AI event parsing is coming soon. Backend endpoint will parse: "' + askDyuksaText + '"',
+        [{ text: 'OK' }]
+      );
+      setAskDyuksaText('');
+    }, 400);
+  };
   const [allUsers,        setAllUsers]        = useState([]);
   const slideAnim = useRef(new Animated.Value(-600)).current;
+
+  // ── Daily Update panel state ──
+  const [dailyPanelDate,   setDailyPanelDate]   = useState(null); // Date object when panel is open, null when closed
+  const [dailyUpdates,     setDailyUpdates]     = useState({});   // MY updates: { 'YYYY-MM-DD': { id, priorities, progress, blockers, upcoming } }
+  const [teamUpdates,      setTeamUpdates]      = useState({});   // TEAM updates: { 'YYYY-MM-DD': [{id, user, user_name, priorities, progress, blockers, upcoming}, ...] }
+  const [loadingUpdates,   setLoadingUpdates]   = useState(false);
+  const [editingUpdate,    setEditingUpdate]    = useState(false);
+  const [editPriorities,   setEditPriorities]   = useState('');
+  const [editProgress,     setEditProgress]     = useState('');
+  const [editBlockers,     setEditBlockers]     = useState('');
+  const [editUpcoming,     setEditUpcoming]     = useState('');
+  const dailySlideAnim = useRef(new Animated.Value(0)).current; // 0 = hidden (off-screen right), 1 = visible
 
   useFocusEffect(useCallback(() => {
     AsyncStorage.getItem(STORAGE_KEY).then(data => {
       if (data) setEvents(JSON.parse(data).filter(e => e.type === 'event'));
       else setEvents([]);
     });
-  }, []));
+    // Load daily updates from local cache first (fast), then refresh from backend
+    AsyncStorage.getItem(DAILY_UPDATE_STORAGE_KEY).then(data => {
+      if (data) {
+        try { setDailyUpdates(JSON.parse(data)); } catch { setDailyUpdates({}); }
+      }
+    });
+    // Fetch fresh from backend (will overwrite my updates + populate team updates)
+    fetchDailyUpdates();
+  }, [currentUserId]));
 
   // Fetch all users once for participants list
   useEffect(() => {
@@ -170,6 +215,195 @@ export default function CalendarScreen() {
   const doneEvents   = events.filter(e => e.status === 'Done').length;
   const activeEvents = events.filter(e => e.status === 'Todo' && new Date(e.eventTimestamp || e.eventDate) >= today).length;
   const pendingEvents= events.filter(e => e.status === 'Todo').length;
+
+  // ── Daily Update Panel ──
+
+  // Parse backend 'content' string into our 4-field shape.
+  // Backend format looks like:
+  //   "Daily Update – 23 March 2026\n\nToday's Priorities:-\n...\n\nProgress (Yesterday):-\n...\n\nBlockers / Needs:-\n...\n\nUpcoming:-\n..."
+  const parseContent = (content) => {
+    if (!content || typeof content !== 'string') {
+      return { priorities: '', progress: '', blockers: '', upcoming: '' };
+    }
+    // Try to split into labeled sections; labels may or may not have '-' after ':'
+    // Regex grabs everything between one label and the next (or end of string).
+    const extract = (labelPattern) => {
+      const re = new RegExp(
+        labelPattern + `\\s*:-?\\s*\\n([\\s\\S]*?)(?=\\n\\s*(?:Today's Priorities|Progress \\(Yesterday\\)|Blockers\\s*/\\s*Needs|Upcoming)\\s*:-?|$)`,
+        'i'
+      );
+      const m = content.match(re);
+      return m ? m[1].trim() : '';
+    };
+    return {
+      priorities: extract("Today's Priorities"),
+      progress:   extract("Progress \\(Yesterday\\)"),
+      blockers:   extract("Blockers\\s*/\\s*Needs"),
+      upcoming:   extract("Upcoming"),
+    };
+  };
+
+  // Format a Date into backend-style header date: "23 March 2026"
+  const formatBackendDate = (d) => {
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+  };
+
+  // Fetch all daily updates from backend and split into "my updates" vs "team updates"
+  const fetchDailyUpdates = async () => {
+    try {
+      setLoadingUpdates(true);
+      const token = await getAccessToken();
+      const res = await fetch(DAILY_UPDATE_API, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const results = data.results || (Array.isArray(data) ? data : []);
+
+      // Split into my vs team, keyed by date
+      const myUpdates = {};
+      const teamByDate = {};
+      for (const row of results) {
+        const parsed = parseContent(row.content || '');
+        const record = {
+          id: row.id,
+          user: row.user,
+          user_name: row.user_name || 'Unknown',
+          date: row.date,
+          priorities: parsed.priorities,
+          progress:   parsed.progress,
+          blockers:   parsed.blockers,
+          upcoming:   parsed.upcoming,
+          updatedAt:  row.updated_at,
+        };
+        if (currentUserId != null && row.user === currentUserId) {
+          // This is my update — store in myUpdates keyed by date (latest wins if duplicates)
+          const existing = myUpdates[row.date];
+          if (!existing || new Date(row.updated_at) > new Date(existing.updatedAt)) {
+            myUpdates[row.date] = record;
+          }
+        } else {
+          // Team update
+          if (!teamByDate[row.date]) teamByDate[row.date] = [];
+          teamByDate[row.date].push(record);
+        }
+      }
+      setDailyUpdates(prev => ({ ...prev, ...myUpdates }));
+      setTeamUpdates(teamByDate);
+      // Also persist my updates to local cache for offline reads
+      AsyncStorage.setItem(DAILY_UPDATE_STORAGE_KEY, JSON.stringify(myUpdates)).catch(() => {});
+    } catch {
+      // Silent — just means no updates shown
+    } finally {
+      setLoadingUpdates(false);
+    }
+  };
+
+  const openDailyPanel = (date) => {
+    const d = new Date(date);
+    d.setHours(0, 0, 0, 0);
+    setDailyPanelDate(d);
+    // Reset edit state — load existing update into edit fields if it exists
+    const existing = dailyUpdates[dateKey(d)];
+    setEditPriorities(existing?.priorities || '');
+    setEditProgress(existing?.progress || '');
+    setEditBlockers(existing?.blockers || '');
+    setEditUpcoming(existing?.upcoming || '');
+    setEditingUpdate(false);
+    Animated.timing(dailySlideAnim, { toValue: 1, duration: 280, useNativeDriver: true }).start();
+  };
+
+  const closeDailyPanel = () => {
+    Animated.timing(dailySlideAnim, { toValue: 0, duration: 250, useNativeDriver: true }).start(() => {
+      setDailyPanelDate(null);
+      setEditingUpdate(false);
+    });
+  };
+
+  const saveDailyUpdate = async () => {
+    if (!dailyPanelDate) return;
+    const key = dateKey(dailyPanelDate);
+
+    // Build the 4-field values
+    const priorities = editPriorities.trim();
+    const progress   = editProgress.trim();
+    const blockers   = editBlockers.trim();
+    const upcoming   = editUpcoming.trim();
+
+    // Require at least one field filled in
+    if (!priorities && !progress && !blockers && !upcoming) {
+      Alert.alert('Empty update', 'Please fill in at least one section before submitting.');
+      return;
+    }
+
+    // Combine 4 fields into single 'content' string matching backend convention:
+    //   "Daily Update – 23 March 2026\n\nToday's Priorities:-\n...\n\n..."
+    const header = `Daily Update – ${formatBackendDate(dailyPanelDate)}`;
+    const sections = [
+      `Today's Priorities:-\n${priorities}`,
+      `Progress (Yesterday):-\n${progress}`,
+      `Blockers / Needs:-\n${blockers}`,
+      `Upcoming:-\n${upcoming}`,
+    ];
+    const content = `${header}\n\n${sections.join('\n\n')}`;
+
+    // Optimistic local save first
+    const updated = {
+      ...dailyUpdates,
+      [key]: {
+        priorities, progress, blockers, upcoming,
+        updatedAt: new Date().toISOString(),
+      },
+    };
+    setDailyUpdates(updated);
+    await AsyncStorage.setItem(DAILY_UPDATE_STORAGE_KEY, JSON.stringify(updated)).catch(() => {});
+    setEditingUpdate(false);
+
+    // Send to backend
+    try {
+      const token = await getAccessToken();
+      const res = await fetch(DAILY_UPDATE_API, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ content, date: key }),
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        const msg = errData.detail || errData.message || `Save failed (${res.status})`;
+        Alert.alert(
+          'Saved locally',
+          `Your update was saved on this device but couldn't sync to the server: ${msg}`,
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+      // Success — refresh from backend to pick up the new entry + any team updates
+      fetchDailyUpdates();
+    } catch (err) {
+      Alert.alert(
+        'Saved locally',
+        `Your update was saved on this device. Network error — will sync later.`,
+        [{ text: 'OK' }]
+      );
+    }
+  };
+
+  // Is the panel's date today / past / future?
+  const dailyPanelDateClass = (() => {
+    if (!dailyPanelDate) return 'future';
+    const t = new Date(); t.setHours(0, 0, 0, 0);
+    const panel = new Date(dailyPanelDate); panel.setHours(0, 0, 0, 0);
+    if (panel.getTime() === t.getTime()) return 'today';
+    if (panel.getTime() <  t.getTime()) return 'past';
+    return 'future';
+  })();
 
   // ── Modal ──
   const openModal = (date) => {
@@ -614,6 +848,38 @@ export default function CalendarScreen() {
         ))}
       </View>
 
+      {/* ── Ask Dyuksa AI input bar ── */}
+      <View style={[ad.wrap, { backgroundColor: isDark ? '#1A1A20' : '#FFFFFF', borderColor: bdr }]}>
+        <View style={[ad.inputBox, { backgroundColor: isDark ? '#252530' : '#FAFAFA', borderColor: bdr }]}>
+          <Text style={ad.icon}>✨</Text>
+          <TextInput
+            style={[ad.input, { color: txt }]}
+            value={askDyuksaText}
+            onChangeText={setAskDyuksaText}
+            placeholder='Try: "dyuksa find 30 mins with Shifali tomorrow"'
+            placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
+            returnKeyType="send"
+            onSubmitEditing={handleAskDyuksa}
+            editable={!askDyuksaLoading}
+          />
+          <TouchableOpacity
+            style={[ad.sendBtn, (!askDyuksaText.trim() || askDyuksaLoading) && { opacity: 0.5 }]}
+            onPress={handleAskDyuksa}
+            disabled={!askDyuksaText.trim() || askDyuksaLoading}
+            activeOpacity={0.8}
+          >
+            {askDyuksaLoading ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <>
+                <Text style={ad.sendIcon}>➤</Text>
+                <Text style={ad.sendText}>Ask Dyuksa</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
+      </View>
+
       {/* Main content — full width now, no sidebar */}
       <View style={{ flex: 1 }}>
 
@@ -665,11 +931,15 @@ export default function CalendarScreen() {
                     <Text style={[styles.dayHeaderDay, { color: isToday ? '#4ECDC4' : sub }]}>
                       {DAY_LABELS[d.getDay()]}
                     </Text>
-                    <View style={[styles.dayHeaderNum, isToday && styles.dayHeaderNumToday]}>
+                    <TouchableOpacity
+                      style={[styles.dayHeaderNum, isToday && styles.dayHeaderNumToday]}
+                      onPress={() => openDailyPanel(d)}
+                      activeOpacity={0.7}
+                    >
                       <Text style={[styles.dayHeaderNumText, { color: isToday ? '#fff' : txt }]}>
                         {d.getDate()}
                       </Text>
-                    </View>
+                    </TouchableOpacity>
                   </View>
                 );
               })}
@@ -678,6 +948,186 @@ export default function CalendarScreen() {
 
           {viewMode === 'month' ? renderMonthView() : renderTimeGrid()}
       </View>
+
+      {/* ── Daily Update Panel (right slide-in) ── */}
+      {dailyPanelDate && (
+        <>
+          {/* Backdrop */}
+          <TouchableOpacity
+            style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.35)', zIndex: 99 }}
+            activeOpacity={1}
+            onPress={closeDailyPanel}
+          />
+          <Animated.View
+            style={[
+              du.panel,
+              {
+                backgroundColor: card,
+                borderLeftColor: bdr,
+                transform: [{
+                  translateX: dailySlideAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [SCREEN_WIDTH, 0],
+                  }),
+                }],
+              },
+            ]}
+          >
+            <SafeAreaView style={{ flex: 1 }}>
+              {/* Panel header */}
+              <View style={[du.header, { borderBottomColor: bdr }]}>
+                <Text style={[du.headerDate, { color: txt }]}>
+                  {dailyPanelDate.toLocaleDateString('en-GB', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' })}
+                </Text>
+                <TouchableOpacity
+                  style={[du.closeBtn, { backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
+                  onPress={closeDailyPanel}
+                >
+                  <Text style={[du.closeBtnText, { color: sub }]}>✕</Text>
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 14, paddingBottom: 40 }}>
+
+                {/* Empty state (no tasks/events scheduled) */}
+                <View style={[du.emptyCard, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}>
+                  <Text style={du.emptyIcon}>📅</Text>
+                  <Text style={[du.emptyText, { color: sub }]}>No tasks or events scheduled for this day</Text>
+                </View>
+
+                {/* Create Task CTA (moved to top, matching web) */}
+                <View style={{ alignItems: 'center', marginBottom: 16 }}>
+                  <TouchableOpacity
+                    style={[du.createTaskTopBtn, { backgroundColor: isDark ? 'rgba(78,205,196,0.12)' : '#EEF2FF', borderColor: isDark ? 'rgba(78,205,196,0.3)' : '#C7D2FE' }]}
+                    onPress={() => {
+                      closeDailyPanel();
+                      setTimeout(() => navigation.jumpTo('Tasks', { openCreateModal: true, returnTo: 'Calendar' }), 250);
+                    }}
+                  >
+                    <Text style={[du.createTaskTopText, { color: isDark ? '#4ECDC4' : '#4F46E5' }]}>✓  Create Task</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Divider */}
+                <View style={{ height: 1, backgroundColor: bdr, marginBottom: 14 }} />
+
+                {/* ── Daily Update Section ── */}
+                {dailyPanelDateClass === 'today' && !editingUpdate && !dailyUpdates[dateKey(dailyPanelDate)] && (
+                  // Today, no update yet → show "+ Add Daily Update" button (image 3)
+                  <TouchableOpacity
+                    style={[du.addUpdateBtn, { backgroundColor: isDark ? 'rgba(78,205,196,0.12)' : '#EEF2FF', borderColor: isDark ? 'rgba(78,205,196,0.3)' : '#C7D2FE' }]}
+                    onPress={() => setEditingUpdate(true)}
+                  >
+                    <Text style={[du.addUpdateText, { color: isDark ? '#4ECDC4' : '#4F46E5' }]}>📝  Add Daily Update</Text>
+                  </TouchableOpacity>
+                )}
+
+                {dailyPanelDateClass === 'today' && !editingUpdate && dailyUpdates[dateKey(dailyPanelDate)] && (
+                  // Today with submitted update → show readout + edit button
+                  <View style={[du.updateCard, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}>
+                    <View style={du.updateHeaderRow}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[du.updateTitle, { color: txt }]}>Daily Update</Text>
+                        <Text style={[du.updateSubtitle, { color: '#4ECDC4' }]}>
+                          {dailyPanelDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
+                        </Text>
+                      </View>
+                      <TouchableOpacity onPress={() => setEditingUpdate(true)}>
+                        <Text style={[du.editLink, { color: '#4ECDC4' }]}>Edit</Text>
+                      </TouchableOpacity>
+                    </View>
+                    {renderUpdateField('Today\'s Priorities', dailyUpdates[dateKey(dailyPanelDate)].priorities, txt, sub)}
+                    {renderUpdateField('Progress (Yesterday)', dailyUpdates[dateKey(dailyPanelDate)].progress, txt, sub)}
+                    {renderUpdateField('Blockers / Needs', dailyUpdates[dateKey(dailyPanelDate)].blockers, txt, sub)}
+                    {renderUpdateField('Upcoming', dailyUpdates[dateKey(dailyPanelDate)].upcoming, txt, sub)}
+                  </View>
+                )}
+
+                {dailyPanelDateClass === 'today' && editingUpdate && (
+                  // Today, editing → form (image 1)
+                  <View>
+                    <View style={du.formHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[du.updateTitle, { color: txt }]}>Daily Update</Text>
+                        <Text style={[du.updateSubtitle, { color: '#4ECDC4' }]}>
+                          {dailyPanelDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
+                        </Text>
+                      </View>
+                      {dailyUpdates[dateKey(dailyPanelDate)] && (
+                        <TouchableOpacity onPress={() => setEditingUpdate(false)}>
+                          <Text style={[du.editLink, { color: sub }]}>✕</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                    {renderUpdateInput('Today\'s Priorities:-', editPriorities, setEditPriorities, 'What are you focusing on today?', isDark, card, bdr, txt, sub)}
+                    {renderUpdateInput('Progress (Yesterday):-', editProgress, setEditProgress, 'What did you accomplish yesterday?', isDark, card, bdr, txt, sub)}
+                    {renderUpdateInput('Blockers / Needs:-', editBlockers, setEditBlockers, 'Any blockers or help needed?', isDark, card, bdr, txt, sub)}
+                    {renderUpdateInput('Upcoming:-', editUpcoming, setEditUpcoming, 'What\'s coming up next?', isDark, card, bdr, txt, sub)}
+                    <TouchableOpacity style={du.submitBtn} onPress={saveDailyUpdate}>
+                      <Text style={du.submitBtnText}>➤  Submit Update</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                {dailyPanelDateClass !== 'today' && (
+                  // Past OR Future date → show greyed "Daily updates for today only" banner (image 2)
+                  <View style={[du.disabledBanner, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}>
+                    <Text style={[du.disabledBannerText, { color: sub }]}>📋  Daily updates for today only</Text>
+                  </View>
+                )}
+
+                {/* ── Team Updates Section ── */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 18, marginBottom: 10 }}>
+                  <Text style={[du.sectionLabel, { color: sub, marginBottom: 0 }]}>TEAM UPDATES</Text>
+                  {loadingUpdates && <ActivityIndicator size="small" color="#4ECDC4" />}
+                </View>
+                {(() => {
+                  const teamList = teamUpdates[dateKey(dailyPanelDate)] || [];
+                  if (teamList.length === 0) {
+                    return (
+                      <Text style={[du.noTeamText, { color: sub }]}>
+                        {loadingUpdates ? 'Loading team updates…' : 'No team updates for this date yet.'}
+                      </Text>
+                    );
+                  }
+                  return teamList.map((u, idx) => (
+                    <View
+                      key={u.id || idx}
+                      style={[du.teamCard, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}
+                    >
+                      <Text style={[du.teamName, { color: '#4ECDC4' }]}>{u.user_name}</Text>
+                      {u.priorities ? (
+                        <View style={{ marginTop: 8 }}>
+                          <Text style={[du.teamFieldLabel, { color: txt }]}>Today's Priorities</Text>
+                          <Text style={[du.teamFieldValue, { color: sub }]}>{u.priorities}</Text>
+                        </View>
+                      ) : null}
+                      {u.progress ? (
+                        <View style={{ marginTop: 8 }}>
+                          <Text style={[du.teamFieldLabel, { color: txt }]}>Progress (Yesterday)</Text>
+                          <Text style={[du.teamFieldValue, { color: sub }]}>{u.progress}</Text>
+                        </View>
+                      ) : null}
+                      {u.blockers ? (
+                        <View style={{ marginTop: 8 }}>
+                          <Text style={[du.teamFieldLabel, { color: txt }]}>Blockers / Needs</Text>
+                          <Text style={[du.teamFieldValue, { color: sub }]}>{u.blockers}</Text>
+                        </View>
+                      ) : null}
+                      {u.upcoming ? (
+                        <View style={{ marginTop: 8 }}>
+                          <Text style={[du.teamFieldLabel, { color: txt }]}>Upcoming</Text>
+                          <Text style={[du.teamFieldValue, { color: sub }]}>{u.upcoming}</Text>
+                        </View>
+                      ) : null}
+                    </View>
+                  ));
+                })()}
+              </ScrollView>
+            </SafeAreaView>
+          </Animated.View>
+        </>
+      )}
 
       {/* ── Create Event Modal ── */}
       {modalVisible && (
@@ -1055,6 +1505,161 @@ export default function CalendarScreen() {
     </SafeAreaView>
   );
 }
+
+// ── Daily Update helpers ───────────────────────────────────────────
+function renderUpdateField(label, value, txt, sub) {
+  return (
+    <View style={{ marginTop: 8 }}>
+      <Text style={[du.updateFieldLabel, { color: txt }]}>{label}</Text>
+      <Text style={[du.updateFieldValue, { color: value ? sub : '#AAAABC', fontStyle: value ? 'normal' : 'italic' }]}>
+        {value || '— pending —'}
+      </Text>
+    </View>
+  );
+}
+
+function renderUpdateInput(label, value, onChange, placeholder, isDark, card, bdr, txt, sub) {
+  return (
+    <View style={{ marginTop: 10 }}>
+      <Text style={[du.updateFieldLabel, { color: txt }]}>{label}</Text>
+      <TextInput
+        style={[
+          du.updateInput,
+          { backgroundColor: card, borderColor: bdr, color: txt },
+        ]}
+        value={value}
+        onChangeText={onChange}
+        placeholder={placeholder}
+        placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
+        multiline
+        textAlignVertical="top"
+      />
+    </View>
+  );
+}
+
+// Daily Update Panel styles
+// Ask Dyuksa AI bar styles
+const ad = StyleSheet.create({
+  wrap: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+  },
+  inputBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingLeft: 12,
+    paddingRight: 4,
+    height: 44,
+    gap: 6,
+  },
+  icon: { fontSize: 14, marginRight: 2 },
+  input: { flex: 1, fontSize: 13, paddingVertical: 0 },
+  sendBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#8B5CF6',   // purple like web
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    height: 34,
+  },
+  sendIcon: { color: '#fff', fontSize: 11, fontWeight: '700' },
+  sendText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+});
+
+const du = StyleSheet.create({
+  panel: {
+    position: 'absolute', top: 0, right: 0, bottom: 0,
+    width: SCREEN_WIDTH,
+    borderLeftWidth: 1,
+    zIndex: 100,
+    paddingTop: Platform.OS === 'ios' ? 44 : (StatusBar.currentHeight || 24),
+  },
+  header: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 14, paddingVertical: 12,
+    borderBottomWidth: 1,
+  },
+  headerDate: { flex: 1, fontSize: 15, fontWeight: '700' },
+  closeBtn: { width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
+  closeBtnText: { fontSize: 14, fontWeight: '600' },
+
+  emptyCard: {
+    alignItems: 'center', paddingVertical: 24, paddingHorizontal: 14,
+    borderRadius: 12, borderWidth: 1, marginBottom: 12,
+    gap: 6,
+  },
+  emptyIcon: { fontSize: 32, opacity: 0.4 },
+  emptyText: { fontSize: 12, textAlign: 'center' },
+
+  editTriggerBtn: {
+    paddingVertical: 14, borderRadius: 10, borderWidth: 1,
+    alignItems: 'center', marginBottom: 14,
+  },
+  editTriggerText: { fontSize: 14, fontWeight: '600' },
+
+  updateCard: {
+    borderRadius: 12, borderWidth: 1, padding: 14, marginBottom: 14,
+  },
+  updateHeaderRow: {
+    flexDirection: 'row', alignItems: 'flex-start', marginBottom: 8,
+  },
+  formHeader: {
+    flexDirection: 'row', alignItems: 'flex-start', marginBottom: 10,
+  },
+  updateTitle: { fontSize: 14, fontWeight: '700' },
+  updateSubtitle: { fontSize: 11, fontWeight: '600', marginTop: 2 },
+  editLink: { fontSize: 14, fontWeight: '700' },
+
+  updateFieldLabel: { fontSize: 12, fontWeight: '700' },
+  updateFieldValue: { fontSize: 13, lineHeight: 18, marginTop: 3 },
+  updateInput: {
+    borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 10,
+    fontSize: 13, minHeight: 56, marginTop: 4,
+  },
+
+  // "Add Daily Update" button (shows when today and no update yet)
+  addUpdateBtn: {
+    paddingVertical: 14, borderRadius: 10, borderWidth: 1,
+    alignItems: 'center', marginBottom: 14,
+  },
+  addUpdateText: { fontSize: 14, fontWeight: '700' },
+
+  // Submit Update button (in the form)
+  submitBtn: {
+    backgroundColor: '#4F46E5', borderRadius: 10,
+    paddingVertical: 13, alignItems: 'center', marginTop: 14,
+  },
+  submitBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
+
+  // Disabled banner for past/future dates
+  disabledBanner: {
+    padding: 14, borderRadius: 10, borderWidth: 1,
+    alignItems: 'center', marginBottom: 14,
+  },
+  disabledBannerText: { fontSize: 13, fontWeight: '500' },
+
+  sectionLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, marginBottom: 10 },
+  noTeamText: { fontSize: 12, textAlign: 'center', fontStyle: 'italic', paddingVertical: 14 },
+
+  // Team Update card
+  teamCard: {
+    borderRadius: 12, borderWidth: 1, padding: 12, marginBottom: 10,
+  },
+  teamName: { fontSize: 13, fontWeight: '700' },
+  teamFieldLabel: { fontSize: 11, fontWeight: '700' },
+  teamFieldValue: { fontSize: 12, lineHeight: 16, marginTop: 2 },
+
+  // Create Task button at top
+  createTaskTopBtn: {
+    paddingHorizontal: 20, paddingVertical: 10, borderRadius: 8, borderWidth: 1,
+  },
+  createTaskTopText: { fontSize: 14, fontWeight: '700' },
+});
 
 const styles = StyleSheet.create({
   safe: { flex: 1, paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0 },

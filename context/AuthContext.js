@@ -152,8 +152,8 @@ export function AuthProvider({ children }) {
   // ── Login ─────────────────────────────────────────────────────────────
   const login = async (username, password) => {
     const cleanUsername = sanitize(username);
-    if (!cleanUsername) return { success: false, errors: ['Username is required.'] };
-    if (!password)      return { success: false, errors: ['Password is required.'] };
+    if (!cleanUsername) return { success: false, errors: ['Username is required.'], errorField: 'username' };
+    if (!password)      return { success: false, errors: ['Password is required.'], errorField: 'password' };
     try {
       const res  = await fetch('http://192.168.1.164:8000/api/v1/auth/login/', {
         method: 'POST',
@@ -162,8 +162,54 @@ export function AuthProvider({ children }) {
       });
       const data = await res.json();
       if (!res.ok) {
-        const msg = data.detail || data.message || data.non_field_errors?.[0] || 'Login failed.';
-        return { success: false, errors: [msg] };
+        // Extract backend error message
+        const rawMsg = data.detail || data.message || data.non_field_errors?.[0] || '';
+        const lowerMsg = rawMsg.toLowerCase();
+
+        // Django's SimpleJWT returns "No active account found with the given credentials"
+        // when EITHER username OR password is wrong — it doesn't distinguish.
+        // So we classify by pattern-matching, then highlight accordingly.
+
+        // Field-specific errors (Django may return {username: [...], password: [...]})
+        if (data.username && Array.isArray(data.username)) {
+          return {
+            success: false,
+            errors: [data.username[0]],
+            errorField: 'username',
+          };
+        }
+        if (data.password && Array.isArray(data.password)) {
+          return {
+            success: false,
+            errors: ['Wrong password. Please try again.'],
+            errorField: 'password',
+          };
+        }
+
+        // Pattern-matching heuristics on message text
+        if (/password|incorrect|wrong/.test(lowerMsg)) {
+          return {
+            success: false,
+            errors: ['Wrong password. Please try again.'],
+            errorField: 'password',
+          };
+        }
+        if (/user|account|exist|not found|no match|credentials/.test(lowerMsg)) {
+          // "No active account found with the given credentials" falls here —
+          // could be wrong username OR wrong password; highlight both as unknown.
+          return {
+            success: false,
+            errors: ['Wrong password or username. Please check and try again.'],
+            errorField: 'both',
+          };
+        }
+
+        // Unknown error — fallback
+        return {
+          success: false,
+          errors: [rawMsg || 'Invalid username or password. Please try again.'],
+          errorField: 'both',
+        };
       }
       const mockUser = {
         id:        data.user_id || cleanUsername,
@@ -177,7 +223,7 @@ export function AuthProvider({ children }) {
       await persistSession(data.access, mockUser, data.refresh, 3600);
       return { success: true, errors: [] };
     } catch {
-      return { success: false, errors: ['Network error. Make sure you are on the same WiFi.'] };
+      return { success: false, errors: ['Network error. Make sure you are on the same WiFi.'], errorField: null };
     }
   };
 

@@ -29,12 +29,24 @@ export default function LoginScreen({ navigation }) {
 
   const handleLogin = async () => {
     setErrors([]);
+    setFieldErrors({ username: '', password: '' });
     if (!validateFields()) return;
     setLoading(true);
     const result = await login(username.trim(), password);
     setLoading(false);
     if (!result.success) {
-      setErrors(result.errors || ['Login failed.']);
+      const msg = result.errors?.[0] || 'Login failed.';
+      // Route the error to the correct field (or both) based on errorField
+      if (result.errorField === 'password') {
+        setFieldErrors({ username: '', password: msg });
+      } else if (result.errorField === 'username') {
+        setFieldErrors({ username: msg, password: '' });
+      } else if (result.errorField === 'both') {
+        setFieldErrors({ username: msg, password: msg });
+      } else {
+        // Network / unknown — show in top banner
+        setErrors([msg]);
+      }
     }
   };
 
