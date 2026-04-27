@@ -452,9 +452,13 @@ export default function DocumentsScreen() {
       <View style={[styles.navbar, { backgroundColor: card, borderBottomColor: bdr }]}>
         <View style={styles.navLeft}>
           <SidebarMenu activeScreen="Docs" />
-          <View style={styles.logoBox}>
+          <TouchableOpacity
+            style={styles.logoBox}
+            onPress={() => { try { navigation.jumpTo('Dashboard'); } catch { navigation.navigate('Main', { screen: 'Dashboard' }); } }}
+            activeOpacity={0.7}
+          >
             <Text style={styles.logoText}>D</Text>
-          </View>
+          </TouchableOpacity>
           <Text style={[styles.brandName, { color: txt, fontSize: fs(15) }]}>Documents</Text>
         </View>
         <View style={styles.navRight}>

@@ -930,7 +930,13 @@ export default function ProjectsScreen() {
       <View style={[styles.navbar, { backgroundColor: card, borderBottomColor: bdr }]}>
         <View style={styles.navLeft}>
           <SidebarMenu activeScreen="Projects" />
-          <View style={styles.logoBox}><Text style={styles.logoText}>D</Text></View>
+          <TouchableOpacity
+            style={styles.logoBox}
+            onPress={() => { try { navigation.jumpTo('Dashboard'); } catch { navigation.navigate('Main', { screen: 'Dashboard' }); } }}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.logoText}>D</Text>
+          </TouchableOpacity>
           <Text style={[styles.brandName, { color: txt }]}>Projects</Text>
         </View>
         <View style={styles.navRight}>

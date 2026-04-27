@@ -101,6 +101,8 @@ export default function TasksScreen() {
   // Inline status-pill picker on each task card
   const [statusPickerTaskId, setStatusPickerTaskId] = useState(null);
   const [updatingStatus,     setUpdatingStatus]     = useState(false);
+  // Auto-dismissing success toast (used after AI event creation)
+  const [successToast, setSuccessToast] = useState(null);   // { title, body } | null
 
   // Resolve "is this task assigned to me?"
   const isTaskMine = useCallback((task) => {
@@ -237,6 +239,13 @@ export default function TasksScreen() {
       // After the close animation, take the user back to the project they came from
       if (returnId) {
         navigation.navigate('Projects', { reopenProjectId: returnId });
+        return;
+      }
+      // If opened from center "+" FAB, return user to the tab they came from
+      const returnTo = route.params?.returnTo;
+      if (returnTo && returnTo !== 'Tasks') {
+        navigation.setParams({ returnTo: null });
+        try { navigation.jumpTo(returnTo); } catch {}
       }
     });
   };
@@ -373,6 +382,12 @@ export default function TasksScreen() {
       // Reset Event tab
       setEventPrompt(''); setEventSuggestion(null); setSelectedSlot(null);
       setEventAILoading(false); setEventSaving(false);
+      // If opened from center "+" FAB, return user to the tab they came from
+      const returnTo = route.params?.returnTo;
+      if (returnTo && returnTo !== 'Tasks') {
+        navigation.setParams({ returnTo: null });
+        try { navigation.jumpTo(returnTo); } catch {}
+      }
     });
   };
 
@@ -483,14 +498,12 @@ export default function TasksScreen() {
       // Success!
       closeGenModal();
       setTimeout(() => {
-        Alert.alert(
-          '✦ Event created',
-          data.message || 'Your event has been added to the calendar.',
-          [{
-            text: 'View on Calendar',
-            onPress: () => navigation.navigate('Calendar'),
-          }, { text: 'OK' }],
-        );
+        setSuccessToast({
+          title: '✦ Event created',
+          body: data.message || 'Your event has been added to the calendar.',
+        });
+        // Auto-dismiss after 120ms
+        setTimeout(() => setSuccessToast(null), 120);
       }, 350);
     } catch (e) {
       Alert.alert('Error', e.message || 'Network error.');
@@ -600,7 +613,13 @@ export default function TasksScreen() {
       <View style={[styles.navbar, { backgroundColor: card, borderBottomColor: bdr }]}>
         <View style={styles.navLeft}>
           <SidebarMenu activeScreen="Tasks" />
-          <View style={styles.logoBox}><Text style={styles.logoText}>D</Text></View>
+          <TouchableOpacity
+            style={styles.logoBox}
+            onPress={() => { try { navigation.jumpTo('Dashboard'); } catch { navigation.navigate('Main', { screen: 'Dashboard' }); } }}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.logoText}>D</Text>
+          </TouchableOpacity>
           <Text style={[styles.brandName, { color: txt }]}>Task Board</Text>
         </View>
         <View style={styles.navRight}>
@@ -724,28 +743,30 @@ export default function TasksScreen() {
           onRefresh={fetchTasks}
           refreshing={loading}
           renderItem={({ item }) => (
-            <TouchableOpacity
-              style={[styles.taskCard, { backgroundColor: card, borderColor: bdr }]}
-              onPress={() => setDetailTask(item)}
-              activeOpacity={0.7}
-            >
+            <View style={[styles.taskCard, { backgroundColor: card, borderColor: bdr }]}>
               <View style={styles.cardTop}>
-                <View style={[styles.typeIcon, { backgroundColor: (STATUS_COLORS[item.status] || '#888') + '20' }]}>
-                  <Text style={{ fontSize: 18 }}>📋</Text>
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.taskName, { color: txt }]} numberOfLines={1}>{item.heading}</Text>
-                  {item.project_details?.name && (
-                    <Text style={[styles.taskProject, { color: sub }]}>📁 {item.project_details.name}</Text>
-                  )}
-                  {(item.start_date || item.created_at) && (
-                    <Text style={[styles.taskDate, { color: sub }]}>{formatDate(item.start_date || item.created_at)}</Text>
-                  )}
-                </View>
+                <TouchableOpacity
+                  style={{ flex: 1, flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}
+                  onPress={() => setDetailTask(item)}
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.typeIcon, { backgroundColor: (STATUS_COLORS[item.status] || '#888') + '20' }]}>
+                    <Text style={{ fontSize: 18 }}>📋</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.taskName, { color: txt }]} numberOfLines={1}>{item.heading}</Text>
+                    {item.project_details?.name && (
+                      <Text style={[styles.taskProject, { color: sub }]}>📁 {item.project_details.name}</Text>
+                    )}
+                    {(item.start_date || item.created_at) && (
+                      <Text style={[styles.taskDate, { color: sub }]}>{formatDate(item.start_date || item.created_at)}</Text>
+                    )}
+                  </View>
+                </TouchableOpacity>
                 <View style={{ alignItems: 'flex-end', gap: 4 }}>
                   <TouchableOpacity
                     style={[styles.statusBadge, { backgroundColor: (STATUS_COLORS[item.status] || '#888') + '20', flexDirection: 'row', alignItems: 'center', gap: 4 }]}
-                    onPress={(e) => { e.stopPropagation(); setStatusPickerTaskId(item.id); }}
+                    onPress={() => setStatusPickerTaskId(item.id)}
                     activeOpacity={0.7}
                   >
                     <Text style={[styles.statusText, { color: STATUS_COLORS[item.status] || '#888' }]}>
@@ -760,96 +781,100 @@ export default function TasksScreen() {
                   )}
                 </View>
               </View>
-              {(() => {
-                // Match the same logic as TaskDetailModal.js so the list card shows
-                // the same creator name that appears on the detail screen.
-                const createdBy = item.assigned_by_user_details || item.created_by || null;
-                if (!createdBy) return null;
-                const name =
-                  [createdBy.first_name, createdBy.last_name].filter(Boolean).join(' ') ||
-                  createdBy.full_name ||
-                  createdBy.username ||
-                  null;
-                if (!name) return null;
-                return (
-                  <Text style={[styles.taskDesc, { color: sub }]} numberOfLines={1}>
-                    Created by {name}
-                  </Text>
-                );
-              })()}
-              {(() => {
-                const assignees = Array.isArray(item.assigned_to_user_details)
-                  ? item.assigned_to_user_details
-                  : [];
-                const hasPriority = !!item.priority;
-                if (!hasPriority && assignees.length === 0) return null;
 
-                // Name → single-letter initial (falls back to 'U')
-                const initialOf = (u) => {
-                  const raw =
-                    u.first_name ||
-                    u.full_name  ||
-                    u.username   ||
-                    '';
-                  return raw ? raw.trim().charAt(0).toUpperCase() : 'U';
-                };
+              {/* Tappable footer (creator + priority/assignees) opens detail too */}
+              <TouchableOpacity activeOpacity={0.7} onPress={() => setDetailTask(item)}>
+                {(() => {
+                  // Match the same logic as TaskDetailModal.js so the list card shows
+                  // the same creator name that appears on the detail screen.
+                  const createdBy = item.assigned_by_user_details || item.created_by || null;
+                  if (!createdBy) return null;
+                  const name =
+                    [createdBy.first_name, createdBy.last_name].filter(Boolean).join(' ') ||
+                    createdBy.full_name ||
+                    createdBy.username ||
+                    null;
+                  if (!name) return null;
+                  return (
+                    <Text style={[styles.taskDesc, { color: sub }]} numberOfLines={1}>
+                      Created by {name}
+                    </Text>
+                  );
+                })()}
+                {(() => {
+                  const assignees = Array.isArray(item.assigned_to_user_details)
+                    ? item.assigned_to_user_details
+                    : [];
+                  const hasPriority = !!item.priority;
+                  if (!hasPriority && assignees.length === 0) return null;
 
-                const MAX_VISIBLE = 3;
-                const visible    = assignees.slice(0, MAX_VISIBLE);
-                const overflow   = Math.max(0, assignees.length - MAX_VISIBLE);
+                  // Name → single-letter initial (falls back to 'U')
+                  const initialOf = (u) => {
+                    const raw =
+                      u.first_name ||
+                      u.full_name  ||
+                      u.username   ||
+                      '';
+                    return raw ? raw.trim().charAt(0).toUpperCase() : 'U';
+                  };
 
-                return (
-                  <View style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    marginTop: 8,
-                  }}>
-                    {/* Priority pill (left) */}
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      {hasPriority && (
-                        <>
-                          <View style={[styles.priorityDot, { backgroundColor: PRIORITY_COLORS[item.priority] || '#888' }]} />
-                          <Text style={{ fontSize: 11, color: sub, fontWeight: '500' }}>
-                            {item.priority?.toUpperCase()}
-                          </Text>
-                        </>
-                      )}
-                    </View>
+                  const MAX_VISIBLE = 3;
+                  const visible    = assignees.slice(0, MAX_VISIBLE);
+                  const overflow   = Math.max(0, assignees.length - MAX_VISIBLE);
 
-                    {/* Avatar stack (right) */}
-                    {assignees.length > 0 && (
-                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                        {visible.map((u, idx) => (
-                          <View
-                            key={u.id ?? idx}
-                            style={[
-                              styles.miniAvatar,
-                              { borderColor: card, marginLeft: idx === 0 ? 0 : -8 },
-                            ]}
-                          >
-                            <Text style={styles.miniAvatarText}>{initialOf(u)}</Text>
-                          </View>
-                        ))}
-                        {overflow > 0 && (
-                          <View
-                            style={[
-                              styles.miniAvatar,
-                              styles.miniAvatarOverflow,
-                              { borderColor: card, marginLeft: -8 },
-                            ]}
-                          >
-                            <Text style={[styles.miniAvatarText, { color: sub }]}>
-                              +{overflow}
+                  return (
+                    <View style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      marginTop: 8,
+                    }}>
+                      {/* Priority pill (left) */}
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        {hasPriority && (
+                          <>
+                            <View style={[styles.priorityDot, { backgroundColor: PRIORITY_COLORS[item.priority] || '#888' }]} />
+                            <Text style={{ fontSize: 11, color: sub, fontWeight: '500' }}>
+                              {item.priority?.toUpperCase()}
                             </Text>
-                          </View>
+                          </>
                         )}
                       </View>
-                    )}
-                  </View>
-                );
-              })()}
-            </TouchableOpacity>
+
+                      {/* Avatar stack (right) */}
+                      {assignees.length > 0 && (
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          {visible.map((u, idx) => (
+                            <View
+                              key={u.id ?? idx}
+                              style={[
+                                styles.miniAvatar,
+                                { borderColor: card, marginLeft: idx === 0 ? 0 : -8 },
+                              ]}
+                            >
+                              <Text style={styles.miniAvatarText}>{initialOf(u)}</Text>
+                            </View>
+                          ))}
+                          {overflow > 0 && (
+                            <View
+                              style={[
+                                styles.miniAvatar,
+                                styles.miniAvatarOverflow,
+                                { borderColor: card, marginLeft: -8 },
+                              ]}
+                            >
+                              <Text style={[styles.miniAvatarText, { color: sub }]}>
+                                +{overflow}
+                              </Text>
+                            </View>
+                          )}
+                        </View>
+                      )}
+                    </View>
+                  );
+                })()}
+              </TouchableOpacity>
+            </View>
           )}
         />
       )}
@@ -1492,6 +1517,18 @@ export default function TasksScreen() {
           if (updatedTask) setDetailTask(updatedTask);
         }}
       />
+
+      {/* Auto-dismissing success toast (1s) — used after AI event creation */}
+      {successToast && (
+        <Modal transparent visible animationType="fade">
+          <View pointerEvents="none" style={styles.toastOverlay}>
+            <View style={[styles.toastCard, { backgroundColor: card, borderColor: bdr }]}>
+              <Text style={[styles.toastTitle, { color: txt }]}>{successToast.title}</Text>
+              <Text style={[styles.toastBody, { color: sub }]}>{successToast.body}</Text>
+            </View>
+          </View>
+        </Modal>
+      )}
     </SafeAreaView>
   );
 }
@@ -1569,6 +1606,25 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     justifyContent: 'center', alignItems: 'center',
   },
+
+  // Auto-dismissing success toast
+  toastOverlay: {
+    flex: 1, justifyContent: 'center', alignItems: 'center',
+    paddingHorizontal: 32,
+  },
+  toastCard: {
+    minWidth: 240, maxWidth: 320,
+    borderRadius: 14, borderWidth: 1,
+    paddingHorizontal: 18, paddingVertical: 14,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 6,
+  },
+  toastTitle: { fontSize: 14, fontWeight: '700', marginBottom: 4 },
+  toastBody:  { fontSize: 12, textAlign: 'center', lineHeight: 17 },
   emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 8 },
   emptyTitle: { fontSize: 16, fontWeight: '600' },
   emptySub: { fontSize: 13, textAlign: 'center' },

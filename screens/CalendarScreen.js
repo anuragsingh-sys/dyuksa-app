@@ -371,12 +371,20 @@ export default function CalendarScreen() {
       // with a proper AI event flow. For now we just bring the user's attention
       // to the existing Ask Dyuksa bar at the top of the calendar.
       if (route.params?.openCreateModalAI) {
+        const returnToTab = route.params?.returnTo;
         Alert.alert(
           '✦ AI Event Creation',
           'AI-powered event creation is coming soon! For now, you can use the "Ask Dyuksa" bar at the top of the Calendar to try natural-language queries, or tap "+ New event" to create one manually.',
-          [{ text: 'Got it' }]
+          [{
+            text: 'Got it',
+            onPress: () => {
+              if (returnToTab && returnToTab !== 'Calendar') {
+                try { navigation.jumpTo(returnToTab); } catch {}
+              }
+            },
+          }]
         );
-        navigation.setParams({ openCreateModalAI: false });
+        navigation.setParams({ openCreateModalAI: false, returnTo: null });
       }
     }, [route.params?.openCreateModal, route.params?.openCreateModalAI])
   );
@@ -1019,7 +1027,13 @@ export default function CalendarScreen() {
       <View style={[styles.navbar, { backgroundColor: card, borderBottomColor: bdr }]}>
         <View style={styles.navLeft}>
           <SidebarMenu activeScreen="Calendar" />
-          <View style={styles.logoBox}><Text style={styles.logoText}>D</Text></View>
+          <TouchableOpacity
+            style={styles.logoBox}
+            onPress={() => { try { navigation.jumpTo('Dashboard'); } catch { navigation.navigate('Main', { screen: 'Dashboard' }); } }}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.logoText}>D</Text>
+          </TouchableOpacity>
           <Text style={[styles.brandName, { color: txt }]}>Calendar</Text>
         </View>
         <View style={styles.navRight}>

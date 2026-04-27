@@ -56,13 +56,52 @@ const fmtTime = (iso) => {
   }
 };
 
-const roomInitial = (room) => {
+// For private "Chat: alice & bob" rooms, strip out the current user so we
+// just show the other person's name. Falls back to the original name for any
+// other room type, or if we can't figure out which name is the current user.
+const roomDisplayName = (room, user) => {
+  const original = String(room?.name || '').trim();
+  if (!original) return 'Chat';
+
+  // Only rewrite the "Chat: X & Y" pattern (private DMs)
+  if (room?.room_type !== 'private') return original;
+  const m = original.match(/^Chat:\s*(.+)$/i);
+  if (!m) return original;
+
+  const parts = m[1].split(/\s*&\s*/).map(s => s.trim()).filter(Boolean);
+  if (parts.length < 2) return parts[0] || original;
+
+  // Try to identify which entry is "me" — match against username, full_name,
+  // first name, or email local-part. Backend sometimes uses lowercase usernames
+  // ("harshit") in the room name even when full_name is "Harshit Shukla".
+  const me = user || {};
+  const myCandidates = [
+    me.username,
+    me.name,
+    me.full_name,
+    (me.email || '').split('@')[0],
+    (me.name || me.full_name || '').split(' ')[0],
+  ]
+    .filter(Boolean)
+    .map(s => String(s).toLowerCase());
+
+  const others = parts.filter(p => {
+    const lc = p.toLowerCase();
+    return !myCandidates.some(c => c === lc || c.startsWith(lc) || lc.startsWith(c));
+  });
+
+  if (others.length === 0) return parts.join(' & '); // can't tell, fall back
+  // Capitalize first letter for display
+  const pretty = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  return others.map(pretty).join(' & ');
+};
+
+const roomInitial = (room, user) => {
   if (room.room_type === 'ai_bot') return '🤖';
   if (room.room_type === 'global') return '🌐';
-  let n = String(room.name || '?');
-  // Strip common decorations like "Chat: alice & bob" or "ZanFlow Chat"
-  n = n.replace(/^Chat:\s*/i, '').replace(/\s*Chat$/i, '').trim();
-  return (n.charAt(0) || '?').toUpperCase();
+  // Use the display name (so private chats show the other person's letter)
+  const n = roomDisplayName(room, user);
+  return (String(n).charAt(0) || '?').toUpperCase();
 };
 
 const roomTypeLabel = (room) => {
@@ -231,11 +270,11 @@ function ChatConversation({ room, onBack, user, isDark, txt, sub, bdr, card, bg,
           <Text style={[styles.backBtnText, { color: txt }]}>‹</Text>
         </TouchableOpacity>
         <View style={[styles.avatar, { backgroundColor: roomTypeColor(room) }]}>
-          <Text style={styles.avatarText}>{roomInitial(room)}</Text>
+          <Text style={styles.avatarText}>{roomInitial(room, user)}</Text>
         </View>
         <View style={{ flex: 1 }}>
           <Text style={[{ fontSize: fs(14), fontWeight: '700', color: txt }]} numberOfLines={1}>
-            {room.name}
+            {roomDisplayName(room, user)}
           </Text>
           <Text style={[{ fontSize: fs(11), color: sub }]} numberOfLines={1}>
             {headerSubtitle}
@@ -439,9 +478,10 @@ export default function ChatScreen() {
   const visible = q
     ? filteredByTab.filter((r) => {
         const name = String(r.name || '').toLowerCase();
+        const display = roomDisplayName(r, user).toLowerCase();
         const lastFrom = String(r.last_message?.sender_username || '').toLowerCase();
         const lastText = cleanPreview(r.last_message?.content_preview || '').toLowerCase();
-        return name.includes(q) || lastFrom.includes(q) || lastText.includes(q);
+        return name.includes(q) || display.includes(q) || lastFrom.includes(q) || lastText.includes(q);
       })
     : filteredByTab;
 
@@ -572,7 +612,7 @@ export default function ChatScreen() {
                 activeOpacity={0.7}
               >
                 <View style={[styles.avatar, { backgroundColor: roomTypeColor(item) }]}>
-                  <Text style={styles.avatarText}>{roomInitial(item)}</Text>
+                  <Text style={styles.avatarText}>{roomInitial(item, user)}</Text>
                   {item.is_favourite && (
                     <View style={styles.starDot}>
                       <Text style={{ fontSize: 9 }}>⭐</Text>
@@ -585,7 +625,7 @@ export default function ChatScreen() {
                       style={[{ fontSize: fs(14), fontWeight: '600', color: txt, flex: 1, marginRight: 8 }]}
                       numberOfLines={1}
                     >
-                      {item.name}
+                      {roomDisplayName(item, user)}
                     </Text>
                     <Text style={[{ fontSize: fs(11), color: sub }]}>{timeText}</Text>
                   </View>
