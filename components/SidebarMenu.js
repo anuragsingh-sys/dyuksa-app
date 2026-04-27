@@ -27,6 +27,7 @@ export default function SidebarMenu({ activeScreen }) {
   const { logout, user } = useContext(AuthContext);
   const isDark = theme === 'Dark';
   const [open, setOpen] = useState(false);
+  const [tasksExpanded, setTasksExpanded] = useState(activeScreen === 'Tasks');
   const slideAnim = useRef(new Animated.Value(-SIDEBAR_WIDTH)).current;
 
   const openSidebar = () => {
@@ -48,6 +49,25 @@ export default function SidebarMenu({ activeScreen }) {
     catch { navigation.navigate('Main', { screen: tab }); }
   });
   const goToStack = (screen) => closeSidebar(() => navigation.navigate(screen));
+
+  // Navigate to Tasks tab with a status filter (or 'All' / openCreateModal preset)
+  const goToTasksWith = (params) => closeSidebar(() => {
+    try { navigation.jumpTo('Tasks', params); }
+    catch { navigation.navigate('Main', { screen: 'Tasks', params }); }
+  });
+
+  // Submenu items mirror the filter chips on the Tasks screen
+  const taskSubmenu = [
+    { icon: '＋', label: 'Create Task',       params: { openCreateModal: true } },
+    { icon: '☑', label: 'All Tasks',         params: { presetFilter: 'All' } },
+    { icon: '✓', label: 'Completed Tasks',   params: { presetFilter: 'completed' } },
+    { icon: '⏱', label: 'Pending Tasks',     params: { presetFilter: 'pending' } },
+    { icon: '☷', label: 'Backlog Tasks',     params: { presetFilter: 'backlog' } },
+    { icon: '▶', label: 'In Progress Tasks', params: { presetFilter: 'in_progress' } },
+    { icon: '☑', label: 'Deployed Tasks',    params: { presetFilter: 'deployed' } },
+    { icon: '⏸', label: 'Deferred Tasks',    params: { presetFilter: 'deferred' } },
+    { icon: '👁', label: 'Review Tasks',      params: { presetFilter: 'review' } },
+  ];
 
   return (
     <>
@@ -83,7 +103,35 @@ export default function SidebarMenu({ activeScreen }) {
                 <SidebarItem icon="⊞"  label="Dashboard"      active={activeScreen === 'Dashboard'} onPress={goToDashboard} />
                 <SidebarItem icon="🗂️" label="Projects"        active={activeScreen === 'Projects'}  hasArrow onPress={() => goToTab('Projects')} />
                 <SidebarItem icon="📅" label="Calendar"        active={activeScreen === 'Calendar'}  hasArrow onPress={() => goToTab('Calendar')} />
-                <SidebarItem icon="📋" label="My Tasks"        active={activeScreen === 'Tasks'}     hasArrow onPress={() => goToTab('Tasks')} />
+
+                {/* My Tasks — expandable */}
+                <TouchableOpacity
+                  style={[styles.sidebarItem, activeScreen === 'Tasks' && styles.sidebarItemActive]}
+                  onPress={() => setTasksExpanded(v => !v)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.sidebarItemIcon}>📋</Text>
+                  <Text style={[styles.sidebarItemLabel, activeScreen === 'Tasks' && styles.sidebarItemLabelActive]}>
+                    My Tasks
+                  </Text>
+                  <Text style={[styles.sidebarArrow, tasksExpanded && { transform: [{ rotate: '90deg' }] }]}>›</Text>
+                </TouchableOpacity>
+                {tasksExpanded && (
+                  <View style={styles.submenu}>
+                    {taskSubmenu.map((item, i) => (
+                      <TouchableOpacity
+                        key={i}
+                        style={styles.submenuItem}
+                        onPress={() => goToTasksWith(item.params)}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={styles.submenuIcon}>{item.icon}</Text>
+                        <Text style={styles.submenuLabel}>{item.label}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+
                 <SidebarItem icon="📄" label="Documents"       active={activeScreen === 'Docs'}               onPress={() => goToStack('Docs')} />
                 <SidebarItem icon="⚡" label="Quick Notes"     active={activeScreen === 'QuickNotes'}
                   onPress={() => closeSidebar(() => (() => { try { navigation.jumpTo('Dashboard', { scrollToNotes: true }); } catch { navigation.navigate('Main', { screen: 'Dashboard', params: { scrollToNotes: true } }); } })())} />
@@ -144,6 +192,25 @@ const styles = StyleSheet.create({
   sidebarItemLabel: { flex: 1, fontSize: 14, color: '#9898A6', fontWeight: '500' },
   sidebarItemLabelActive: { color: '#4ECDC4', fontWeight: '600' },
   sidebarArrow: { color: '#5C5C6E', fontSize: 18 },
+
+  // Submenu (e.g., under My Tasks)
+  submenu: {
+    paddingLeft: 14,
+    marginLeft: 18,
+    borderLeftWidth: 1,
+    borderLeftColor: '#252535',
+    marginBottom: 4,
+  },
+  submenuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 6,
+  },
+  submenuIcon: { fontSize: 13, color: '#9898A6', width: 16, textAlign: 'center' },
+  submenuLabel: { flex: 1, fontSize: 13, color: '#9898A6', fontWeight: '500' },
   sidebarDivider: { height: 1, backgroundColor: '#252535', marginHorizontal: 16, marginVertical: 8 },
   sidebarFooter: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 12 },
   userAvatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#4ECDC4', justifyContent: 'center', alignItems: 'center' },

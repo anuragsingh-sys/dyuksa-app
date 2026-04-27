@@ -18,6 +18,7 @@ import * as Notifications from 'expo-notifications';
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const DAILY_UPDATE_STORAGE_KEY = 'DYUKSA_DAILY_UPDATES'; // local cache: { 'YYYY-MM-DD': { priorities, progress, blockers, upcoming } }
 const DAILY_UPDATE_API = 'http://192.168.1.164:8000/api/v1/daily-updates/';
+const EVENTS_API       = 'http://192.168.1.164:8000/api/v1/daily-updates/events/';
 
 const STORAGE_KEY = 'DYUKSA_QUICK_TASKS';
 const HOURS = Array.from({ length: 16 }, (_, i) => i + 7); // 07:00 to 22:00
@@ -58,6 +59,8 @@ export default function CalendarScreen() {
 
   // ── Events ──
   const [events, setEvents] = useState([]);
+  const [eventsLoading, setEventsLoading] = useState(false);
+  const [eventsError,   setEventsError]   = useState(null);
 
   // ── Modal ──
   const [modalVisible,   setModalVisible]   = useState(false);
@@ -87,19 +90,167 @@ export default function CalendarScreen() {
   const [askDyuksaText, setAskDyuksaText] = useState('');
   const [askDyuksaLoading, setAskDyuksaLoading] = useState(false);
 
+  // Ask Dyuksa slot-picker modal state (for when AI returns create_event suggestion)
+  const [aiSuggestion,   setAiSuggestion]   = useState(null);  // AI response data object (original, untouched)
+  const [aiSelectedSlot, setAiSelectedSlot] = useState(null);
+  const [aiSaving,       setAiSaving]       = useState(false);
+  // Editable fields in the slot-picker modal
+  const [aiEditTitle,    setAiEditTitle]    = useState('');
+  const [aiEditDuration, setAiEditDuration] = useState(30);    // minutes
+  const [aiEditDate,     setAiEditDate]     = useState('');    // 'YYYY-MM-DD'
+  const [aiSlotsLoading, setAiSlotsLoading] = useState(false); // while re-fetching slots after date/duration change
+  const [showDurationMenu, setShowDurationMenu] = useState(false);
+  const [showAiDatePicker, setShowAiDatePicker] = useState(false);
+
   const handleAskDyuksa = async () => {
     if (!askDyuksaText.trim()) return;
-    // TODO: Wire to backend AI endpoint later — for now show placeholder
     setAskDyuksaLoading(true);
-    setTimeout(() => {
-      setAskDyuksaLoading(false);
-      Alert.alert(
-        'Ask Dyuksa',
-        'AI event parsing is coming soon. Backend endpoint will parse: "' + askDyuksaText + '"',
-        [{ text: 'OK' }]
-      );
+    try {
+      const token = await getAccessToken();
+      const res = await fetch('http://192.168.1.164:8000/api/v1/task-ai/chat/agent/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ message: askDyuksaText.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        Alert.alert('Error', data.detail || data.message || `AI request failed (${res.status})`);
+        return;
+      }
+
+      if (data.action !== 'create_event' || !data.data) {
+        Alert.alert('Dyuksa says', data.reply || 'Could not generate an event from that request.');
+        return;
+      }
+
+      const slots = Array.isArray(data.data.available_slots) ? data.data.available_slots : [];
+      if (slots.length === 0) {
+        Alert.alert('No slots', 'No free slots were found. Try a different date or duration.');
+        return;
+      }
+
+      // Open slot-picker modal with editable defaults seeded from AI response
+      setAiSuggestion(data.data);
+      setAiSelectedSlot(slots[0]);
+      setAiEditTitle(data.data.title || '');
+      setAiEditDuration(data.data.duration_minutes || 30);
+      setAiEditDate(data.data.target_date || '');
       setAskDyuksaText('');
-    }, 400);
+    } catch (e) {
+      Alert.alert('Error', e.message || 'Network error.');
+    } finally {
+      setAskDyuksaLoading(false);
+    }
+  };
+
+  const closeAiModal = () => {
+    setAiSuggestion(null);
+    setAiSelectedSlot(null);
+    setAiEditTitle('');
+    setAiEditDuration(30);
+    setAiEditDate('');
+    setShowDurationMenu(false);
+    setShowAiDatePicker(false);
+  };
+
+  // Re-fetch slots when user changes duration or date — re-hits the agent endpoint
+  // with a reconstructed prompt so backend calculates availability for the new params.
+  const refetchAiSlots = async (newDurationMin, newDateISO) => {
+    if (!aiSuggestion) return;
+    const dur = newDurationMin != null ? newDurationMin : aiEditDuration;
+    const date = newDateISO != null ? newDateISO : aiEditDate;
+    const attendeeNames = Array.isArray(aiSuggestion.attendee_names) ? aiSuggestion.attendee_names : [];
+    // Skip self (first attendee is usually the organizer/current user)
+    const others = attendeeNames.length > 1 ? attendeeNames.slice(1) : attendeeNames;
+    const withPart = others.length ? ` with ${others.join(' and ')}` : '';
+    const prompt = `Find ${dur} min meeting${withPart} on ${date}`;
+
+    setAiSlotsLoading(true);
+    try {
+      const token = await getAccessToken();
+      const res = await fetch('http://192.168.1.164:8000/api/v1/task-ai/chat/agent/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ message: prompt }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.action !== 'create_event' || !data.data) {
+        Alert.alert('Dyuksa says', data.reply || data.detail || 'Could not find slots for that date/duration.');
+        return;
+      }
+      const slots = Array.isArray(data.data.available_slots) ? data.data.available_slots : [];
+      if (slots.length === 0) {
+        // Keep dialog open but show empty state
+        setAiSuggestion({ ...aiSuggestion, available_slots: [], duration_minutes: dur, target_date: date });
+        setAiSelectedSlot(null);
+        return;
+      }
+      // Merge new slots into existing suggestion; keep attendee list from original response
+      setAiSuggestion({
+        ...aiSuggestion,
+        available_slots:  slots,
+        duration_minutes: data.data.duration_minutes || dur,
+        target_date:      data.data.target_date      || date,
+      });
+      setAiSelectedSlot(slots[0]);
+    } catch (e) {
+      Alert.alert('Error', e.message || 'Network error.');
+    } finally {
+      setAiSlotsLoading(false);
+    }
+  };
+
+  const confirmAiEvent = async () => {
+    if (!aiSuggestion || !aiSelectedSlot) return;
+    setAiSaving(true);
+    try {
+      const token = await getAccessToken();
+      const startDate = new Date(aiSelectedSlot);
+      const endDate = new Date(startDate.getTime() + (aiEditDuration || aiSuggestion.duration_minutes || 30) * 60 * 1000);
+      const body = {
+        title:             (aiEditTitle || aiSuggestion.title || 'New meeting').trim(),
+        event_type:        aiSuggestion.event_type || 'Meeting',
+        start_time:        startDate.toISOString(),
+        end_time:          endDate.toISOString(),
+        is_online_meeting: true,
+        is_recurring:      false,
+        attendee_ids:      Array.isArray(aiSuggestion.attendee_ids) ? aiSuggestion.attendee_ids : [],
+      };
+      const res = await fetch(EVENTS_API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { Alert.alert('Error', data.detail || data.message || `Error ${res.status}`); return; }
+
+      closeAiModal();
+      fetchEvents();
+      setTimeout(() => {
+        Alert.alert('✦ Event created', data.message || 'Your event has been added to the calendar.');
+      }, 300);
+    } catch (e) {
+      Alert.alert('Error', e.message || 'Network error.');
+    } finally {
+      setAiSaving(false);
+    }
+  };
+
+  // Formatters for slot picker modal
+  const aiFormatSlotTime = (iso) => {
+    try { return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', hour12: true }); }
+    catch { return iso; }
+  };
+  const aiFormatTargetDate = (s) => {
+    if (!s) return '';
+    try { return new Date(s + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }); }
+    catch { return s; }
+  };
+  const aiInitials = (name = '') => {
+    const parts = String(name).trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return '?';
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
   };
   const [allUsers,        setAllUsers]        = useState([]);
   const slideAnim = useRef(new Animated.Value(-600)).current;
@@ -116,11 +267,83 @@ export default function CalendarScreen() {
   const [editUpcoming,     setEditUpcoming]     = useState('');
   const dailySlideAnim = useRef(new Animated.Value(0)).current; // 0 = hidden (off-screen right), 1 = visible
 
+  // ── Normalise backend event → shape the existing render code expects ──
+  // Render code reads: e.name, e.eventTimestamp / e.eventDate, e.status, e.id
+  // Backend shape: { id, title, event_type, start_time, end_time, attendees, ... }
+  const normaliseEvent = useCallback((be) => {
+    const startIso = be.start_time;
+    let status = 'Todo';
+    try {
+      if (startIso && new Date(startIso).getTime() < new Date().getTime()) status = 'Done';
+    } catch {}
+    return {
+      id:             be.id,
+      name:           be.title || '(Untitled event)',
+      eventTimestamp: startIso,
+      eventDate:      startIso,
+      status,
+      // Keep backend fields on the same object — useful for future rendering
+      event_type:        be.event_type,
+      end_time:          be.end_time,
+      description:       be.description,
+      location:          be.location,
+      is_online_meeting: be.is_online_meeting,
+      attendees:         be.attendees || [],
+      organizer:         be.organizer,
+      organizer_name:    be.organizer_name,
+      my_invitation_status: be.my_invitation_status,
+      my_invitation_id:     be.my_invitation_id,
+      type: 'event',
+    };
+  }, []);
+
+  // ── Fetch events from backend (follows pagination) ──
+  const fetchEvents = useCallback(async () => {
+    setEventsError(null);
+    setEventsLoading(true);
+    try {
+      const token = await getAccessToken();
+      const all = [];
+      let url = EVENTS_API;
+      let safety = 20; // cap 20 pages
+
+      while (url && safety-- > 0) {
+        const res = await fetch(url, {
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || err.message || `Error ${res.status}`);
+        }
+        const json = await res.json();
+        let pageList = [];
+        let next = null;
+        if (Array.isArray(json)) {
+          pageList = json;
+        } else if (Array.isArray(json.results)) {
+          pageList = json.results;
+          next = json.next || null;
+        } else if (Array.isArray(json.events)) {
+          pageList = json.events;
+          next = json.next || null;
+        }
+        all.push(...pageList);
+        url = next;
+      }
+
+      setEvents(all.map(normaliseEvent));
+    } catch (e) {
+      setEventsError(e.message || 'Failed to load events');
+      // If fetch fails, keep any existing events rather than clearing them
+    } finally {
+      setEventsLoading(false);
+    }
+  }, [normaliseEvent]);
+
   useFocusEffect(useCallback(() => {
-    AsyncStorage.getItem(STORAGE_KEY).then(data => {
-      if (data) setEvents(JSON.parse(data).filter(e => e.type === 'event'));
-      else setEvents([]);
-    });
+    // Fetch events from backend (replaces the old AsyncStorage load)
+    fetchEvents();
+
     // Load daily updates from local cache first (fast), then refresh from backend
     AsyncStorage.getItem(DAILY_UPDATE_STORAGE_KEY).then(data => {
       if (data) {
@@ -129,7 +352,7 @@ export default function CalendarScreen() {
     });
     // Fetch fresh from backend (will overwrite my updates + populate team updates)
     fetchDailyUpdates();
-  }, [currentUserId]));
+  }, [currentUserId, fetchEvents]));
 
   // Fetch all users once for participants list
   useEffect(() => {
@@ -143,7 +366,19 @@ export default function CalendarScreen() {
         openModal();
         navigation.setParams({ openCreateModal: false });
       }
-    }, [route.params?.openCreateModal])
+      // AI pill tapped for Event tab → show a friendly "coming soon" alert.
+      // When the backend AI endpoint for event parsing is ready, replace this
+      // with a proper AI event flow. For now we just bring the user's attention
+      // to the existing Ask Dyuksa bar at the top of the calendar.
+      if (route.params?.openCreateModalAI) {
+        Alert.alert(
+          '✦ AI Event Creation',
+          'AI-powered event creation is coming soon! For now, you can use the "Ask Dyuksa" bar at the top of the Calendar to try natural-language queries, or tap "+ New event" to create one manually.',
+          [{ text: 'Got it' }]
+        );
+        navigation.setParams({ openCreateModalAI: false });
+      }
+    }, [route.params?.openCreateModal, route.params?.openCreateModalAI])
   );
 
   // ── Navigation helpers ──
@@ -473,41 +708,55 @@ export default function CalendarScreen() {
 
     const resolvedType = eventType === 'Other' ? (customType.trim() || 'Other') : eventType;
 
-    const newEvent = {
-      id: Date.now().toString(), type: 'event',
-      name: eventName.trim(),
-      description: eventDesc.trim(),
-      eventDate: pickerDate.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) + ' at ' +
-        pickerDate.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }),
-      eventTimestamp:     pickerDate.toISOString(),
-      eventEndTimestamp:  endPickerDate.toISOString(),
-      eventType:          resolvedType,
-      teamsMeeting:       teamsMeeting,
-      location:           location.trim(),
-      participants:       participants, // [{id, name, avatar}]
-      images: [], createdAt: new Date().toISOString(), status: 'Todo',
-    };
+    // ── Save to backend ──
+    // POST /api/v1/daily-updates/events/
+    // Expected body fields: title, event_type, start_time, end_time, is_online_meeting,
+    //                       is_recurring, description, location, attendee_ids
     try {
-      const existing = await AsyncStorage.getItem(STORAGE_KEY);
-      const all = existing ? JSON.parse(existing) : [];
-      const updated = [newEvent, ...all];
-      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-      setEvents(updated.filter(e => e.type === 'event'));
+      const token = await getAccessToken();
+      const body = {
+        title:             eventName.trim(),
+        event_type:        resolvedType,
+        start_time:        pickerDate.toISOString(),
+        end_time:          endPickerDate.toISOString(),
+        is_online_meeting: !!teamsMeeting,
+        is_recurring:      false,
+        description:       eventDesc.trim(),
+        location:          location.trim(),
+        attendee_ids:      participants.map(p => p.id),
+      };
+      const res = await fetch(EVENTS_API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        Alert.alert('Error', data.detail || data.message || `Error ${res.status}`);
+        return;
+      }
+
+      // Refresh events list from backend so the new one shows up immediately
+      fetchEvents();
+
+      // Use the server-returned event (first of created_events) for reminders
+      const createdEvent = (data.created_events && data.created_events[0]) || null;
+      const serverEventId = createdEvent?.id || Date.now().toString();
 
       // ── 1 hour before reminder timestamp ──
       const reminderTime = new Date(pickerDate.getTime() - 60 * 60 * 1000);
       const shouldScheduleReminder = reminderTime.getTime() > Date.now();
 
       // Helper: schedule a local push notification at a specific time
-      const scheduleReminder = async (title, body, recipientId) => {
+      const scheduleReminder = async (title, notifBody, recipientId) => {
         if (!shouldScheduleReminder) return null;
         try {
           const id = await Notifications.scheduleNotificationAsync({
             content: {
               title,
-              body,
+              body: notifBody,
               data: {
-                eventId: newEvent.id,
+                eventId: serverEventId,
                 recipientId: recipientId || null,
                 type: 'event_reminder',
               },
@@ -527,29 +776,19 @@ export default function CalendarScreen() {
         // For each participant:
         //  1) Fire "you've been invited" immediately (in-app)
         //  2) Schedule a 1-hour-before reminder (local push)
-        const scheduledIds = [];
         for (const p of participants) {
           addNotification({
             type: 'event',
             icon: '📅',
-            title: `Event: ${newEvent.name}`,
-            body: `${resolvedType} scheduled for ${newEvent.eventDate}. You've been invited.`,
+            title: `Event: ${eventName.trim()}`,
+            body: `${resolvedType} scheduled. You've been invited.`,
             recipientId: p.id,
           });
-          const rid = await scheduleReminder(
-            `Reminder: ${newEvent.name}`,
-            `${resolvedType} starts in 1 hour${newEvent.location ? ` at ${newEvent.location}` : ''}.`,
+          await scheduleReminder(
+            `Reminder: ${eventName.trim()}`,
+            `${resolvedType} starts in 1 hour${location.trim() ? ` at ${location.trim()}` : ''}.`,
             p.id,
           );
-          if (rid) scheduledIds.push({ participantId: p.id, notificationId: rid });
-        }
-
-        // Save scheduled IDs onto the event so they can be cancelled if the event is deleted
-        if (scheduledIds.length) {
-          const withIds = updated.map(e =>
-            e.id === newEvent.id ? { ...e, scheduledReminderIds: scheduledIds } : e,
-          );
-          await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(withIds));
         }
       } else {
         // No participants — only notify creator
@@ -557,22 +796,18 @@ export default function CalendarScreen() {
           type: 'event',
           icon: '📅',
           title: 'Event Created',
-          body: `"${newEvent.name}" scheduled.`,
+          body: `"${eventName.trim()}" scheduled.`,
         });
-        const rid = await scheduleReminder(
-          `Reminder: ${newEvent.name}`,
-          `${resolvedType} starts in 1 hour${newEvent.location ? ` at ${newEvent.location}` : ''}.`,
+        await scheduleReminder(
+          `Reminder: ${eventName.trim()}`,
+          `${resolvedType} starts in 1 hour${location.trim() ? ` at ${location.trim()}` : ''}.`,
         );
-        if (rid) {
-          const withIds = updated.map(e =>
-            e.id === newEvent.id ? { ...e, scheduledReminderIds: [{ participantId: null, notificationId: rid }] } : e,
-          );
-          await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(withIds));
-        }
       }
 
       closeModal();
-    } catch { Alert.alert('Error', 'Could not save event.'); }
+    } catch (e) {
+      Alert.alert('Error', e.message || 'Could not save event.');
+    }
   };
 
   // Participant helpers
@@ -598,18 +833,23 @@ export default function CalendarScreen() {
     Alert.alert('Delete Event', 'Remove this event?', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: async () => {
-        const existing = await AsyncStorage.getItem(STORAGE_KEY);
-        const all = existing ? JSON.parse(existing) : [];
-        // Cancel any scheduled reminders for this event before removing it
-        const eventToDelete = all.find(e => e.id === id);
-        if (eventToDelete?.scheduledReminderIds?.length) {
-          for (const { notificationId } of eventToDelete.scheduledReminderIds) {
-            try { await Notifications.cancelScheduledNotificationAsync(notificationId); } catch {}
+        try {
+          const token = await getAccessToken();
+          const res = await fetch(`${EVENTS_API}${id}/`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${token}` },
+          });
+          if (!res.ok && res.status !== 204) {
+            const err = await res.json().catch(() => ({}));
+            Alert.alert('Error', err.detail || err.message || `Could not delete (Error ${res.status})`);
+            return;
           }
+          // Optimistically remove locally, then re-fetch to stay in sync
+          setEvents(prev => prev.filter(e => String(e.id) !== String(id)));
+          fetchEvents();
+        } catch (e) {
+          Alert.alert('Error', e.message || 'Could not delete event.');
         }
-        const updated = all.filter(e => e.id !== id);
-        await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-        setEvents(updated.filter(e => e.type === 'event'));
       }},
     ]);
   };
@@ -1502,6 +1742,192 @@ export default function CalendarScreen() {
           </Animated.View>
         </Modal>
       )}
+
+      {/* ── Ask Dyuksa: AI slot-picker modal ── */}
+      {aiSuggestion && (
+        <Modal transparent visible animationType="fade" onRequestClose={closeAiModal}>
+          <TouchableOpacity style={aiStyles.backdrop} activeOpacity={1} onPress={closeAiModal} />
+          <View style={aiStyles.center} pointerEvents="box-none">
+            <View style={[aiStyles.sheet, { backgroundColor: card }]}>
+              <View style={aiStyles.header}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[aiStyles.title, { color: txt }]}>✦ Create Event</Text>
+                  <Text style={aiStyles.subtitle}>Let Nova AI schedule this meeting</Text>
+                </View>
+                <TouchableOpacity onPress={closeAiModal} style={aiStyles.closeBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Text style={[aiStyles.closeTxt, { color: sub }]}>✕</Text>
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView style={{ maxHeight: 520 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+                {/* Editable title */}
+                <Text style={[aiStyles.label, { color: sub }]}>Event name</Text>
+                <TextInput
+                  style={[aiStyles.textInput, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr, color: txt }]}
+                  value={aiEditTitle}
+                  onChangeText={setAiEditTitle}
+                  placeholder="Meeting title"
+                  placeholderTextColor={sub}
+                  editable={!aiSaving}
+                />
+
+                {/* Event type pill (read-only) */}
+                <View style={aiStyles.pillRow}>
+                  <View style={aiStyles.pill}><Text style={aiStyles.pillText}>👥 {aiSuggestion.event_type || 'Meeting'}</Text></View>
+                </View>
+
+                {/* Duration + Date pickers side-by-side */}
+                <View style={aiStyles.pickerRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[aiStyles.label, { color: sub, marginTop: 0 }]}>Duration</Text>
+                    <TouchableOpacity
+                      style={[aiStyles.pickerBtn, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}
+                      onPress={() => setShowDurationMenu(v => !v)}
+                      disabled={aiSaving || aiSlotsLoading}
+                    >
+                      <Text style={{ color: txt, fontSize: 14, fontWeight: '600' }}>⏱ {aiEditDuration} min</Text>
+                      <Text style={{ color: sub, fontSize: 12 }}>{showDurationMenu ? '▲' : '▾'}</Text>
+                    </TouchableOpacity>
+                    {showDurationMenu && (
+                      <View style={[aiStyles.durationMenu, { backgroundColor: card, borderColor: bdr }]}>
+                        {[15, 30, 45, 60, 90].map(opt => (
+                          <TouchableOpacity
+                            key={opt}
+                            style={[aiStyles.durationItem, { borderBottomColor: bdr }, aiEditDuration === opt && { backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
+                            onPress={() => {
+                              setShowDurationMenu(false);
+                              if (opt === aiEditDuration) return;
+                              setAiEditDuration(opt);
+                              refetchAiSlots(opt, null);
+                            }}
+                          >
+                            <Text style={{ color: aiEditDuration === opt ? '#7C3AED' : txt, fontWeight: aiEditDuration === opt ? '700' : '500' }}>
+                              {opt} min
+                            </Text>
+                            {aiEditDuration === opt && <Text style={{ color: '#7C3AED', fontSize: 14 }}>✓</Text>}
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    )}
+                  </View>
+
+                  <View style={{ flex: 1 }}>
+                    <Text style={[aiStyles.label, { color: sub, marginTop: 0 }]}>Date</Text>
+                    <TouchableOpacity
+                      style={[aiStyles.pickerBtn, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}
+                      onPress={() => setShowAiDatePicker(true)}
+                      disabled={aiSaving || aiSlotsLoading}
+                    >
+                      <Text style={{ color: txt, fontSize: 14, fontWeight: '600' }} numberOfLines={1}>
+                        📅 {aiEditDate ? aiFormatTargetDate(aiEditDate) : 'Pick date'}
+                      </Text>
+                      <Text style={{ color: sub, fontSize: 12 }}>▾</Text>
+                    </TouchableOpacity>
+                    {showAiDatePicker && (
+                      <DateTimePicker
+                        value={aiEditDate ? new Date(aiEditDate + 'T00:00:00') : new Date()}
+                        mode="date"
+                        display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                        minimumDate={new Date()}
+                        onChange={(ev, d) => {
+                          if (Platform.OS === 'android') setShowAiDatePicker(false);
+                          if (ev.type === 'dismissed') { setShowAiDatePicker(false); return; }
+                          if (d) {
+                            const iso = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+                            if (iso === aiEditDate) { setShowAiDatePicker(false); return; }
+                            setAiEditDate(iso);
+                            setShowAiDatePicker(false);
+                            refetchAiSlots(null, iso);
+                          }
+                        }}
+                      />
+                    )}
+                  </View>
+                </View>
+
+                {/* Attendees */}
+                {Array.isArray(aiSuggestion.attendee_names) && aiSuggestion.attendee_names.length > 0 && (
+                  <>
+                    <Text style={[aiStyles.label, { color: sub }]}>Participants</Text>
+                    <View style={aiStyles.attendeeRow}>
+                      {aiSuggestion.attendee_names.map((n, i) => (
+                        <View key={`${n}_${i}`} style={[aiStyles.attendee, { backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}>
+                          <View style={aiStyles.avatar}>
+                            <Text style={aiStyles.avatarText}>{aiInitials(n)}</Text>
+                          </View>
+                          <Text style={[aiStyles.attendeeName, { color: txt }]} numberOfLines={1}>{n}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  </>
+                )}
+
+                {/* Slot chips — 4 per row */}
+                <View style={aiStyles.slotsHeader}>
+                  <Text style={[aiStyles.label, { color: sub, marginTop: 0 }]}>
+                    Available slots ({aiSuggestion.available_slots?.length || 0}) · tap to select
+                  </Text>
+                  {aiSlotsLoading && <ActivityIndicator color="#7C3AED" size="small" />}
+                </View>
+
+                {(aiSuggestion.available_slots || []).length > 0 ? (
+                  <View style={aiStyles.slotGrid}>
+                    {aiSuggestion.available_slots.map(slot => {
+                      const active = slot === aiSelectedSlot;
+                      return (
+                        <TouchableOpacity
+                          key={slot}
+                          style={[aiStyles.slotChip, active && aiStyles.slotChipActive]}
+                          onPress={() => setAiSelectedSlot(slot)}
+                          activeOpacity={0.7}
+                          disabled={aiSaving || aiSlotsLoading}
+                        >
+                          <Text style={[aiStyles.slotChipText, active && aiStyles.slotChipTextActive]}>
+                            {aiFormatSlotTime(slot)}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                ) : (
+                  !aiSlotsLoading && (
+                    <View style={aiStyles.noSlotsBox}>
+                      <Text style={{ fontSize: 13, color: sub, textAlign: 'center' }}>
+                        No free slots on this date. Try a different date or duration.
+                      </Text>
+                    </View>
+                  )
+                )}
+
+                <View style={aiStyles.infoCard}>
+                  <Text style={aiStyles.infoText}>✦ Event will be created as an online meeting with all participants invited.</Text>
+                </View>
+              </ScrollView>
+
+              {/* Action buttons */}
+              <View style={aiStyles.btnRow}>
+                <TouchableOpacity
+                  style={[aiStyles.cancelBtn, { borderColor: bdr }]}
+                  onPress={closeAiModal}
+                  disabled={aiSaving}
+                >
+                  <Text style={[aiStyles.cancelTxt, { color: sub }]}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[aiStyles.createBtn, (aiSaving || !aiSelectedSlot) && { opacity: 0.5 }]}
+                  onPress={confirmAiEvent}
+                  disabled={aiSaving || aiSlotsLoading || !aiSelectedSlot}
+                >
+                  {aiSaving
+                    ? <ActivityIndicator color="#fff" size="small" />
+                    : <Text style={aiStyles.createTxt}>✦ Create Event</Text>
+                  }
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+      )}
     </SafeAreaView>
   );
 }
@@ -1922,4 +2348,89 @@ const styles = StyleSheet.create({
     backgroundColor: '#4ECDC4', borderColor: '#4ECDC4',
   },
   userCheckmark: { color: '#fff', fontSize: 13, fontWeight: '700' },
+});
+
+// ── Ask Dyuksa modal styles ──
+const aiStyles = StyleSheet.create({
+  backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)' },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 16 },
+  sheet: {
+    width: '100%', maxWidth: 420, borderRadius: 16,
+    paddingHorizontal: 20, paddingTop: 18, paddingBottom: 16,
+    shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 20, shadowOffset: { width: 0, height: 10 },
+    elevation: 20,
+  },
+  header: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
+  title: { fontSize: 18, fontWeight: '700' },
+  subtitle: { fontSize: 12, color: '#A78BFA', marginTop: 2 },
+  closeBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(150,150,170,0.15)', justifyContent: 'center', alignItems: 'center' },
+  closeTxt: { fontSize: 16, fontWeight: '600' },
+
+  label: { fontSize: 11, fontWeight: '600', letterSpacing: 0.3, marginBottom: 6, marginTop: 6 },
+  readonly: { borderRadius: 10, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 14 },
+  textInput: {
+    borderRadius: 10, borderWidth: 1,
+    paddingHorizontal: 14, paddingVertical: 10,
+    fontSize: 15, fontWeight: '600', marginBottom: 14,
+    minHeight: 44,
+  },
+
+  pickerRow: { flexDirection: 'row', gap: 10, marginBottom: 14 },
+  pickerBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    borderRadius: 10, borderWidth: 1,
+    paddingHorizontal: 12, paddingVertical: 10, minHeight: 44,
+  },
+  durationMenu: {
+    position: 'absolute', top: 72, left: 0, right: 0, zIndex: 10,
+    borderRadius: 10, borderWidth: 1,
+    shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 8, shadowOffset: { width: 0, height: 4 },
+    elevation: 8,
+  },
+  durationItem: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 14, paddingVertical: 11, borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+
+  pillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 14 },
+  pill: {
+    backgroundColor: 'rgba(167,139,250,0.15)', borderWidth: 1, borderColor: 'rgba(167,139,250,0.35)',
+    paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8,
+  },
+  pillText: { fontSize: 12, color: '#7C3AED', fontWeight: '600' },
+
+  attendeeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 14 },
+  attendee: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 20 },
+  avatar: { width: 22, height: 22, borderRadius: 11, backgroundColor: '#E9D5FF', justifyContent: 'center', alignItems: 'center' },
+  avatarText: { fontSize: 9, fontWeight: '700', color: '#7C3AED' },
+  attendeeName: { fontSize: 12, fontWeight: '500', maxWidth: 120 },
+
+  slotsHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  slotGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 4 },
+  // 4 chips per row — computed for a sheet that's ~360px wide (maxWidth 420 - 2*20 padding = 380; 4 chips * width + 3 gaps of 6 = 380 → width ~88)
+  slotChip: {
+    width: '23.5%',
+    paddingVertical: 8, paddingHorizontal: 4, borderRadius: 8,
+    backgroundColor: '#F0FDF4', borderWidth: 1, borderColor: '#BBF7D0',
+    alignItems: 'center',
+  },
+  slotChipActive: { backgroundColor: '#7C3AED', borderColor: '#7C3AED' },
+  slotChipText: { fontSize: 12, fontWeight: '600', color: '#15803D' },
+  slotChipTextActive: { color: '#FFFFFF' },
+  noSlotsBox: {
+    borderRadius: 10, borderWidth: 1, borderColor: 'rgba(150,150,170,0.3)',
+    padding: 16, marginBottom: 4,
+  },
+
+  infoCard: {
+    backgroundColor: 'rgba(167,139,250,0.08)', borderWidth: 1, borderColor: 'rgba(167,139,250,0.3)',
+    borderRadius: 10, padding: 12, marginTop: 14, marginBottom: 4,
+  },
+  infoText: { fontSize: 12, color: '#A78BFA', lineHeight: 18 },
+
+  btnRow: { flexDirection: 'row', gap: 10, marginTop: 16 },
+  cancelBtn: { flex: 1, borderWidth: 1, borderRadius: 10, height: 46, justifyContent: 'center', alignItems: 'center' },
+  cancelTxt: { fontSize: 14, fontWeight: '600' },
+  createBtn: { flex: 1.3, backgroundColor: '#7C3AED', borderRadius: 10, height: 46, justifyContent: 'center', alignItems: 'center' },
+  createTxt: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
 });

@@ -8,14 +8,19 @@ import { useState, useRef, useContext, useEffect, useCallback } from 'react';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NotificationsContext } from '../context/NotificationsContext';
 import { AuthContext } from '../context/AuthContext';
-import { getUsers, getProjects, createProject, getTasks, createTask } from '../services/ApiService';
+import { getUsers, getProjects, createProject, getTasks, createTask, getAccessToken } from '../services/ApiService';
 import SidebarMenu from '../components/SidebarMenu';
 import TaskDetailModal from '../components/TaskDetailModal';
 import { ThemeContext } from '../context/ThemeContext';
 import NotificationBell from '../components/NotificationBell';
+
+// Backend endpoints used to populate the project's Documents tab. Matches what
+// DocumentsScreen + TaskDetailModal use.
+const API_BASE     = 'http://192.168.1.164:8000';
+const DOCS_API     = `${API_BASE}/api/v1/documents/`;
+const TASKSITE_API = `${API_BASE}/api/v1/tasksite/`;
 
 const TASK_TYPES = ['client', 'internal', 'content_creation', 'ideas'];
 const TASK_TYPE_LABELS = {
@@ -36,7 +41,6 @@ const TASK_STATUS_COLORS = { pending: '#888899', in_progress: '#4ECDC4', complet
 const PRIORITY_COLORS = { low: '#4ADE80', medium: '#FBBF24', high: '#F97316', urgent: '#EF4444' };
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
-const PROJECT_DOCS_STORAGE_KEY = 'DYUKSA_PROJECT_DOCS'; // local-only for now, until backend is wired
 
 // Helper: get member array from project (backend uses `members`, legacy code used `assigned_members`)
 const getProjectMembers = (project) => {
@@ -170,6 +174,78 @@ export default function ProjectsScreen() {
     }
   };
 
+  // ── Favourite toggle ────────────────────────────────────────────────────
+  // Defensive: backend field name varies (is_favourite / is_favorite / is_starred / is_pinned).
+  // 1. Detect which field the project object already has  → use that key.
+  // 2. Fall back to `is_favourite` (UK spelling, most common in this codebase).
+  // 3. Optimistically flip the UI; revert + alert if the PATCH fails.
+  const detectFavKey = (project) => {
+    const candidates = [
+      'is_favourite', 'is_favorite',
+      'is_starred', 'is_pinned',
+      'favourite', 'favorite', 'starred',
+    ];
+    for (const key of candidates) {
+      if (Object.prototype.hasOwnProperty.call(project || {}, key)) return key;
+    }
+    return 'is_favourite';
+  };
+
+  const isProjectFav = (project) => {
+    if (!project) return false;
+    return !!(
+      project.is_favourite ||
+      project.is_favorite  ||
+      project.is_starred   ||
+      project.is_pinned    ||
+      project.favourite    ||
+      project.favorite     ||
+      project.starred
+    );
+  };
+
+  const toggleFavourite = async (project) => {
+    if (!project?.id) return;
+    const key = detectFavKey(project);
+    const currentlyFav = isProjectFav(project);
+    const next = !currentlyFav;
+
+    // Optimistic UI update — flip the flag in the local list immediately
+    setProjects(prev => prev.map(p => p.id === project.id ? { ...p, [key]: next } : p));
+    if (selectedProject?.id === project.id) {
+      setSelectedProject(p => p ? { ...p, [key]: next } : p);
+    }
+
+    try {
+      const token = await getAccessToken();
+      const res = await fetch(`${API_BASE}/api/v1/projects/${project.id}/`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type':  'application/json',
+        },
+        body: JSON.stringify({ [key]: next }),
+      });
+      if (!res.ok) {
+        // Surface backend error if PATCH rejects the field name
+        let detail = `${res.status}`;
+        try { const e = await res.json(); detail = e.detail || JSON.stringify(e); } catch {}
+        throw new Error(detail);
+      }
+    } catch (e) {
+      // Revert on failure
+      setProjects(prev => prev.map(p => p.id === project.id ? { ...p, [key]: currentlyFav } : p));
+      if (selectedProject?.id === project.id) {
+        setSelectedProject(p => p ? { ...p, [key]: currentlyFav } : p);
+      }
+      Alert.alert(
+        'Could not update favourite',
+        `${e?.message || 'Try again later.'}\n\nIf this keeps happening, the backend field name may be different.`,
+      );
+    }
+  };
+
+
   const fetchUsers = async () => {
     try {
       const list = await getUsers();
@@ -235,14 +311,8 @@ export default function ProjectsScreen() {
     setTaskSearch('');
     Animated.timing(detailsSlideAnim, { toValue: 1, duration: 280, useNativeDriver: true }).start();
 
-    // Load locally-stored documents for this project
-    try {
-      const raw = await AsyncStorage.getItem(PROJECT_DOCS_STORAGE_KEY);
-      const allDocs = raw ? JSON.parse(raw) : {};
-      setProjectDocs(allDocs[String(project.id)] || []);
-    } catch (e) {
-      setProjectDocs([]);
-    }
+    // Load documents for this project from backend (project-direct docs + task attachments)
+    fetchProjectDocs(project.id);
 
     // Fetch tasks and filter by project id
     setLoadingTasks(true);
@@ -262,6 +332,128 @@ export default function ProjectsScreen() {
     }
   };
 
+  // ── Fetch documents from backend for the open project ──
+  // Combines:
+  //   1. /api/v1/documents/?project={id}   → project-direct uploads
+  //   2. /api/v1/tasksite/?project={id}    → tasks for this project, then their attachments[]
+  // Both shapes are normalised into the same structure the existing render uses.
+  const fetchProjectDocs = useCallback(async (projectId) => {
+    if (projectId == null) return;
+    try {
+      const token = await getAccessToken();
+      const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` };
+
+      // ── (a) project-direct documents (paginated, follow `next`) ──
+      const projectDocPromise = (async () => {
+        const out = [];
+        let url = `${DOCS_API}?project=${projectId}`;
+        let safety = 10;
+        while (url && safety-- > 0) {
+          const res = await fetch(url, { headers });
+          if (!res.ok) break;
+          const json = await res.json();
+          const list = Array.isArray(json) ? json : (json.results || json.documents || []);
+          out.push(...list);
+          url = (!Array.isArray(json) && json.next) || null;
+        }
+        return out;
+      })();
+
+      // ── (b) tasks for this project → their attachments ──
+      const taskAttachmentsPromise = (async () => {
+        const tasks = [];
+        let url = `${TASKSITE_API}?project=${projectId}`;
+        let safety = 10;
+        while (url && safety-- > 0) {
+          const res = await fetch(url, { headers });
+          if (!res.ok) break;
+          const json = await res.json();
+          const list = Array.isArray(json) ? json : (json.results || []);
+          tasks.push(...list);
+          url = (!Array.isArray(json) && json.next) || null;
+        }
+        // Belt-and-suspenders: filter again by project id (some backends ignore the query param)
+        const forThisProject = tasks.filter(t => {
+          const pid = t.project_details?.id ?? t.project ?? t.project_id;
+          return String(pid) === String(projectId);
+        });
+        // Flatten attachments, tagging each with its task id/title
+        const flat = [];
+        forThisProject.forEach(t => {
+          (t.attachments || []).forEach(a => flat.push({ ...a, _taskId: t.id, _taskHeading: t.heading }));
+        });
+        return flat;
+      })();
+
+      const [projectDirect, taskAttachments] = await Promise.all([projectDocPromise, taskAttachmentsPromise]);
+
+      // Normalise both into the shape the existing render expects:
+      //   { id, name, type: 'image'|'file', uri, mimeType, size, uploadedAt, source: 'project'|'task',
+      //     taskId?, taskHeading?, _backend: true }  ← _backend used to skip local-only delete
+      const guessMime = (filename = '') => {
+        const ext = String(filename).split('?')[0].split('#')[0].split('.').pop().toLowerCase();
+        if (['png','jpg','jpeg','gif','webp','heic','bmp','svg'].includes(ext)) return `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+        if (ext === 'pdf')                                 return 'application/pdf';
+        if (['doc','docx'].includes(ext))                  return 'application/msword';
+        if (['xls','xlsx','csv'].includes(ext))            return 'application/vnd.ms-excel';
+        if (['ppt','pptx'].includes(ext))                  return 'application/vnd.ms-powerpoint';
+        if (ext === 'json')                                return 'application/json';
+        if (ext === 'txt' || ext === 'rtf')                return 'text/plain';
+        if (['mp4','mov','avi','mkv','webm'].includes(ext))return `video/${ext}`;
+        if (['mp3','wav','m4a','ogg'].includes(ext))       return `audio/${ext}`;
+        return 'application/octet-stream';
+      };
+
+      const normalisedDirect = projectDirect.map(d => {
+        const name = d.name || d.file_name || 'Untitled';
+        const mt   = guessMime(name);
+        const url  = d.source_file || d.source_file_url || d.file_url || null;
+        return {
+          id:         `doc_${d.id}`,
+          name,
+          uri:        url,
+          mimeType:   mt,
+          size:       d.file_size ?? null,
+          uploadedAt: d.updated_at || d.created_at,
+          type:       mt.startsWith('image/') ? 'image' : 'file',
+          source:     'project',
+          _backend:   true,
+        };
+      });
+
+      const normalisedTask = taskAttachments.map(a => {
+        const name = a.file_name || a.name || 'Untitled';
+        const mt   = guessMime(name);
+        const url  = a.file_url || a.source_file || null;
+        return {
+          id:           `att_${a.id}`,
+          name,
+          uri:          url,
+          mimeType:     mt,
+          size:         a.file_size ?? null,
+          uploadedAt:   a.uploaded_at || a.created_at,
+          type:         mt.startsWith('image/') ? 'image' : 'file',
+          source:       'task',
+          taskId:       a._taskId,
+          taskHeading:  a._taskHeading,
+          _backend:     true,
+        };
+      });
+
+      // Newest first
+      const combined = [...normalisedDirect, ...normalisedTask].sort((x, y) => {
+        const dx = x.uploadedAt ? new Date(x.uploadedAt).getTime() : 0;
+        const dy = y.uploadedAt ? new Date(y.uploadedAt).getTime() : 0;
+        return dy - dx;
+      });
+
+      setProjectDocs(combined);
+    } catch (e) {
+      console.error('fetchProjectDocs error:', e?.message || e);
+      setProjectDocs([]);
+    }
+  }, []);
+
   const closeDetails = () => {
     Animated.timing(detailsSlideAnim, { toValue: 0, duration: 250, useNativeDriver: true }).start(() => {
       setDetailsVisible(false);
@@ -273,40 +465,116 @@ export default function ProjectsScreen() {
     });
   };
 
-  // ── Document upload helpers ──
-  const saveDocs = async (docs) => {
-    if (!selectedProject) return;
+  // ── Document upload helpers (3-step presigned S3 flow) ──
+  // 1. POST /api/v1/projects/{id}/get-upload-url/   → { url, fields, file_key }
+  // 2. POST {url}  with form-data { ...fields, file: <binary> }   (direct to S3)
+  // 3. POST /api/v1/projects/{id}/confirm-upload/   → backend creates Document row
+  //
+  // After step 3 we re-fetch the project's docs so the new file appears.
+  const addDocument = async (doc) => {
+    if (!selectedProject?.id) {
+      Alert.alert('Error', 'No project selected.');
+      return;
+    }
+    const projectId = selectedProject.id;
     try {
-      const raw = await AsyncStorage.getItem(PROJECT_DOCS_STORAGE_KEY);
-      const allDocs = raw ? JSON.parse(raw) : {};
-      allDocs[String(selectedProject.id)] = docs;
-      await AsyncStorage.setItem(PROJECT_DOCS_STORAGE_KEY, JSON.stringify(allDocs));
+      const token = await getAccessToken();
+
+      // ── Step 1: ask backend for a presigned S3 upload URL ──
+      const step1 = await fetch(
+        `${API_BASE}/api/v1/projects/${projectId}/get-upload-url/`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type':  'application/json',
+          },
+          body: JSON.stringify({
+            file_name: doc.name,
+            file_type: doc.mimeType || 'application/octet-stream',
+          }),
+        },
+      );
+      const presigned = await step1.json().catch(() => ({}));
+      if (!step1.ok) {
+        throw new Error(presigned.detail || presigned.message || `get-upload-url failed (${step1.status})`);
+      }
+      const { url: s3Url, fields, file_key } = presigned;
+      if (!s3Url || !fields || !file_key) {
+        throw new Error('Invalid response from get-upload-url.');
+      }
+
+      // ── Step 2: upload the binary directly to S3 ──
+      // S3 requires the form fields IN ORDER, with `file` last.
+      const form = new FormData();
+      Object.entries(fields).forEach(([k, v]) => form.append(k, String(v)));
+      form.append('file', {
+        uri:  doc.uri,
+        name: doc.name,
+        type: doc.mimeType || 'application/octet-stream',
+      });
+      const step2 = await fetch(s3Url, {
+        method: 'POST',
+        body: form,
+        // Don't set Authorization or Content-Type — fetch sets the multipart boundary,
+        // and S3 auth is handled by the policy/signature fields above.
+      });
+      if (!step2.ok) {
+        const text = await step2.text().catch(() => '');
+        throw new Error(`S3 upload failed (${step2.status}). ${text.slice(0, 200)}`);
+      }
+
+      // ── Step 3: tell backend the upload is done ──
+      const step3 = await fetch(
+        `${API_BASE}/api/v1/projects/${projectId}/confirm-upload/`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type':  'application/json',
+          },
+          body: JSON.stringify({
+            file_key,
+            file_name: doc.name,
+            file_type: doc.mimeType || 'application/octet-stream',
+          }),
+        },
+      );
+      const confirmed = await step3.json().catch(() => ({}));
+      if (!step3.ok) {
+        throw new Error(confirmed.detail || confirmed.message || `confirm-upload failed (${step3.status})`);
+      }
+
+      // Reload the project's docs so the new file shows up
+      await fetchProjectDocs(projectId);
+
+      addNotification({
+        type: 'project', icon: '📄',
+        title: 'Document Uploaded',
+        body: `"${doc.name}" added to ${selectedProject?.name || 'project'}.`,
+      });
     } catch (e) {
-      console.error('saveDocs error:', e.message);
+      console.error('addDocument error:', e?.message || e);
+      Alert.alert('Upload Failed', e?.message || 'Could not upload document.');
     }
   };
 
-  const addDocument = async (doc) => {
-    // doc shape: { id, name, uri, mimeType, size, type: 'image'|'file', uploadedAt, uploadedBy }
-    const updated = [doc, ...projectDocs];
-    setProjectDocs(updated);
-    await saveDocs(updated);
-    addNotification({
-      type: 'project', icon: '📄',
-      title: 'Document Uploaded',
-      body: `"${doc.name}" added to ${selectedProject?.name || 'project'}.`,
-    });
-  };
-
   const deleteDocument = (docId) => {
-    Alert.alert('Delete Document', 'Remove this document from the project?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: async () => {
-        const updated = projectDocs.filter(d => d.id !== docId);
-        setProjectDocs(updated);
-        await saveDocs(updated);
-      }},
-    ]);
+    // All docs are now backend-owned. Deletion endpoints differ depending on
+    // origin (project document vs. task attachment), so for now we point users
+    // at the right place and skip the destructive call locally.
+    const target = projectDocs.find(d => d.id === docId);
+    if (target?.source === 'task') {
+      Alert.alert(
+        'Cannot delete here',
+        'This file is attached to a task. Open the task detail screen to remove it.',
+      );
+      return;
+    }
+    Alert.alert(
+      'Cannot delete here',
+      'Project documents must be deleted from the web dashboard for now.',
+    );
   };
 
   const pickFromCamera = async () => {
@@ -757,37 +1025,55 @@ export default function ProjectsScreen() {
                 <View style={[styles.progressFill, { width: `${item.progress || 0}%` }]} />
               </View>
 
-              {/* Member preview row */}
+              {/* Footer row — always render so the favourite star + chevron are visible,
+                  even on projects without members */}
               {(() => {
                 const memberList = getProjectMembers(item);
-                if (memberList.length === 0) return null;
                 return (
                   <View style={styles.cardMembersRow}>
-                    <View style={styles.cardAvatarStack}>
-                      {memberList.slice(0, 4).map((m, idx) => {
-                        const name = m.user?.full_name || m.user?.username || m.user_details?.full_name || m.user_details?.username || 'U';
-                        const initial = String(name).charAt(0).toUpperCase();
-                        return (
-                          <View
-                            key={m.id || idx}
-                            style={[
-                              styles.cardAvatar,
-                              { marginLeft: idx === 0 ? 0 : -8, zIndex: 4 - idx, borderColor: card },
-                            ]}
-                          >
-                            <Text style={styles.cardAvatarText}>{initial}</Text>
-                          </View>
-                        );
-                      })}
-                      {memberList.length > 4 && (
-                        <View style={[styles.cardAvatar, styles.cardAvatarExtra, { marginLeft: -8, borderColor: card }]}>
-                          <Text style={styles.cardAvatarExtraText}>+{memberList.length - 4}</Text>
+                    {memberList.length > 0 ? (
+                      <>
+                        <View style={styles.cardAvatarStack}>
+                          {memberList.slice(0, 4).map((m, idx) => {
+                            const name = m.user?.full_name || m.user?.username || m.user_details?.full_name || m.user_details?.username || 'U';
+                            const initial = String(name).charAt(0).toUpperCase();
+                            return (
+                              <View
+                                key={m.id || idx}
+                                style={[
+                                  styles.cardAvatar,
+                                  { marginLeft: idx === 0 ? 0 : -8, zIndex: 4 - idx, borderColor: card },
+                                ]}
+                              >
+                                <Text style={styles.cardAvatarText}>{initial}</Text>
+                              </View>
+                            );
+                          })}
+                          {memberList.length > 4 && (
+                            <View style={[styles.cardAvatar, styles.cardAvatarExtra, { marginLeft: -8, borderColor: card }]}>
+                              <Text style={styles.cardAvatarExtraText}>+{memberList.length - 4}</Text>
+                            </View>
+                          )}
                         </View>
-                      )}
-                    </View>
-                    <Text style={[styles.cardMembersLabel, { color: sub }]}>
-                      {memberList.length} member{memberList.length !== 1 ? 's' : ''}
-                    </Text>
+                        <Text style={[styles.cardMembersLabel, { color: sub }]}>
+                          {memberList.length} member{memberList.length !== 1 ? 's' : ''}
+                        </Text>
+                      </>
+                    ) : (
+                      <Text style={[styles.cardMembersLabel, { color: sub, marginLeft: 0 }]}>
+                        No members
+                      </Text>
+                    )}
+                    <TouchableOpacity
+                      style={styles.cardFavBtn}
+                      onPress={(e) => { e.stopPropagation(); toggleFavourite(item); }}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                      activeOpacity={0.6}
+                    >
+                      <Text style={[styles.cardFavIcon, isProjectFav(item) && styles.cardFavIconActive]}>
+                        {isProjectFav(item) ? '★' : '☆'}
+                      </Text>
+                    </TouchableOpacity>
                     <Text style={[styles.cardChevron, { color: sub }]}>›</Text>
                   </View>
                 );
@@ -1010,7 +1296,7 @@ export default function ProjectsScreen() {
                 {[
                   { id: 'tasks',     label: 'Tasks',     count: projectTasks.length },
                   { id: 'members',   label: 'Members',   count: getProjectMembers(selectedProject).length },
-                  { id: 'documents', label: 'Documents', count: projectDocs.length + (selectedProject.document_count ?? 0) },
+                  { id: 'documents', label: 'Documents', count: projectDocs.length },
                 ].map(t => {
                   const isActive = detailsTab === t.id;
                   // Theme-aware active color — cyan in dark, dark-navy in light
@@ -1284,19 +1570,25 @@ export default function ProjectsScreen() {
                       <View style={styles.pd_emptyState}>
                         <Text style={{ fontSize: 48, opacity: 0.3 }}>📄</Text>
                         <Text style={[styles.pd_emptyTitle, { color: txt }]}>
-                          {(selectedProject.document_count ?? 0) > 0
-                            ? `${selectedProject.document_count} document${selectedProject.document_count !== 1 ? 's' : ''} on server`
-                            : 'No documents yet'}
+                          No documents yet
                         </Text>
                         <Text style={[styles.pd_emptyText, { color: sub }]}>
-                          Tap Upload Documents to add from Camera, Gallery or Files
+                          Tap Upload Documents to add from Camera, Gallery or Files. Files attached to this project's tasks will also appear here.
                         </Text>
                       </View>
                     ) : (
                       projectDocs.map((d) => {
                         const kind = getFileKind(d);
+                        const openDoc = () => {
+                          if (d.uri) Linking.openURL(d.uri).catch(() => {});
+                        };
                         return (
-                          <View key={d.id} style={[styles.docCard, { backgroundColor: card, borderColor: bdr }]}>
+                          <TouchableOpacity
+                            key={d.id}
+                            style={[styles.docCard, { backgroundColor: card, borderColor: bdr }]}
+                            activeOpacity={0.7}
+                            onPress={openDoc}
+                          >
                             {d.type === 'image' ? (
                               <Image source={{ uri: d.uri }} style={styles.docThumb} />
                             ) : (
@@ -1310,6 +1602,12 @@ export default function ProjectsScreen() {
                                 <View style={styles.docTypePill}>
                                   <Text style={styles.docTypePillText}>{kind.label}</Text>
                                 </View>
+                                {/* Task attribution badge (only for task-attachment docs) */}
+                                {d.source === 'task' && d.taskId != null && (
+                                  <View style={styles.docTaskPill}>
+                                    <Text style={styles.docTaskPillText}>Task #{d.taskId}</Text>
+                                  </View>
+                                )}
                                 {!!d.size && <Text style={[styles.docMetaText, { color: sub }]}>{formatSize(d.size)}</Text>}
                                 <Text style={[styles.docMetaText, { color: sub }]}>{formatDocDate(d.uploadedAt)}</Text>
                               </View>
@@ -1321,7 +1619,7 @@ export default function ProjectsScreen() {
                             >
                               <Text style={{ fontSize: 14, color: '#EF4444' }}>✕</Text>
                             </TouchableOpacity>
-                          </View>
+                          </TouchableOpacity>
                         );
                       })
                     )}
@@ -1578,6 +1876,12 @@ const styles = StyleSheet.create({
     fontSize: 11, fontWeight: '500', marginLeft: 10, flex: 1,
   },
   cardChevron: { fontSize: 20, fontWeight: '300' },
+  cardFavBtn: {
+    paddingHorizontal: 6, paddingVertical: 2,
+    marginRight: 4,
+  },
+  cardFavIcon: { fontSize: 20, color: '#C0C0CE', lineHeight: 22 },
+  cardFavIconActive: { color: '#F59E0B' },
 
   // ── Project Details Modal ──
   detailsHeaderCard: {
@@ -1884,6 +2188,12 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   docTypePillText: { color: '#4ECDC4', fontSize: 9, fontWeight: '800', letterSpacing: 0.3 },
+  docTaskPill: {
+    backgroundColor: '#CFFAFE',
+    paddingHorizontal: 6, paddingVertical: 2,
+    borderRadius: 4,
+  },
+  docTaskPillText: { color: '#06B6D4', fontSize: 9, fontWeight: '700', letterSpacing: 0.3 },
   docMetaText: { fontSize: 11, fontWeight: '500' },
   docDeleteBtn: {
     width: 32, height: 32, borderRadius: 16,

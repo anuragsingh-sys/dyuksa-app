@@ -51,7 +51,8 @@ function QuickTaskButton({ onPress, borderColor }) {
 // ─── Quick Add Modal: Task / Event toggle ──────────────────────────────────
 // Task  → opens the AI-enhanced Create Task screen (TasksScreen)
 // Event → opens the New Event screen (CalendarScreen)
-function QuickAddModal({ visible, onClose, onPickTask, onPickEvent }) {
+// AI    → opens the "Generate by AI" modal on the relevant screen
+function QuickAddModal({ visible, onClose, onPickTask, onPickEvent, onPickAI }) {
   const [activeTab, setActiveTab] = useState('task');
   const slideAnim = useRef(new Animated.Value(-700)).current;
 
@@ -77,6 +78,15 @@ function QuickAddModal({ visible, onClose, onPickTask, onPickEvent }) {
           if (activeTab === 'task') onPickTask();
           else onPickEvent();
         }, 120);
+      });
+  };
+
+  // Tap on the "✨ Nova AI" pill → close Quick Add, then open AI modal
+  const handleNovaAI = () => {
+    Animated.timing(slideAnim, { toValue: -700, duration: 220, useNativeDriver: true })
+      .start(() => {
+        onClose();
+        setTimeout(() => onPickAI(activeTab), 120);
       });
   };
 
@@ -125,9 +135,19 @@ function QuickAddModal({ visible, onClose, onPickTask, onPickEvent }) {
                     Assignees, Links, and Attachments.
                   </Text>
                   <View style={styles.qaFeatureRow}>
-                    <View style={styles.qaFeatureChip}><Text style={styles.qaFeatureChipText}>✨ Nova AI</Text></View>
-                    <View style={styles.qaFeatureChip}><Text style={styles.qaFeatureChipText}>⚡ Auto-generate</Text></View>
-                    <View style={styles.qaFeatureChip}><Text style={styles.qaFeatureChipText}>👥 Assignees</Text></View>
+                    <TouchableOpacity
+                      style={[styles.qaFeatureChip, styles.qaFeatureChipAI]}
+                      onPress={handleNovaAI}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[styles.qaFeatureChipText, styles.qaFeatureChipTextAI]}>✨ Nova AI</Text>
+                    </TouchableOpacity>
+                    <View style={styles.qaFeatureChip}>
+                      <Text style={styles.qaFeatureChipText}>⚡ Auto-generate</Text>
+                    </View>
+                    <View style={styles.qaFeatureChip}>
+                      <Text style={styles.qaFeatureChipText}>👥 Assignees</Text>
+                    </View>
                   </View>
                 </>
               ) : (
@@ -138,6 +158,13 @@ function QuickAddModal({ visible, onClose, onPickTask, onPickEvent }) {
                     an alert 1 hour before the event fires.
                   </Text>
                   <View style={styles.qaFeatureRow}>
+                    <TouchableOpacity
+                      style={[styles.qaFeatureChip, styles.qaFeatureChipAI]}
+                      onPress={handleNovaAI}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[styles.qaFeatureChipText, styles.qaFeatureChipTextAI]}>✨ Nova AI</Text>
+                    </TouchableOpacity>
                     <View style={[styles.qaFeatureChip, { backgroundColor: 'rgba(167,139,250,0.12)' }]}>
                       <Text style={[styles.qaFeatureChipText, { color: '#A78BFA' }]}>📅 Date picker</Text>
                     </View>
@@ -210,6 +237,15 @@ function MainTabs() {
 
   const openQuickAdd = () => setQaVisible(true);
 
+  // Center + FAB: open AI Task modal directly (skip Quick Add)
+  // The modal itself has Task/Event tabs so user can switch inside it.
+  const openAIModalDirect = () => {
+    navigation.navigate('Main', {
+      screen: 'Tasks',
+      params: { openCreateModalAI: true, returnTo: currentTabName },
+    });
+  };
+
   const handlePickTask = () => {
     navigation.navigate('Main', {
       screen: 'Tasks',
@@ -222,6 +258,23 @@ function MainTabs() {
       screen: 'Calendar',
       params: { openCreateModal: true, returnTo: currentTabName },
     });
+  };
+
+  // Nova AI → opens the "Generate by AI" modal on the matching screen
+  const handlePickAI = (tab) => {
+    if (tab === 'event') {
+      // Calendar AI isn't built yet — go to Calendar with a flag for when we add it
+      navigation.navigate('Main', {
+        screen: 'Calendar',
+        params: { openCreateModalAI: true, returnTo: currentTabName },
+      });
+    } else {
+      // Task AI uses the existing "Generate Task by AI" modal in TasksScreen
+      navigation.navigate('Main', {
+        screen: 'Tasks',
+        params: { openCreateModalAI: true, returnTo: currentTabName },
+      });
+    }
   };
 
   return (
@@ -247,19 +300,19 @@ function MainTabs() {
         <Tab.Screen name="Dashboard" component={DashboardScreen} />
         <Tab.Screen name="Projects"  component={ProjectsScreen} />
 
-        {/* Center FAB — opens Quick Add modal with Task/Event toggle */}
+        {/* Center FAB — opens Generate AI modal directly (Task/Event tabs inside) */}
         <Tab.Screen
           name="Quick"
           component={TasksScreen}
           options={{
             tabBarLabel:  () => null,
             tabBarIcon:   () => null,
-            tabBarButton: () => <QuickTaskButton onPress={openQuickAdd} borderColor={tabBg} />,
+            tabBarButton: () => <QuickTaskButton onPress={openAIModalDirect} borderColor={tabBg} />,
           }}
           listeners={{
             tabPress: (e) => {
               e.preventDefault();
-              openQuickAdd();
+              openAIModalDirect();
             },
           }}
         />
@@ -273,6 +326,7 @@ function MainTabs() {
         onClose={() => setQaVisible(false)}
         onPickTask={handlePickTask}
         onPickEvent={handlePickEvent}
+        onPickAI={handlePickAI}
       />
     </>
   );
@@ -452,6 +506,16 @@ const styles = StyleSheet.create({
   },
   qaFeatureChipText: {
     fontSize: 11, fontWeight: '600', color: '#4ECDC4',
+  },
+  // Tappable "Nova AI" chip — purple, with slight shadow to signal it's interactive
+  qaFeatureChipAI: {
+    backgroundColor: 'rgba(167,139,250,0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(167,139,250,0.45)',
+  },
+  qaFeatureChipTextAI: {
+    color: '#7C3AED',
+    fontWeight: '700',
   },
 
   qaInfoBox: {

@@ -1,19 +1,58 @@
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, StatusBar, Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import SidebarMenu from '../components/SidebarMenu';
 import { ThemeContext } from '../context/ThemeContext';
+import { AuthContext } from '../context/AuthContext';
 import NotificationBell from '../components/NotificationBell';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRef, useCallback, useState, useContext } from 'react';
+import { getProjects, getTasks, getAccessToken } from '../services/ApiService';
 
 const STORAGE_KEY = 'DYUKSA_QUICK_TASKS';
+const API_BASE   = 'http://192.168.1.164:8000';
+
+// Map common file extensions to a small label + colour for the doc icon
+const fileMeta = (name = '') => {
+  const ext = String(name).split('.').pop().toLowerCase();
+  if (['pdf'].includes(ext))                             return { label: 'PDF',  color: '#EF4444' };
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) return { label: 'IMG',  color: '#06B6D4' };
+  if (['doc', 'docx'].includes(ext))                     return { label: 'DOC',  color: '#3B82F6' };
+  if (['xls', 'xlsx', 'csv'].includes(ext))              return { label: 'XLS',  color: '#10B981' };
+  if (['ppt', 'pptx'].includes(ext))                     return { label: 'PPT',  color: '#F97316' };
+  if (['zip', 'rar', '7z'].includes(ext))                return { label: 'ZIP',  color: '#A855F7' };
+  if (['txt', 'md'].includes(ext))                       return { label: 'TXT',  color: '#6B7280' };
+  return { label: 'FILE', color: '#6B7280' };
+};
+
+const fmtRelative = (iso) => {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    const now = new Date();
+    const diffMs   = now - d;
+    const diffMin  = Math.floor(diffMs / 60000);
+    const diffHour = Math.floor(diffMs / 3600000);
+    const diffDay  = Math.floor(diffMs / 86400000);
+    if (diffMin < 1)  return 'just now';
+    if (diffMin < 60) return `${diffMin}m ago`;
+    if (diffHour < 24) return `${diffHour}h ago`;
+    if (diffDay < 7)  return `${diffDay}d ago`;
+    return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+  } catch { return ''; }
+};
+
+const PRIORITY_COLORS = {
+  low: '#9CA3AF', medium: '#F59E0B', high: '#EF4444', critical: '#DC2626',
+};
 
 export default function DashboardScreen() {
   const navigation = useNavigation();
   const { theme, fontScale } = useContext(ThemeContext);
+  const { user } = useContext(AuthContext);
   const isDark = theme === 'Dark';
   const bg   = isDark ? '#0D0D0F' : '#F5F5F7';
   const card = isDark ? '#1A1A20' : '#FFFFFF';
@@ -28,7 +67,125 @@ export default function DashboardScreen() {
   const [quickNotes, setQuickNotes] = useState([]);
   const [notesExpanded, setNotesExpanded] = useState(false);
 
+  // ── Backend-wired sections ─────────────────────────────────────────────
+  const [inProgressTasks, setInProgressTasks] = useState([]);
+  const [recentDocs, setRecentDocs]           = useState([]);
+  const [favProjects, setFavProjects]         = useState([]);
+  const [loadingTasks, setLoadingTasks]       = useState(true);
+  const [loadingDocs, setLoadingDocs]         = useState(true);
+  const [loadingProjects, setLoadingProjects] = useState(true);
+
+  // Resolve "is this task assigned to me?" by id, username, or email — covers
+  // backends that put any of those in `assigned_to` / `assigned_to_user_details`.
+  const isTaskMine = useCallback((task) => {
+    if (!user) return false;
+    const myId    = user.id;
+    const myEmail = (user.email || '').toLowerCase();
+    const myUname = (user.username || user.name || '').toLowerCase();
+    const ids = task.assigned_to || [];
+    if (myId != null && ids.some((x) => String(x) === String(myId))) return true;
+    const details = task.assigned_to_user_details || [];
+    return details.some((u) => {
+      if (myId != null && String(u.id) === String(myId)) return true;
+      if (myEmail && (u.email || '').toLowerCase() === myEmail) return true;
+      if (myUname && (u.username || '').toLowerCase() === myUname) return true;
+      return false;
+    });
+  }, [user]);
+
+  // Fetch in-progress tasks assigned to me
+  const fetchInProgress = useCallback(async () => {
+    try {
+      const all = await getTasks();
+      const list = Array.isArray(all) ? all : (all?.results || []);
+      const mine = list
+        .filter((t) => t && t.status === 'in_progress' && isTaskMine(t))
+        .sort((a, b) => {
+          const da = new Date(a.updated_at || a.created_at || 0).getTime();
+          const db = new Date(b.updated_at || b.created_at || 0).getTime();
+          return db - da;
+        })
+        .slice(0, 5);
+      setInProgressTasks(mine);
+    } catch (e) {
+      console.warn('fetchInProgress failed:', e?.message || e);
+      setInProgressTasks([]);
+    } finally {
+      setLoadingTasks(false);
+    }
+  }, [isTaskMine]);
+
+  // Fetch the 3 most recently uploaded documents
+  const fetchRecentDocs = useCallback(async () => {
+    try {
+      const token = await getAccessToken();
+      const res = await fetch(`${API_BASE}/api/v1/documents/?ordering=-created_at`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`docs ${res.status}`);
+      const data = await res.json();
+      const list = Array.isArray(data) ? data : (data.results || []);
+      // Server-side ordering may not always be supported — sort client-side too
+      list.sort((a, b) => {
+        const da = new Date(a.created_at || a.updated_at || 0).getTime();
+        const db = new Date(b.created_at || b.updated_at || 0).getTime();
+        return db - da;
+      });
+      setRecentDocs(list.slice(0, 3));
+    } catch (e) {
+      console.warn('fetchRecentDocs failed:', e?.message || e);
+      setRecentDocs([]);
+    } finally {
+      setLoadingDocs(false);
+    }
+  }, []);
+
+  // Fetch favourite projects.
+  // Backend exact field name varies — defensively check several common keys.
+  // If none of the projects have a favourite flag set, gracefully fall back to
+  // the 3 most recently updated projects so the section isn't empty.
+  const fetchFavProjects = useCallback(async () => {
+    try {
+      const list = await getProjects();
+      const projects = Array.isArray(list) ? list : (list?.results || []);
+      const isFav = (p) =>
+        p.is_favourite === true ||
+        p.is_favorite  === true ||
+        p.is_starred   === true ||
+        p.is_pinned    === true ||
+        p.favourite    === true ||
+        p.favorite     === true ||
+        p.starred      === true;
+
+      const favs = projects.filter(isFav);
+      let result;
+      if (favs.length > 0) {
+        favs.sort((a, b) => {
+          const da = new Date(a.updated_at || a.created_at || 0).getTime();
+          const db = new Date(b.updated_at || b.created_at || 0).getTime();
+          return db - da;
+        });
+        result = favs.slice(0, 3);
+      } else {
+        // Fallback: 3 most recently updated projects
+        const sorted = [...projects].sort((a, b) => {
+          const da = new Date(a.updated_at || a.created_at || 0).getTime();
+          const db = new Date(b.updated_at || b.created_at || 0).getTime();
+          return db - da;
+        });
+        result = sorted.slice(0, 3);
+      }
+      setFavProjects(result);
+    } catch (e) {
+      console.warn('fetchFavProjects failed:', e?.message || e);
+      setFavProjects([]);
+    } finally {
+      setLoadingProjects(false);
+    }
+  }, []);
+
   useFocusEffect(useCallback(() => {
+    // Quick notes (existing behavior)
     AsyncStorage.getItem(STORAGE_KEY).then(data => {
       if (data) {
         const all = JSON.parse(data);
@@ -37,6 +194,14 @@ export default function DashboardScreen() {
         setQuickNotes([]);
       }
     });
+
+    // Refresh all backend-wired sections every time we land here
+    setLoadingTasks(true);
+    setLoadingDocs(true);
+    setLoadingProjects(true);
+    fetchInProgress();
+    fetchRecentDocs();
+    fetchFavProjects();
 
     // If navigated here with scrollToNotes param, expand and scroll to Quick Actions
     if (route.params?.scrollToNotes) {
@@ -50,7 +215,7 @@ export default function DashboardScreen() {
       }, 400);
       navigation.setParams({ scrollToNotes: false });
     }
-  }, [route.params?.scrollToNotes]));
+  }, [route.params?.scrollToNotes, fetchInProgress, fetchRecentDocs, fetchFavProjects]));
 
   const handleQuickNotesPress = () => {
     setNotesExpanded(prev => !prev);
@@ -70,6 +235,25 @@ export default function DashboardScreen() {
       return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
     } catch { return ''; }
   };
+
+  // Navigate to Tasks tab and open the specific task
+  const openTask = (task) => {
+    try { navigation.jumpTo('Tasks', { openTaskId: task.id }); }
+    catch { navigation.navigate('Main', { screen: 'Tasks', params: { openTaskId: task.id } }); }
+  };
+
+  // Navigate to a project's detail view
+  const openProject = (project) => {
+    try { navigation.jumpTo('Projects', { openProjectId: project.id }); }
+    catch { navigation.navigate('Main', { screen: 'Projects', params: { openProjectId: project.id } }); }
+  };
+
+  const goToTasksFiltered = () => {
+    try { navigation.jumpTo('Tasks', { presetFilter: 'in_progress' }); }
+    catch { navigation.navigate('Main', { screen: 'Tasks', params: { presetFilter: 'in_progress' } }); }
+  };
+
+  const userFirstName = (user?.name || user?.username || 'there').split(' ')[0];
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: bg }]}>
@@ -97,53 +281,184 @@ export default function DashboardScreen() {
 
       {/* Welcome Header */}
       <View style={[styles.pageHeader, { backgroundColor: card, borderBottomColor: bdr }]}>
-        <Text style={[styles.welcomeText, { color: txt }]}>Welcome back, Anurag!</Text>
+        <Text style={[styles.welcomeText, { color: txt }]}>Welcome back, {userFirstName}!</Text>
         <Text style={[styles.subText, { color: sub }]}>Here's a quick overview of your workspace.</Text>
       </View>
 
       <ScrollView ref={scrollRef} style={[styles.scroll, { backgroundColor: bg }]} showsVerticalScrollIndicator={false}>
 
-        {/* Section 1 — In Progress */}
+        {/* ── Section 1 — In Progress ───────────────────────────────────── */}
         <View style={[styles.card, styles.fixedCard, { backgroundColor: card, borderColor: bdr }]}>
           <View style={styles.cardHeader}>
-            <Text style={[styles.cardTitle, { color: txt }]}>In Progress ▾</Text>
+            <Text style={[styles.cardTitle, { color: txt, marginBottom: 0 }]}>
+              In Progress {inProgressTasks.length > 0 ? `(${inProgressTasks.length})` : ''}
+            </Text>
+            {inProgressTasks.length > 0 && (
+              <TouchableOpacity onPress={goToTasksFiltered}>
+                <Text style={[styles.viewAll, { color: sub }]}>View All →</Text>
+              </TouchableOpacity>
+            )}
           </View>
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyIcon}>🕐</Text>
-            <Text style={[styles.emptyLabel, { color: sub }]}>No in-progress tasks assigned to you</Text>
-            <Text style={[styles.emptySubLabel, { color: isDark ? '#6C6C80' : '#AAAABC' }]}>No tasks are currently assigned to you</Text>
-          </View>
+
+          {loadingTasks ? (
+            <View style={styles.loadingState}>
+              <ActivityIndicator size="small" color="#4ECDC4" />
+            </View>
+          ) : inProgressTasks.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyIcon}>🕐</Text>
+              <Text style={[styles.emptyLabel, { color: sub }]}>No in-progress tasks assigned to you</Text>
+              <Text style={[styles.emptySubLabel, { color: isDark ? '#6C6C80' : '#AAAABC' }]}>
+                Tasks you're actively working on will appear here.
+              </Text>
+            </View>
+          ) : (
+            <View style={{ gap: 8 }}>
+              {inProgressTasks.slice(0, 3).map((task) => {
+                const projName = task.project_details?.name || `Project #${task.project ?? '—'}`;
+                const due = task.end_date ? new Date(task.end_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : null;
+                const prioColor = PRIORITY_COLORS[(task.priority || '').toLowerCase()] || '#9CA3AF';
+                return (
+                  <TouchableOpacity
+                    key={task.id}
+                    style={[styles.taskRow, { borderColor: bdr }]}
+                    onPress={() => openTask(task)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={[styles.priorityBar, { backgroundColor: prioColor }]} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.taskHeading, { color: txt }]} numberOfLines={1}>
+                        {task.heading || 'Untitled task'}
+                      </Text>
+                      <View style={styles.taskMeta}>
+                        <Text style={[styles.taskMetaText, { color: sub }]} numberOfLines={1}>{projName}</Text>
+                        {due && (
+                          <>
+                            <Text style={[styles.taskMetaDot, { color: sub }]}>•</Text>
+                            <Text style={[styles.taskMetaText, { color: sub }]}>Due {due}</Text>
+                          </>
+                        )}
+                      </View>
+                    </View>
+                    <View style={styles.statusPill}>
+                      <Text style={styles.statusPillText}>In Progress</Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+              {inProgressTasks.length > 3 && (
+                <TouchableOpacity onPress={goToTasksFiltered} style={{ paddingVertical: 6 }}>
+                  <Text style={[{ fontSize: fs(12), color: '#4ECDC4', fontWeight: '600', textAlign: 'center' }]}>
+                    +{inProgressTasks.length - 3} more
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
         </View>
 
-        {/* Section 2 — Recent Documents */}
+        {/* ── Section 2 — Recent Documents ──────────────────────────────── */}
         <View style={[styles.card, styles.fixedCard, { backgroundColor: card, borderColor: bdr }]}>
           <View style={styles.cardHeader}>
-            <Text style={[styles.cardTitle, { color: txt }]}>Recent Documents</Text>
+            <Text style={[styles.cardTitle, { color: txt, marginBottom: 0 }]}>Recent Documents</Text>
             <TouchableOpacity onPress={() => navigation.navigate('Docs')}>
               <Text style={[styles.viewAll, { color: sub }]}>View All →</Text>
             </TouchableOpacity>
           </View>
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyIcon}>📋</Text>
-            <Text style={[styles.emptyLabel, { color: sub }]}>No documents yet</Text>
-          </View>
+
+          {loadingDocs ? (
+            <View style={styles.loadingState}>
+              <ActivityIndicator size="small" color="#4ECDC4" />
+            </View>
+          ) : recentDocs.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyIcon}>📋</Text>
+              <Text style={[styles.emptyLabel, { color: sub }]}>No documents yet</Text>
+            </View>
+          ) : (
+            <View style={{ gap: 8 }}>
+              {recentDocs.map((doc) => {
+                const meta = fileMeta(doc.name);
+                const uploader = doc.created_by?.full_name || doc.created_by?.username || 'Unknown';
+                const when = fmtRelative(doc.created_at || doc.updated_at);
+                return (
+                  <TouchableOpacity
+                    key={doc.id}
+                    style={[styles.docRow, { borderColor: bdr }]}
+                    onPress={() => navigation.navigate('Docs')}
+                    activeOpacity={0.7}
+                  >
+                    <View style={[styles.docIcon, { backgroundColor: meta.color + '22' }]}>
+                      <Text style={[styles.docIconText, { color: meta.color }]}>{meta.label}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.docName, { color: txt }]} numberOfLines={1}>
+                        {doc.name || 'Untitled'}
+                      </Text>
+                      <Text style={[styles.docMeta, { color: sub }]} numberOfLines={1}>
+                        {uploader} • {when}
+                      </Text>
+                    </View>
+                    <Text style={[styles.chevron, { color: sub }]}>›</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
         </View>
 
-        {/* Section 3 — Favourite Projects */}
+        {/* ── Section 3 — Favourite Projects ────────────────────────────── */}
         <View style={[styles.card, { backgroundColor: card, borderColor: bdr }]}>
           <View style={styles.cardHeader}>
-            <Text style={[styles.cardTitle, { color: txt }]}>Favourite Projects</Text>
+            <Text style={[styles.cardTitle, { color: txt, marginBottom: 0 }]}>Favourite Projects</Text>
             <TouchableOpacity onPress={() => (() => { try { navigation.jumpTo('Projects'); } catch { navigation.navigate('Main', { screen: 'Projects' }); } })()}>
               <Text style={[styles.viewAll, { color: sub }]}>View All →</Text>
             </TouchableOpacity>
           </View>
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyIcon}>📊</Text>
-            <Text style={[styles.emptyLabel, { color: sub }]}>No projects yet</Text>
-          </View>
+
+          {loadingProjects ? (
+            <View style={styles.loadingState}>
+              <ActivityIndicator size="small" color="#4ECDC4" />
+            </View>
+          ) : favProjects.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyIcon}>📊</Text>
+              <Text style={[styles.emptyLabel, { color: sub }]}>No projects yet</Text>
+            </View>
+          ) : (
+            <View style={{ gap: 8 }}>
+              {favProjects.map((proj) => {
+                const initial = (proj.name || '?').charAt(0).toUpperCase();
+                const memberCount = (proj.members || proj.assigned_members || []).length;
+                const status = proj.status || proj.project_status;
+                return (
+                  <TouchableOpacity
+                    key={proj.id}
+                    style={[styles.projectRow, { borderColor: bdr }]}
+                    onPress={() => openProject(proj)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={styles.projectAvatar}>
+                      <Text style={styles.projectAvatarText}>{initial}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.projectName, { color: txt }]} numberOfLines={1}>
+                        {proj.name || 'Untitled project'}
+                      </Text>
+                      <Text style={[styles.projectMeta, { color: sub }]} numberOfLines={1}>
+                        {memberCount > 0 ? `${memberCount} member${memberCount !== 1 ? 's' : ''}` : 'No members'}
+                        {status ? ` • ${status}` : ''}
+                      </Text>
+                    </View>
+                    <Text style={[styles.chevron, { color: sub }]}>›</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
         </View>
 
-        {/* Section 4 — Quick Actions (with inline Quick Notes expansion) */}
+        {/* ── Section 4 — Quick Actions (with inline Quick Notes expansion) ── */}
         <View ref={quickActionsRef} style={[styles.card, { marginBottom: 24, backgroundColor: card, borderColor: bdr }]}>
           <Text style={[styles.cardTitle, { color: txt }]}>Quick Actions</Text>
           <View style={styles.quickGrid}>
@@ -156,7 +471,7 @@ export default function DashboardScreen() {
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.quickBtn, { borderColor: bdr }]}
-              onPress={() => (() => { try { navigation.jumpTo('Tasks'); } catch { navigation.navigate('Main', { screen: 'Tasks' }); } })()}
+              onPress={() => (() => { try { navigation.jumpTo('Tasks', { presetFilter: 'mine' }); } catch { navigation.navigate('Main', { screen: 'Tasks', params: { presetFilter: 'mine' } }); } })()}
             >
               <Text style={styles.quickIcon}>📋</Text>
               <Text style={[styles.quickLabel, { color: sub }]}>My Tasks</Text>
@@ -253,10 +568,63 @@ const styles = StyleSheet.create({
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   cardTitle: { fontSize: 14, fontWeight: '600', color: '#1A1A2E', marginBottom: 10 },
   viewAll: { fontSize: 12, color: '#888899' },
+
+  // Empty / loading states
   emptyState: { alignItems: 'center', paddingVertical: 16, gap: 8 },
+  loadingState: { paddingVertical: 28, alignItems: 'center' },
   emptyIcon: { fontSize: 28, opacity: 0.3 },
   emptyLabel: { fontSize: 13, color: '#888899', textAlign: 'center', fontWeight: '500' },
   emptySubLabel: { fontSize: 11, color: '#AAAABC', textAlign: 'center' },
+
+  // Task row (In Progress section)
+  taskRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingVertical: 10, paddingHorizontal: 10,
+    borderRadius: 10, borderWidth: 1, overflow: 'hidden',
+  },
+  priorityBar: { width: 3, height: 36, borderRadius: 2 },
+  taskHeading: { fontSize: 13, fontWeight: '600' },
+  taskMeta: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
+  taskMetaText: { fontSize: 11, flexShrink: 1 },
+  taskMetaDot: { fontSize: 11 },
+  statusPill: {
+    backgroundColor: 'rgba(245,158,11,0.12)',
+    paddingHorizontal: 8, paddingVertical: 3,
+    borderRadius: 6,
+  },
+  statusPillText: { color: '#F59E0B', fontSize: 10, fontWeight: '700' },
+
+  // Doc row (Recent Documents section)
+  docRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingVertical: 10, paddingHorizontal: 10,
+    borderRadius: 10, borderWidth: 1,
+  },
+  docIcon: {
+    width: 38, height: 38, borderRadius: 8,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  docIconText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
+  docName: { fontSize: 13, fontWeight: '600' },
+  docMeta: { fontSize: 11, marginTop: 2 },
+  chevron: { fontSize: 22, fontWeight: '300' },
+
+  // Project row (Favourite Projects section)
+  projectRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingVertical: 10, paddingHorizontal: 10,
+    borderRadius: 10, borderWidth: 1,
+  },
+  projectAvatar: {
+    width: 38, height: 38, borderRadius: 19,
+    backgroundColor: '#7C3AED',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  projectAvatarText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  projectName: { fontSize: 13, fontWeight: '600' },
+  projectMeta: { fontSize: 11, marginTop: 2 },
+
+  // Quick Actions
   quickRow: { flexDirection: 'row', gap: 10 },
   quickGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   quickBtn: { width: '48%', alignItems: 'center', paddingVertical: 18, borderRadius: 10, borderWidth: 1, borderColor: '#EBEBF0', gap: 8 },
@@ -264,6 +632,7 @@ const styles = StyleSheet.create({
   quickIcon: { fontSize: 26 },
   quickLabel: { fontSize: 10, color: '#888899', textAlign: 'center', fontWeight: '500', lineHeight: 14 },
   quickLabelActive: { color: '#4ECDC4', fontWeight: '700' },
+
   // Inline notes panel inside Quick Actions card
   notesPanel: { marginTop: 14, borderTopWidth: 1, borderTopColor: '#F0F0F5', paddingTop: 12 },
   notesPanelHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
