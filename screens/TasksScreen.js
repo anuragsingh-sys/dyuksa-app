@@ -2,11 +2,13 @@ import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   Modal, TextInput, StatusBar, Platform,
   ScrollView, Image, Alert, Animated, ActivityIndicator,
+  Keyboard, Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useState, useCallback, useRef, useContext, useEffect } from 'react';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { NotificationsContext } from '../context/NotificationsContext';
 import { AuthContext } from '../context/AuthContext';
 import { getUsers, getProjects, getAccessToken, refineTextAI } from '../services/ApiService';
@@ -127,17 +129,45 @@ export default function TasksScreen() {
   const [detailTask,     setDetailTask]     = useState(null);
   const slideAnim = useRef(new Animated.Value(-700)).current;
 
+  // Track keyboard height so modals can scroll past it (works inside absolutely-positioned Modal)
+  const [kbHeight, setKbHeight] = useState(0);
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const onShow = (e) => setKbHeight(e?.endCoordinates?.height || 0);
+    const onHide = () => setKbHeight(0);
+    const s = Keyboard.addListener(showEvt, onShow);
+    const h = Keyboard.addListener(hideEvt, onHide);
+    return () => { s.remove(); h.remove(); };
+  }, []);
+
   // Track which project to return to after a task is successfully created
   // (set when Create Task was triggered from inside a Project Details screen)
   const returnToProjectIdRef = useRef(null);
 
   const [heading,       setHeading]       = useState('');
+  // Helpers used by the create-task form date/time pickers
+  const todayISO = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  };
+
   const [description,   setDescription]   = useState('');
   const [project,       setProject]       = useState(null);
-  const [status,        setStatus]        = useState(null);
+  const [status,        setStatus]        = useState('backlog');     // visible default
   const [priority,      setPriority]      = useState('medium');
-  const [startDate,     setStartDate]     = useState('');
+  const [startDate,     setStartDate]     = useState(todayISO());    // pre-filled with today
   const [endDate,       setEndDate]       = useState('');
+  // Optional time fields (collected in the UI now; backend wiring happens later
+  // — for now they're sent as `start_time` / `due_time` and the backend can
+  // ignore them until it supports the columns)
+  const [startTime,     setStartTime]     = useState('');             // 'HH:MM'
+  const [endTime,       setEndTime]       = useState('');
+  // Native picker visibility
+  const [showStartDatePicker, setShowStartDatePicker] = useState(false);
+  const [showEndDatePicker,   setShowEndDatePicker]   = useState(false);
+  const [showStartTimePicker, setShowStartTimePicker] = useState(false);
+  const [showEndTimePicker,   setShowEndTimePicker]   = useState(false);
   const [assignedTo,    setAssignedTo]    = useState([]);
   const [assigneeSearch, setAssigneeSearch] = useState('');
   const [assigneeDropdownOpen, setAssigneeDropdownOpen] = useState(false);
@@ -232,8 +262,9 @@ export default function TasksScreen() {
 
     Animated.timing(slideAnim, { toValue: -700, duration: 250, useNativeDriver: true }).start(() => {
       setModalVisible(false);
-      setHeading(''); setDescription(''); setProject(null); setStatus(null);
-      setPriority('medium'); setStartDate(''); setEndDate('');
+      setHeading(''); setDescription(''); setProject(null); setStatus('backlog');
+      setPriority('medium'); setStartDate(todayISO()); setEndDate('');
+      setStartTime(''); setEndTime('');
       setAssignedTo([]); setLinks(''); setImages([]); setProjectSearch('');
 
       // After the close animation, take the user back to the project they came from
@@ -279,6 +310,9 @@ export default function TasksScreen() {
       if (priority)    formData.append('priority',    priority);
       if (startDate)   formData.append('start_date',  startDate);
       if (endDate)     formData.append('end_date',    endDate);
+      // Optional time fields — backend may not support these yet; safe to send.
+      if (startTime)   formData.append('start_time',  startTime);
+      if (endTime)     formData.append('end_time',    endTime);
       if (links.trim()) formData.append('uploaded_links', links.trim());
       assignedTo.forEach(uid => formData.append('assigned_to', String(uid)));
       images.forEach((uri, i) => {
@@ -606,7 +640,7 @@ export default function TasksScreen() {
   };
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: bg }]}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: bg }]} edges={['top', 'left', 'right']}>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={isDark ? '#0D0D0F' : '#fff'} translucent={false} />
 
       {/* Navbar */}
@@ -739,7 +773,7 @@ export default function TasksScreen() {
         <FlatList
           data={filtered}
           keyExtractor={i => String(i.id)}
-          contentContainerStyle={{ padding: 12 }}
+          contentContainerStyle={{ padding: 12, paddingBottom: 110 }}
           onRefresh={fetchTasks}
           refreshing={loading}
           renderItem={({ item }) => (
@@ -883,10 +917,24 @@ export default function TasksScreen() {
       {modalVisible && (
         <Modal transparent visible animationType="none" onRequestClose={closeModal}>
           <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => closeModal(true)} />
-          <Animated.View style={[styles.topModal, { backgroundColor: card, transform: [{ translateY: slideAnim }] }]}>
-            <SafeAreaView>
+          <Animated.View
+            style={[
+              styles.topModal,
+              {
+                backgroundColor: card,
+                transform: [{ translateY: slideAnim }],
+                maxHeight: Dimensions.get('window').height - kbHeight,
+              },
+            ]}
+          >
+            <SafeAreaView style={{ flexShrink: 1 }}>
               <View style={[styles.handle, { backgroundColor: isDark ? '#3A3A48' : '#DEDEE8' }]} />
-              <ScrollView style={styles.modalScroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              <ScrollView
+                style={styles.modalScroll}
+                contentContainerStyle={{ paddingBottom: kbHeight > 0 ? 24 : 40 }}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
 
                 <View style={styles.modalHeader}>
                   <Text style={[styles.modalTitle, { color: txt }]}>Create Task</Text>
@@ -1005,25 +1053,193 @@ export default function TasksScreen() {
                 <View style={{ flexDirection: 'row', gap: 10, marginBottom: 14 }}>
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.fieldLabel, { color: sub }]}>Start Date</Text>
-                    <TextInput
-                      style={[styles.input, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr, color: txt }]}
-                      placeholder="YYYY-MM-DD"
-                      placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
-                      value={startDate}
-                      onChangeText={setStartDate}
-                    />
+                    <TouchableOpacity
+                      style={[styles.input, styles.dateBtn, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}
+                      onPress={() => {
+                        // Toggle: tapping the field again while picker is open closes it.
+                        // Also close any other open picker so only one is visible.
+                        const next = !showStartDatePicker;
+                        setShowEndDatePicker(false);
+                        setShowStartTimePicker(false);
+                        setShowEndTimePicker(false);
+                        setShowStartDatePicker(next);
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={{ color: startDate ? txt : (isDark ? '#6C6C80' : '#AAAABC'), fontSize: 14 }}>
+                        {startDate || 'Select date'}
+                      </Text>
+                      <Text style={{ color: sub, fontSize: 12 }}>📅</Text>
+                    </TouchableOpacity>
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.fieldLabel, { color: sub }]}>Due Date</Text>
-                    <TextInput
-                      style={[styles.input, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr, color: txt }]}
-                      placeholder="YYYY-MM-DD"
-                      placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
-                      value={endDate}
-                      onChangeText={setEndDate}
-                    />
+                    <TouchableOpacity
+                      style={[styles.input, styles.dateBtn, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}
+                      onPress={() => {
+                        const next = !showEndDatePicker;
+                        setShowStartDatePicker(false);
+                        setShowStartTimePicker(false);
+                        setShowEndTimePicker(false);
+                        setShowEndDatePicker(next);
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={{ color: endDate ? txt : (isDark ? '#6C6C80' : '#AAAABC'), fontSize: 14 }}>
+                        {endDate || 'Select date'}
+                      </Text>
+                      <Text style={{ color: sub, fontSize: 12 }}>📅</Text>
+                    </TouchableOpacity>
                   </View>
                 </View>
+
+                {/* Start + End Time */}
+                <View style={{ flexDirection: 'row', gap: 10, marginBottom: 14 }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.fieldLabel, { color: sub }]}>Start Time</Text>
+                    <TouchableOpacity
+                      style={[styles.input, styles.dateBtn, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}
+                      onPress={() => {
+                        const next = !showStartTimePicker;
+                        setShowStartDatePicker(false);
+                        setShowEndDatePicker(false);
+                        setShowEndTimePicker(false);
+                        setShowStartTimePicker(next);
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={{ color: startTime ? txt : (isDark ? '#6C6C80' : '#AAAABC'), fontSize: 14 }}>
+                        {startTime || 'Select time'}
+                      </Text>
+                      <Text style={{ color: sub, fontSize: 12 }}>🕐</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.fieldLabel, { color: sub }]}>End Time</Text>
+                    <TouchableOpacity
+                      style={[styles.input, styles.dateBtn, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}
+                      onPress={() => {
+                        const next = !showEndTimePicker;
+                        setShowStartDatePicker(false);
+                        setShowEndDatePicker(false);
+                        setShowStartTimePicker(false);
+                        setShowEndTimePicker(next);
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={{ color: endTime ? txt : (isDark ? '#6C6C80' : '#AAAABC'), fontSize: 14 }}>
+                        {endTime || 'Select time'}
+                      </Text>
+                      <Text style={{ color: sub, fontSize: 12 }}>🕐</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Native pickers — render only when their flag is on.
+                    On iOS, the picker stays open until the user taps Done.
+                    On Android, the picker is a modal dialog with OK/Cancel built-in. */}
+                {showStartDatePicker && (
+                  <View>
+                    {Platform.OS === 'ios' && (
+                      <View style={[styles.pickerToolbar, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}>
+                        <TouchableOpacity onPress={() => setShowStartDatePicker(false)}>
+                          <Text style={styles.pickerDone}>Done</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                    <DateTimePicker
+                      value={startDate ? new Date(startDate + 'T00:00:00') : new Date()}
+                      mode="date"
+                      display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                      onChange={(event, selected) => {
+                        // Android: dismiss after the dialog returns
+                        if (Platform.OS !== 'ios') setShowStartDatePicker(false);
+                        if (event.type === 'set' && selected) {
+                          const yyyy = selected.getFullYear();
+                          const mm   = String(selected.getMonth() + 1).padStart(2, '0');
+                          const dd   = String(selected.getDate()).padStart(2, '0');
+                          setStartDate(`${yyyy}-${mm}-${dd}`);
+                        }
+                      }}
+                    />
+                  </View>
+                )}
+                {showEndDatePicker && (
+                  <View>
+                    {Platform.OS === 'ios' && (
+                      <View style={[styles.pickerToolbar, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}>
+                        <TouchableOpacity onPress={() => setShowEndDatePicker(false)}>
+                          <Text style={styles.pickerDone}>Done</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                    <DateTimePicker
+                      value={endDate ? new Date(endDate + 'T00:00:00') : (startDate ? new Date(startDate + 'T00:00:00') : new Date())}
+                      mode="date"
+                      display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                      minimumDate={startDate ? new Date(startDate + 'T00:00:00') : undefined}
+                      onChange={(event, selected) => {
+                        if (Platform.OS !== 'ios') setShowEndDatePicker(false);
+                        if (event.type === 'set' && selected) {
+                          const yyyy = selected.getFullYear();
+                          const mm   = String(selected.getMonth() + 1).padStart(2, '0');
+                          const dd   = String(selected.getDate()).padStart(2, '0');
+                          setEndDate(`${yyyy}-${mm}-${dd}`);
+                        }
+                      }}
+                    />
+                  </View>
+                )}
+                {showStartTimePicker && (
+                  <View>
+                    {Platform.OS === 'ios' && (
+                      <View style={[styles.pickerToolbar, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}>
+                        <TouchableOpacity onPress={() => setShowStartTimePicker(false)}>
+                          <Text style={styles.pickerDone}>Done</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                    <DateTimePicker
+                      value={startTime ? new Date(`1970-01-01T${startTime}:00`) : new Date()}
+                      mode="time"
+                      is24Hour={false}
+                      display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                      onChange={(event, selected) => {
+                        if (Platform.OS !== 'ios') setShowStartTimePicker(false);
+                        if (event.type === 'set' && selected) {
+                          const hh = String(selected.getHours()).padStart(2, '0');
+                          const mm = String(selected.getMinutes()).padStart(2, '0');
+                          setStartTime(`${hh}:${mm}`);
+                        }
+                      }}
+                    />
+                  </View>
+                )}
+                {showEndTimePicker && (
+                  <View>
+                    {Platform.OS === 'ios' && (
+                      <View style={[styles.pickerToolbar, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}>
+                        <TouchableOpacity onPress={() => setShowEndTimePicker(false)}>
+                          <Text style={styles.pickerDone}>Done</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                    <DateTimePicker
+                      value={endTime ? new Date(`1970-01-01T${endTime}:00`) : new Date()}
+                      mode="time"
+                      is24Hour={false}
+                      display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                      onChange={(event, selected) => {
+                        if (Platform.OS !== 'ios') setShowEndTimePicker(false);
+                        if (event.type === 'set' && selected) {
+                          const hh = String(selected.getHours()).padStart(2, '0');
+                          const mm = String(selected.getMinutes()).padStart(2, '0');
+                          setEndTime(`${hh}:${mm}`);
+                        }
+                      }}
+                    />
+                  </View>
+                )}
 
                 {/* Assignees — web-style picker with search + chips */}
                 <Text style={[styles.fieldLabel, { color: sub }]}>Assignees</Text>
@@ -1216,10 +1432,23 @@ export default function TasksScreen() {
       {genModalVisible && (
         <Modal transparent visible animationType="none" onRequestClose={closeGenModal}>
           <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={closeGenModal} />
-          <Animated.View style={[styles.topModal, { transform: [{ translateY: genSlideAnim }] }]}>
-            <SafeAreaView>
+          <Animated.View
+            style={[
+              styles.topModal,
+              {
+                transform: [{ translateY: genSlideAnim }],
+                maxHeight: Dimensions.get('window').height - kbHeight,
+              },
+            ]}
+          >
+            <SafeAreaView style={{ flexShrink: 1 }}>
               <View style={styles.handle} />
-              <ScrollView style={styles.modalScroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              <ScrollView
+                style={styles.modalScroll}
+                contentContainerStyle={{ paddingBottom: kbHeight > 0 ? 24 : 40 }}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
 
                 <View style={styles.modalHeader}>
                   <View style={{ flex: 1 }}>
@@ -1534,7 +1763,7 @@ export default function TasksScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0 },
+  safe: { flex: 1 },
   navbar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, elevation: 2 },
   navLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   navRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -1659,6 +1888,9 @@ const styles = StyleSheet.create({
   closeCircleText: { color: '#888899', fontSize: 13, fontWeight: '600' },
   fieldLabel: { fontSize: 12, fontWeight: '600', color: '#888899', marginBottom: 6, letterSpacing: 0.3 },
   input: { backgroundColor: '#F5F5F7', borderRadius: 10, borderWidth: 1.5, borderColor: '#EBEBF0', paddingHorizontal: 14, height: 46, fontSize: 14, color: '#1A1A2E', marginBottom: 14 },
+  dateBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 0 },
+  pickerToolbar: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, marginTop: 6 },
+  pickerDone: { color: '#4ECDC4', fontSize: 15, fontWeight: '700' },
   searchList: { backgroundColor: '#fff', borderRadius: 10, borderWidth: 1.5, borderColor: '#4ECDC4', marginTop: -10, marginBottom: 14 },
   searchItem: { paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F0F0F5' },
   searchItemText: { fontSize: 13, color: '#1A1A2E' },

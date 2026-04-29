@@ -445,7 +445,7 @@ export default function DocumentsScreen() {
   );
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: bg }]}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: bg }]} edges={['top', 'left', 'right']}>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={card} translucent={false} />
 
       {/* Navbar */}
@@ -561,7 +561,7 @@ export default function DocumentsScreen() {
         <FlatList
           data={filtered}
           keyExtractor={(item, idx) => String(item.id) + '_' + idx}
-          contentContainerStyle={{ padding: 12, paddingBottom: 40 }}
+          contentContainerStyle={{ padding: 12, paddingBottom: 110 }}
           renderItem={renderItem}
           refreshControl={
             <RefreshControl

@@ -490,7 +490,7 @@ export default function DashboardScreen() {
   const userFirstName = (user?.name || user?.username || 'there').split(' ')[0];
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: bg }]}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: bg }]} edges={['top', 'left', 'right']}>
       <StatusBar barStyle={isDark ? "light-content" : "dark-content"} backgroundColor={isDark ? "#0D0D0F" : "#fff"} translucent={false} />
 
       {/* Navbar */}
@@ -523,7 +523,12 @@ export default function DashboardScreen() {
         <Text style={[styles.subText, { color: sub }]}>Here's a quick overview of your workspace.</Text>
       </View>
 
-      <ScrollView ref={scrollRef} style={[styles.scroll, { backgroundColor: bg }]} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        ref={scrollRef}
+        style={[styles.scroll, { backgroundColor: bg }]}
+        contentContainerStyle={{ paddingBottom: 110 }}
+        showsVerticalScrollIndicator={false}
+      >
 
         {/* ── Section 1 — In Progress ───────────────────────────────────── */}
         <View style={[styles.card, styles.fixedCard, { backgroundColor: card, borderColor: bdr }]}>
@@ -1056,7 +1061,7 @@ export default function DashboardScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#F5F5F7', paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0 },
+  safe: { flex: 1, backgroundColor: '#F5F5F7' },
   navbar: { backgroundColor: '#fff', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#EBEBF0', elevation: 2 },
   navLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   navRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },

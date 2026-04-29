@@ -4,7 +4,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import {
   Text, View, TouchableOpacity, StyleSheet, Platform, Modal, Animated, ScrollView,
 } from 'react-native';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useState, useEffect, useContext, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NotificationsProvider } from './context/NotificationsContext';
@@ -214,12 +214,17 @@ function MainTabs() {
   const [qaVisible, setQaVisible] = useState(false);
   const { theme } = useContext(ThemeContext);
   const isDark = theme === 'Dark';
+  const insets = useSafeAreaInsets();
 
   // Theme-aware tab bar colors (matches Calendar screen's dark palette)
   const tabBg       = isDark ? '#1A1A20' : '#FFFFFF';
   const tabBorder   = isDark ? '#252530' : '#EBEBF0';
   const tabActive   = isDark ? '#FFFFFF' : '#1A1A2E';
   const tabInactive = isDark ? '#6C6C80' : '#AAAABC';
+
+  // Compact bar that respects the device's bottom safe area (gesture bar / nav buttons)
+  const TAB_BAR_BASE = 60;
+  const tabBarHeight = TAB_BAR_BASE + insets.bottom;
 
   // Remember which tab the user was on before tapping "+"
   const tabState = useNavigationState(state => state);
@@ -281,9 +286,18 @@ function MainTabs() {
     <>
       <Tab.Navigator
         initialRouteName="Dashboard"
+        safeAreaInsets={{ bottom: 0 }}
         screenOptions={({ route }) => ({
           headerShown: false,
-          tabBarStyle: [styles.tabBar, { backgroundColor: tabBg, borderTopColor: tabBorder }],
+          tabBarStyle: [
+            styles.tabBar,
+            {
+              backgroundColor: tabBg,
+              height: tabBarHeight,
+              paddingBottom: insets.bottom,
+              borderTopColor: tabBorder,
+            },
+          ],
           tabBarActiveTintColor: tabActive,
           tabBarInactiveTintColor: tabInactive,
           tabBarLabel: ({ color, focused }) => (
@@ -417,23 +431,21 @@ export default function App() {
 const styles = StyleSheet.create({
   tabBar: {
     backgroundColor: '#FFFFFF',
-    borderTopColor: '#EBEBF0',
-    borderTopWidth: 1,
-    height: Platform.OS === 'android' ? 65 : 70,
-    paddingBottom: Platform.OS === 'android' ? 8 : 10,
+    borderTopWidth: 0,        // remove the extra hairline above the bar
     paddingTop: 8,
-    elevation: 10,
+    paddingHorizontal: 12,
+    elevation: 8,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: -3 },
-    shadowOpacity: 0.06,
-    shadowRadius: 10,
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
   },
-  fabWrapper: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  fabWrapper: { flex: 1, alignItems: 'center', justifyContent: 'flex-start' },
   fab: {
     width: 56, height: 56, borderRadius: 28,
     backgroundColor: '#1A1A2E',
     justifyContent: 'center', alignItems: 'center',
-    marginTop: -18,
+    marginTop: -22,           // lift above the bar so it sits clear of the icons
     borderWidth: 3, borderColor: '#fff',
     shadowColor: '#1A1A2E',
     shadowOffset: { width: 0, height: 4 },

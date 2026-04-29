@@ -1,13 +1,15 @@
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal,
   TextInput, StatusBar, Platform, Alert, Animated, Dimensions, ActivityIndicator,
+  KeyboardAvoidingView, Keyboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useState, useCallback, useContext, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useContext, useRef, useEffect } from 'react';
 import { useNavigation, useFocusEffect, useRoute } from '@react-navigation/native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import SidebarMenu from '../components/SidebarMenu';
+import TaskDetailModal from '../components/TaskDetailModal';
 import { ThemeContext } from '../context/ThemeContext';
 import { AuthContext } from '../context/AuthContext';
 import NotificationBell from '../components/NotificationBell';
@@ -19,6 +21,7 @@ const SCREEN_WIDTH = Dimensions.get('window').width;
 const DAILY_UPDATE_STORAGE_KEY = 'DYUKSA_DAILY_UPDATES'; // local cache: { 'YYYY-MM-DD': { priorities, progress, blockers, upcoming } }
 const DAILY_UPDATE_API = 'http://192.168.1.164:8000/api/v1/daily-updates/';
 const EVENTS_API       = 'http://192.168.1.164:8000/api/v1/daily-updates/events/';
+const TASKS_API        = 'http://192.168.1.164:8000/api/v1/tasksite/';
 
 const STORAGE_KEY = 'DYUKSA_QUICK_TASKS';
 const HOURS = Array.from({ length: 16 }, (_, i) => i + 7); // 07:00 to 22:00
@@ -32,6 +35,165 @@ const EVENT_TYPES = [
   { id: 'Interview', icon: '🎯', label: 'Interview' },
   { id: 'Training',  icon: '📚', label: 'Training' },
 ];
+
+// ── Custom 3-column wheel time picker ──────────────────────────────────────
+// Identical look on iOS + Android. Each column is a snap-scrolling ScrollView
+// with vertical padding so the selected row sits in the middle of the wheel.
+// `value` is a Date; `onChange(newDate)` fires whenever the wheel settles.
+const WHEEL_ITEM_HEIGHT = 36;
+const WHEEL_VISIBLE_COUNT = 5; // 2 above + 1 selected + 2 below
+function WheelColumn({ data, selectedIndex, onChange, txtColor, subColor, accent }) {
+  const ref = React.useRef(null);
+  const lastIndexRef = React.useRef(selectedIndex);
+  // Set initial scroll position once after mount (ScrollView has no initialScrollIndex)
+  React.useEffect(() => {
+    // Defer one tick to make sure the ScrollView has measured before scrolling
+    const t = setTimeout(() => {
+      ref.current?.scrollTo({ y: selectedIndex * WHEEL_ITEM_HEIGHT, animated: false });
+      lastIndexRef.current = selectedIndex;
+    }, 0);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Sync external changes (e.g. user changes hour → AM/PM may roll)
+  React.useEffect(() => {
+    if (lastIndexRef.current !== selectedIndex && ref.current) {
+      ref.current.scrollTo({
+        y: selectedIndex * WHEEL_ITEM_HEIGHT,
+        animated: true,
+      });
+      lastIndexRef.current = selectedIndex;
+    }
+  }, [selectedIndex]);
+
+  const handleMomentumEnd = (e) => {
+    const y = e.nativeEvent.contentOffset.y;
+    const idx = Math.round(y / WHEEL_ITEM_HEIGHT);
+    const clamped = Math.max(0, Math.min(data.length - 1, idx));
+    if (clamped !== lastIndexRef.current) {
+      lastIndexRef.current = clamped;
+      onChange(clamped);
+    }
+    // Snap exactly (in case it landed slightly off)
+    ref.current?.scrollTo({ y: clamped * WHEEL_ITEM_HEIGHT, animated: true });
+  };
+
+  return (
+    <View style={{ height: WHEEL_ITEM_HEIGHT * WHEEL_VISIBLE_COUNT, width: '100%' }}>
+      <ScrollView
+        ref={ref}
+        showsVerticalScrollIndicator={false}
+        snapToInterval={WHEEL_ITEM_HEIGHT}
+        decelerationRate="fast"
+        nestedScrollEnabled
+        contentContainerStyle={{
+          paddingTop: WHEEL_ITEM_HEIGHT * 2,
+          paddingBottom: WHEEL_ITEM_HEIGHT * 2,
+        }}
+        onMomentumScrollEnd={handleMomentumEnd}
+      >
+        {data.map((item, index) => {
+          const distance = Math.abs(index - selectedIndex);
+          const isSelected = index === selectedIndex;
+          const opacity = isSelected ? 1 : Math.max(0.25, 1 - distance * 0.30);
+          return (
+            <View key={index} style={{ height: WHEEL_ITEM_HEIGHT, justifyContent: 'center', alignItems: 'center' }}>
+              <Text style={{
+                fontSize: isSelected ? 22 : 18,
+                fontWeight: isSelected ? '700' : '400',
+                color: isSelected ? (accent || txtColor) : txtColor,
+                opacity,
+              }}>
+                {item}
+              </Text>
+            </View>
+          );
+        })}
+      </ScrollView>
+    </View>
+  );
+}
+
+function WheelTimePicker({ value, onChange, txtColor, subColor, bdrColor, accent = '#4ECDC4' }) {
+  // Derive 12-hour display values
+  const d = value instanceof Date ? value : new Date();
+  const hours24 = d.getHours();
+  const minutes = d.getMinutes();
+  const ampm = hours24 >= 12 ? 1 : 0; // 0=AM, 1=PM
+  const hour12 = ((hours24 + 11) % 12) + 1; // 1-12
+
+  const HOURS   = React.useMemo(() => Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0')), []);
+  const MINUTES = React.useMemo(() => Array.from({ length: 60 }, (_, i) => String(i).padStart(2, '0')), []);
+  const PERIODS = React.useMemo(() => ['AM', 'PM'], []);
+
+  const updateTime = (h12, m, p) => {
+    const newDate = new Date(value || Date.now());
+    let h24 = h12 % 12;
+    if (p === 1) h24 += 12; // PM
+    newDate.setHours(h24, m, 0, 0);
+    onChange(newDate);
+  };
+
+  return (
+    <View style={{
+      borderTopWidth: 1, borderBottomWidth: 1,
+      borderColor: bdrColor || '#EBEBF0',
+      backgroundColor: 'transparent',
+      paddingVertical: 4,
+      alignItems: 'center',     // centers the inner row
+    }}>
+      <View style={{
+        flexDirection: 'row',
+        width: 240,             // tight, centered group of 3 wheels
+        position: 'relative',
+      }}>
+        {/* Selection highlight bar */}
+        <View pointerEvents="none" style={{
+          position: 'absolute',
+          top:    WHEEL_ITEM_HEIGHT * 2,
+          height: WHEEL_ITEM_HEIGHT,
+          left: 0, right: 0,
+          backgroundColor: (accent || '#4ECDC4') + '12',
+          borderRadius: 8,
+        }} />
+        <View style={{ width: 80 }}>
+          <WheelColumn
+            data={HOURS}
+            selectedIndex={hour12 - 1}
+            onChange={(i) => updateTime(i + 1, minutes, ampm)}
+            txtColor={txtColor}
+            subColor={subColor}
+            accent={accent}
+          />
+        </View>
+        <View style={{ width: 12, justifyContent: 'center', alignItems: 'center' }}>
+          <Text style={{ color: txtColor, fontWeight: '700', fontSize: 20 }}>:</Text>
+        </View>
+        <View style={{ width: 80 }}>
+          <WheelColumn
+            data={MINUTES}
+            selectedIndex={minutes}
+            onChange={(i) => updateTime(hour12, i, ampm)}
+            txtColor={txtColor}
+            subColor={subColor}
+            accent={accent}
+          />
+        </View>
+        <View style={{ width: 8 }} />
+        <View style={{ width: 60 }}>
+          <WheelColumn
+            data={PERIODS}
+            selectedIndex={ampm}
+            onChange={(i) => updateTime(hour12, minutes, i)}
+            txtColor={txtColor}
+            subColor={subColor}
+            accent={accent}
+          />
+        </View>
+      </View>
+    </View>
+  );
+}
 
 export default function CalendarScreen() {
   const navigation  = useNavigation();
@@ -50,7 +212,23 @@ export default function CalendarScreen() {
   const today = new Date();
 
   // ── View state ──
-  const [viewMode,    setViewMode]    = useState('workWeek'); // day | workWeek | week | month
+  const [viewMode,    setViewMode]    = useState('day'); // day | workWeek | week | month
+  const [showViewMenu, setShowViewMenu] = useState(false);
+  // Where to place the dropdown — measured from the Today button's position
+  // in window coordinates. We render the menu inside a Modal (so taps don't
+  // get blocked by overlays), which means we need screen coords, not relative.
+  const [viewMenuPos, setViewMenuPos] = useState({ top: 0, left: 12 });
+  const todayBtnRef = useRef(null);
+  const openViewMenu = () => {
+    if (todayBtnRef.current?.measureInWindow) {
+      todayBtnRef.current.measureInWindow((x, y, w, h) => {
+        setViewMenuPos({ top: y + h + 4, left: Math.max(8, x) });
+        setShowViewMenu(true);
+      });
+    } else {
+      setShowViewMenu(true);
+    }
+  };
   const [currentDate, setCurrentDate] = useState(new Date());
 
   const [showMiniCal, setShowMiniCal] = useState(false);
@@ -62,10 +240,47 @@ export default function CalendarScreen() {
   const [eventsLoading, setEventsLoading] = useState(false);
   const [eventsError,   setEventsError]   = useState(null);
 
+  // ── Event detail / edit modal ──
+  const [detailEvent,    setDetailEvent]    = useState(null);   // event currently open
+  const [editMode,       setEditMode]       = useState(false);
+  const [savingEdit,     setSavingEdit]     = useState(false);
+  // Draft fields used in edit mode (so cancel doesn't mutate the original event)
+  const [editTitle,       setEditTitle]       = useState('');
+  const [editType,        setEditType]        = useState('Meeting');
+  const [editDescription, setEditDescription] = useState('');
+  const [editLocation,    setEditLocation]    = useState('');
+  const [editOnline,      setEditOnline]      = useState(false);
+  const [editStart,       setEditStart]       = useState(new Date());
+  const [editEnd,         setEditEnd]         = useState(new Date());
+  const [editAttendees,   setEditAttendees]   = useState([]);   // array of user ids
+  const [showEditDate,    setShowEditDate]    = useState(false);
+  const [showEditStart,   setShowEditStart]   = useState(false);
+  const [showEditEnd,     setShowEditEnd]     = useState(false);
+  // Drafts so the spinner can update freely without re-rendering its `value` prop
+  const [draftDate,       setDraftDate]       = useState(new Date());
+  const [draftStart,      setDraftStart]      = useState(new Date());
+  const [draftEnd,        setDraftEnd]        = useState(new Date());
+  const [showEditTypeMenu,    setShowEditTypeMenu]    = useState(false);
+  const [showEditAttendees,   setShowEditAttendees]   = useState(false);
+  const [editAttendeeSearch, setEditAttendeeSearch]   = useState('');
+
   // ── Modal ──
   const [modalVisible,   setModalVisible]   = useState(false);
   const [eventName,      setEventName]      = useState('');
   const [eventDesc,      setEventDesc]      = useState('');
+
+  // Track keyboard height so modals can scroll past it (works inside absolutely-positioned Modal)
+  const [kbHeight, setKbHeight] = useState(0);
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const onShow = (e) => setKbHeight(e?.endCoordinates?.height || 0);
+    const onHide = () => setKbHeight(0);
+    const s = Keyboard.addListener(showEvt, onShow);
+    const h = Keyboard.addListener(hideEvt, onHide);
+    return () => { s.remove(); h.remove(); };
+  }, []);
+
   const [pickerDate,     setPickerDate]     = useState(new Date());
   const [tempPickerDate, setTempPickerDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -101,6 +316,9 @@ export default function CalendarScreen() {
   const [aiSlotsLoading, setAiSlotsLoading] = useState(false); // while re-fetching slots after date/duration change
   const [showDurationMenu, setShowDurationMenu] = useState(false);
   const [showAiDatePicker, setShowAiDatePicker] = useState(false);
+  // AI participants picker
+  const [aiPickerOpen,   setAiPickerOpen]   = useState(false);
+  const [aiPickerSearch, setAiPickerSearch] = useState('');
 
   const handleAskDyuksa = async () => {
     if (!askDyuksaText.trim()) return;
@@ -151,6 +369,53 @@ export default function CalendarScreen() {
     setAiEditDate('');
     setShowDurationMenu(false);
     setShowAiDatePicker(false);
+    setAiPickerOpen(false);
+    setAiPickerSearch('');
+  };
+
+  // ── AI participants — add/remove on the suggestion before creating ──
+  // The AI returns `attendee_names` (display) and `attendee_ids` (sent to API).
+  // We keep both arrays in sync so the chip list and the eventual POST body
+  // both reflect the user's edits.
+  const aiToggleParticipant = (user) => {
+    if (!aiSuggestion || !user?.id) return;
+    const ids   = Array.isArray(aiSuggestion.attendee_ids)   ? [...aiSuggestion.attendee_ids]   : [];
+    const names = Array.isArray(aiSuggestion.attendee_names) ? [...aiSuggestion.attendee_names] : [];
+    const displayName = (user.first_name && user.last_name)
+      ? `${user.first_name} ${user.last_name}`.trim()
+      : (user.first_name || user.username || 'User');
+    const idx = ids.findIndex(id => String(id) === String(user.id));
+    if (idx >= 0) {
+      ids.splice(idx, 1);
+      // Best-effort: drop the matching display name (by index if lists are aligned)
+      if (names[idx] !== undefined) names.splice(idx, 1);
+    } else {
+      ids.push(user.id);
+      names.push(displayName);
+    }
+    setAiSuggestion({ ...aiSuggestion, attendee_ids: ids, attendee_names: names });
+  };
+
+  const aiRemoveParticipantAt = (i) => {
+    if (!aiSuggestion) return;
+    const ids   = Array.isArray(aiSuggestion.attendee_ids)   ? [...aiSuggestion.attendee_ids]   : [];
+    const names = Array.isArray(aiSuggestion.attendee_names) ? [...aiSuggestion.attendee_names] : [];
+    if (i >= 0 && i < names.length) names.splice(i, 1);
+    if (i >= 0 && i < ids.length)   ids.splice(i, 1);
+    setAiSuggestion({ ...aiSuggestion, attendee_ids: ids, attendee_names: names });
+  };
+
+  // Filtered users for the AI picker — exclude already-added by id
+  const aiFilteredUsers = () => {
+    const q = (aiPickerSearch || '').toLowerCase().trim();
+    const addedIds = new Set((aiSuggestion?.attendee_ids || []).map(String));
+    return allUsers.filter(u => {
+      if (!u?.id) return false;
+      const fullName = `${u.first_name || ''} ${u.last_name || ''}`.trim().toLowerCase();
+      const match = !q || fullName.includes(q) || (u.username || '').toLowerCase().includes(q);
+      // Show all matches (including already-added) so the user can see ✓ state
+      return match;
+    });
   };
 
   // Re-fetch slots when user changes duration or date — re-hits the agent endpoint
@@ -253,6 +518,12 @@ export default function CalendarScreen() {
     return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
   };
   const [allUsers,        setAllUsers]        = useState([]);
+  // Tasks shown in the All Day / Tasks row
+  const [tasks,           setTasks]           = useState([]);
+  // Per-day expansion of the All Day / Tasks row. Keyed by 'YYYY-MM-DD'.
+  const [expandedDays,    setExpandedDays]    = useState({});
+  // Task tapped from the All Day / Tasks list — opens TaskDetailModal
+  const [detailTask,      setDetailTask]      = useState(null);
   const slideAnim = useRef(new Animated.Value(-600)).current;
 
   // ── Daily Update panel state ──
@@ -270,6 +541,34 @@ export default function CalendarScreen() {
   // ── Normalise backend event → shape the existing render code expects ──
   // Render code reads: e.name, e.eventTimestamp / e.eventDate, e.status, e.id
   // Backend shape: { id, title, event_type, start_time, end_time, attendees, ... }
+  // Different backends return participants differently — accept any of:
+  //   attendees, attendee_ids, participants, invitations, invitees
+  // and any of: [1,2,3], [{id:1,...}], or [{user:1,...}] (Django invitation pattern).
+  const extractAttendeeIds = (be) => {
+    const candidate =
+      (Array.isArray(be?.attendees)        && be.attendees) ||
+      (Array.isArray(be?.attendee_ids)     && be.attendee_ids) ||
+      (Array.isArray(be?.participants)     && be.participants) ||
+      (Array.isArray(be?.invitations)      && be.invitations) ||
+      (Array.isArray(be?.invitees)         && be.invitees) ||
+      [];
+    return candidate
+      .map(item => {
+        if (item == null) return null;
+        // Plain id (number or string)
+        if (typeof item === 'number' || typeof item === 'string') return item;
+        // Object: try common shapes — { id }, { user }, { user_id }, { user: { id } }
+        if (typeof item === 'object') {
+          if (item.id != null) return item.id;
+          if (item.user_id != null) return item.user_id;
+          if (typeof item.user === 'number' || typeof item.user === 'string') return item.user;
+          if (item.user && typeof item.user === 'object' && item.user.id != null) return item.user.id;
+        }
+        return null;
+      })
+      .filter(v => v != null);
+  };
+
   const normaliseEvent = useCallback((be) => {
     const startIso = be.start_time;
     let status = 'Todo';
@@ -288,7 +587,7 @@ export default function CalendarScreen() {
       description:       be.description,
       location:          be.location,
       is_online_meeting: be.is_online_meeting,
-      attendees:         be.attendees || [],
+      attendees:         extractAttendeeIds(be),
       organizer:         be.organizer,
       organizer_name:    be.organizer_name,
       my_invitation_status: be.my_invitation_status,
@@ -340,9 +639,30 @@ export default function CalendarScreen() {
     }
   }, [normaliseEvent]);
 
+  // Fetch tasks for the All Day / Tasks row.
+  // We don't paginate aggressively here — the row only needs a few items per day;
+  // first page is plenty. If the user has thousands of tasks, the website
+  // probably filters by week too, but the simple version works fine to start.
+  const fetchTasks = useCallback(async () => {
+    try {
+      const token = await getAccessToken();
+      const res = await fetch(TASKS_API, {
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      });
+      if (!res.ok) return;
+      const data = await res.json().catch(() => ({}));
+      const list = Array.isArray(data?.results) ? data.results : (Array.isArray(data) ? data : []);
+      setTasks(list);
+    } catch (err) {
+      if (__DEV__) console.warn('[Calendar] fetchTasks failed:', err);
+    }
+  }, []);
+
   useFocusEffect(useCallback(() => {
     // Fetch events from backend (replaces the old AsyncStorage load)
     fetchEvents();
+    // Fetch tasks for the All Day / Tasks row
+    fetchTasks();
 
     // Load daily updates from local cache first (fast), then refresh from backend
     AsyncStorage.getItem(DAILY_UPDATE_STORAGE_KEY).then(data => {
@@ -352,7 +672,7 @@ export default function CalendarScreen() {
     });
     // Fetch fresh from backend (will overwrite my updates + populate team updates)
     fetchDailyUpdates();
-  }, [currentUserId, fetchEvents]));
+  }, [currentUserId, fetchEvents, fetchTasks]));
 
   // Fetch all users once for participants list
   useEffect(() => {
@@ -424,7 +744,8 @@ export default function CalendarScreen() {
   // ── Header label ──
   const getHeaderLabel = () => {
     if (viewMode === 'day') {
-      return currentDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+      // Compact: 'Wed, April 29' — year is implied for the current view
+      return currentDate.toLocaleDateString('en-US', { weekday: 'short', month: 'long', day: 'numeric' });
     }
     if (viewMode === 'month') {
       return `${MONTHS[currentDate.getMonth()]} ${currentDate.getFullYear()}`;
@@ -452,6 +773,26 @@ export default function CalendarScreen() {
       return ed.getHours() === hour;
     } catch { return false; }
   });
+
+  // Tasks active on a given day. A task is active if `d` falls between
+  // start_date and due_date (inclusive). If only due_date exists, show on
+  // that day only. If only start_date exists, show on that day only.
+  const tasksForDay = (d) => {
+    const key = dateKey(d);
+    return tasks.filter(t => {
+      const startStr = t.start_date ? String(t.start_date).slice(0, 10) : null;
+      const dueStr   = t.due_date   ? String(t.due_date).slice(0, 10)   : null;
+      if (startStr && dueStr) return key >= startStr && key <= dueStr;
+      if (dueStr)             return key === dueStr;
+      if (startStr)           return key === startStr;
+      return false;
+    });
+  };
+
+  const toggleDayExpanded = (d) => {
+    const key = dateKey(d);
+    setExpandedDays(prev => ({ ...prev, [key]: !prev[key] }));
+  };
 
   // ── Stats ──
   const totalEvents  = events.length;
@@ -694,6 +1035,53 @@ export default function CalendarScreen() {
       });
   };
 
+  // ── Workaround for a backend bug: events created/updated with
+  // is_online_meeting=true silently drop attendee_ids on the way in.
+  // After every save we GET the event back; if attendees is empty but we
+  // intended to save some, fire a follow-up PATCH that re-asserts them.
+  // Returns the final, fresh event from the server so callers can use it.
+  const ensureAttendeesPersisted = async (eventId, intendedIds, token) => {
+    if (!eventId || !Array.isArray(intendedIds) || intendedIds.length === 0) return null;
+    try {
+      // 1) Read what the server actually saved
+      const verifyRes = await fetch(`${EVENTS_API}${eventId}/`, {
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      });
+      if (!verifyRes.ok) return null;
+      const verified = await verifyRes.json();
+      const savedIds = Array.isArray(verified?.attendees) ? verified.attendees : [];
+
+      // Treat as "missing" if any intended id isn't in the saved list. We
+      // don't compare strict equality because some backends auto-include
+      // the organizer or status filter the list — extra ids are fine.
+      const missing = intendedIds.filter(id => !savedIds.map(String).includes(String(id)));
+      if (missing.length === 0) return verified; // already correct, nothing to do
+
+      // 2) Force-write the full intended list with a follow-up PATCH
+      const patchRes = await fetch(`${EVENTS_API}${eventId}/`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ attendee_ids: intendedIds }),
+      });
+      if (!patchRes.ok) {
+        if (__DEV__) console.warn('[Calendar] re-assert PATCH failed:', patchRes.status);
+        return verified;
+      }
+      const reasserted = await patchRes.json().catch(() => null);
+
+      // 3) Re-read once more to confirm (the PATCH response may itself
+      // be lighter/lacking attendees from the same backend bug)
+      const finalRes = await fetch(`${EVENTS_API}${eventId}/`, {
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      });
+      if (!finalRes.ok) return reasserted || verified;
+      return await finalRes.json();
+    } catch (err) {
+      if (__DEV__) console.warn('[Calendar] ensureAttendeesPersisted error:', err);
+      return null;
+    }
+  };
+
   const saveEvent = async () => {
     if (!eventName.trim()) { Alert.alert('Required', 'Enter an event name.'); return; }
 
@@ -742,6 +1130,16 @@ export default function CalendarScreen() {
       if (!res.ok) {
         Alert.alert('Error', data.detail || data.message || `Error ${res.status}`);
         return;
+      }
+
+      // Workaround: re-assert attendees if the create silently dropped them
+      // (happens on the backend's online-meeting code path). Loop over all
+      // created_events for recurring events.
+      const intendedIds = participants.map(p => p.id);
+      if (intendedIds.length > 0 && Array.isArray(data.created_events)) {
+        for (const ev of data.created_events) {
+          if (ev?.id) await ensureAttendeesPersisted(ev.id, intendedIds, token);
+        }
       }
 
       // Refresh events list from backend so the new one shows up immediately
@@ -862,6 +1260,200 @@ export default function CalendarScreen() {
     ]);
   };
 
+  // ── Event Detail / Edit handlers ────────────────────────────────────────
+  // Tap an event card → open read-only detail. From there: Edit (organizer only)
+  // or Delete (organizer only) or Close.
+  // We also re-fetch the event by id, because the list endpoint sometimes
+  // omits or summarises the attendees field; the detail endpoint is the source
+  // of truth.
+  const openEventDetail = (ev) => {
+    setDetailEvent(ev);
+    setEditMode(false);
+
+    if (!ev?.id) return;
+    (async () => {
+      try {
+        const token = await getAccessToken();
+        // Fetch event detail + RSVP status in parallel.
+        // /events/<id>/ returns the event's own fields (title, time, attendees IDs, etc.)
+        // /events/<id>/rsvp-status/ returns the participant list with names and statuses
+        // (the rich data the website's Edit modal displays).
+        const [detailRes, rsvpRes] = await Promise.all([
+          fetch(`${EVENTS_API}${ev.id}/`, {
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          }),
+          fetch(`${EVENTS_API}${ev.id}/rsvp-status/`, {
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          }),
+        ]);
+
+        if (!detailRes.ok) return; // keep the list version on failure
+        const data = await detailRes.json();
+        let rsvp = null;
+        if (rsvpRes.ok) {
+          try { rsvp = await rsvpRes.json(); }
+          catch { rsvp = null; }
+        }
+
+        const fresh = normaliseEvent(data);
+        // Attach the rsvp payload so the participants UI can render names + statuses
+        // straight from the dedicated endpoint, instead of guessing from `attendees` IDs.
+        fresh.rsvp = rsvp;
+        // Only update if the user is still viewing this event
+        setDetailEvent(prev => (prev && String(prev.id) === String(fresh.id) ? fresh : prev));
+        // Also refresh the row in the list so attendee count stays in sync
+        setEvents(prev => prev.map(e => String(e.id) === String(fresh.id) ? { ...e, ...fresh } : e));
+      } catch (err) {
+        if (__DEV__) console.warn('[Calendar] failed to refetch event detail:', err);
+      }
+    })();
+  };
+
+  const closeEventDetail = () => {
+    if (savingEdit) return;
+    setDetailEvent(null);
+    setEditMode(false);
+    setShowEditDate(false);
+    setShowEditStart(false);
+    setShowEditEnd(false);
+    setShowEditTypeMenu(false);
+    setShowEditAttendees(false);
+    setEditAttendeeSearch('');
+  };
+
+  const startEditMode = () => {
+    if (!detailEvent) return;
+    setEditTitle(detailEvent.name || '');
+    setEditType(detailEvent.event_type || 'Meeting');
+    setEditDescription(detailEvent.description || '');
+    setEditLocation(detailEvent.location || '');
+    setEditOnline(!!detailEvent.is_online_meeting);
+    try { setEditStart(new Date(detailEvent.eventTimestamp || Date.now())); }
+    catch { setEditStart(new Date()); }
+    try { setEditEnd(new Date(detailEvent.end_time || detailEvent.eventTimestamp || Date.now())); }
+    catch { setEditEnd(new Date()); }
+    // Seed the editable attendee list. Prefer rsvp-status (which includes the
+    // organizer + all invitees with their user_ids) over the bare `attendees`
+    // field, because the latter can be empty for organizer-view on some events.
+    let initialIds = [];
+    const rsvpRows = detailEvent.rsvp?.attendee_status;
+    if (Array.isArray(rsvpRows) && rsvpRows.length > 0) {
+      initialIds = rsvpRows
+        .map(r => r?.user_id)
+        .filter(id => id != null);
+    } else if (Array.isArray(detailEvent.attendees)) {
+      initialIds = [...detailEvent.attendees];
+    }
+    setEditAttendees(initialIds);
+    setEditMode(true);
+  };
+
+  const cancelEdit = () => {
+    if (savingEdit) return;
+    setEditMode(false);
+    setShowEditDate(false);
+    setShowEditStart(false);
+    setShowEditEnd(false);
+    setShowEditTypeMenu(false);
+    setShowEditAttendees(false);
+    setEditAttendeeSearch('');
+  };
+
+  // Apply the date portion of `editStart` to a time-only Date so a separate
+  // time-pick doesn't reset the day. Also ensures end stays after start.
+  const combineDateTime = (dateBase, timeBase) => {
+    const out = new Date(dateBase);
+    out.setHours(timeBase.getHours(), timeBase.getMinutes(), 0, 0);
+    return out;
+  };
+
+  const saveEditedEvent = async () => {
+    if (!detailEvent?.id) return;
+    if (!editTitle.trim()) {
+      Alert.alert('Required', 'Event name is required.');
+      return;
+    }
+    // Final safety net: silently auto-bump end if it's not after start.
+    // (UI already prevents this via picker logic — this is a belt-and-braces guard.)
+    let safeEnd = editEnd;
+    if (safeEnd.getTime() <= editStart.getTime()) {
+      safeEnd = new Date(editStart.getTime() + 30 * 60 * 1000);
+      setEditEnd(safeEnd);
+    }
+    setSavingEdit(true);
+    try {
+      const token = await getAccessToken();
+      const body = {
+        title:             editTitle.trim(),
+        event_type:        editType,
+        start_time:        editStart.toISOString(),
+        end_time:          safeEnd.toISOString(),
+        description:       editDescription.trim() || null,
+        location:          editLocation.trim()    || null,
+        is_online_meeting: editOnline,
+        attendee_ids:      editAttendees,
+      };
+      const res = await fetch(`${EVENTS_API}${detailEvent.id}/`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type':  'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        Alert.alert('Could not save changes', data.detail || data.message || JSON.stringify(data) || `Error ${res.status}`);
+        return;
+      }
+
+      // Workaround: re-assert attendees in case the backend silently dropped
+      // them (happens on the online-meeting code path). Use the verified-and-
+      // patched event as our source of truth.
+      let serverEvent = data;
+      if (Array.isArray(editAttendees) && editAttendees.length > 0) {
+        const reasserted = await ensureAttendeesPersisted(detailEvent.id, editAttendees, token);
+        if (reasserted) serverEvent = reasserted;
+      }
+
+      // Re-fetch rsvp-status so the participants section reflects the new
+      // attendees (with their fresh invitation statuses) instead of the
+      // pre-edit cache.
+      let freshRsvp = null;
+      try {
+        const rsvpRes = await fetch(`${EVENTS_API}${detailEvent.id}/rsvp-status/`, {
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        });
+        if (rsvpRes.ok) freshRsvp = await rsvpRes.json();
+      } catch { /* keep stale rsvp on failure */ }
+
+      // Use the server's updated event so anything we miss (e.g. attendees if
+      // the field name differs) still reflects truth
+      const fresh = normaliseEvent(serverEvent);
+      // Carry the freshly-fetched rsvp data so the participants UI updates.
+      // If the re-fetch failed for any reason, keep whatever rsvp we already had.
+      fresh.rsvp = freshRsvp || detailEvent.rsvp || null;
+      setEvents(prev => prev.map(e => String(e.id) === String(detailEvent.id) ? fresh : e));
+      setDetailEvent(fresh);
+      setEditMode(false);
+      addNotification?.({
+        type: 'event', icon: '✅',
+        title: 'Event updated',
+        body: `"${fresh.name}" saved.`,
+      });
+    } catch (e) {
+      Alert.alert('Error', e.message || 'Could not save event.');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const toggleEditAttendee = (userId) => {
+    setEditAttendees(prev =>
+      prev.includes(userId) ? prev.filter(id => id !== userId) : [...prev, userId],
+    );
+  };
+
   // ── Mini calendar ──
   const miniDaysInMonth = new Date(miniYear, miniMonth + 1, 0).getDate();
   const miniFirstDay    = new Date(miniYear, miniMonth, 1).getDay();
@@ -919,7 +1511,7 @@ export default function CalendarScreen() {
     const dim = new Date(y, m + 1, 0).getDate();
     const fd  = new Date(y, m, 1).getDay();
     return (
-      <ScrollView style={{ flex: 1 }}>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 110 }}>
         <View style={[styles.monthGrid, { backgroundColor: card, borderColor: bdr }]}>
           <View style={styles.monthDayRow}>
             {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d => (
@@ -955,22 +1547,68 @@ export default function CalendarScreen() {
 
   // ── Week / Day grid view ──
   const renderTimeGrid = () => (
-    <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
-      {/* All Day row */}
+    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 110 }} showsVerticalScrollIndicator={false}>
+      {/* All Day / Tasks row — collapsible per day */}
       <View style={[styles.allDayRow, { borderColor: bdr, backgroundColor: card }]}>
         <View style={styles.timeLabel}><Text style={[styles.timeLabelText, { color: sub }]}>All Day / Tasks</Text></View>
-        {weekDays.map((d, i) => (
-          <View key={i} style={[styles.dayCol, { borderColor: bdr }]}>
-            {eventsForDay(d).filter(e => {
-              try { const ed = new Date(e.eventTimestamp || e.eventDate); return isNaN(ed.getHours()); } catch { return true; }
-            }).map((ev, j) => (
-              <View key={j} style={styles.allDayEvent}>
-                <Text style={styles.allDayEventText} numberOfLines={1}>{ev.name}</Text>
-              </View>
-            ))}
-            {eventsForDay(d).length === 0 && <Text style={[styles.noTasksText, { color: sub }]}>No tasks</Text>}
-          </View>
-        ))}
+        {weekDays.map((d, i) => {
+          const key       = dateKey(d);
+          const expanded  = !!expandedDays[key];
+          const dayTasks  = tasksForDay(d);
+          const allDayEvs = eventsForDay(d).filter(e => {
+            try { const ed = new Date(e.eventTimestamp || e.eventDate); return isNaN(ed.getHours()); } catch { return true; }
+          });
+          const totalCount = dayTasks.length + allDayEvs.length;
+
+          return (
+            <View key={i} style={[styles.dayCol, { borderColor: bdr }]}>
+              {/* Chevron toggle + count heading. Tappable across the whole header. */}
+              <TouchableOpacity
+                onPress={() => toggleDayExpanded(d)}
+                activeOpacity={0.6}
+                style={styles.allDayHeader}
+                disabled={totalCount === 0}
+              >
+                <Text style={[
+                  styles.allDayChevron,
+                  { color: totalCount === 0 ? (isDark ? '#3A3A48' : '#CFCFD8') : sub },
+                  expanded && { transform: [{ rotate: '90deg' }] },
+                ]}>›</Text>
+                <Text style={[styles.allDayCountText, { color: sub }]} numberOfLines={1}>
+                  {totalCount === 0 ? 'No tasks' : `${totalCount} task${totalCount > 1 ? 's' : ''}`}
+                </Text>
+              </TouchableOpacity>
+
+              {/* Expanded list — tasks + any all-day events for completeness */}
+              {expanded && (
+                <View style={{ marginTop: 4 }}>
+                  {allDayEvs.map((ev, j) => (
+                    <TouchableOpacity
+                      key={`ev-${j}`}
+                      style={styles.allDayEvent}
+                      onPress={() => openEventDetail(ev)}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.allDayEventText} numberOfLines={1}>{ev.name}</Text>
+                    </TouchableOpacity>
+                  ))}
+                  {dayTasks.map((t, j) => (
+                    <TouchableOpacity
+                      key={`t-${t.id || j}`}
+                      style={styles.allDayTask}
+                      onPress={() => setDetailTask(t)}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[styles.allDayTaskText, { color: txt }]} numberOfLines={1}>
+                        {t.heading || t.title || t.name || 'Untitled task'}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+            </View>
+          );
+        })}
       </View>
 
       {/* Hourly rows */}
@@ -1005,7 +1643,13 @@ export default function CalendarScreen() {
                 activeOpacity={isPast ? 1 : 0.7}
               >
                 {hourEvs.map((ev, ei) => (
-                  <TouchableOpacity key={ei} style={styles.eventBlock} onLongPress={() => deleteEvent(ev.id)}>
+                  <TouchableOpacity
+                    key={ei}
+                    style={styles.eventBlock}
+                    onPress={() => openEventDetail(ev)}
+                    onLongPress={() => deleteEvent(ev.id)}
+                    activeOpacity={0.7}
+                  >
                     <Text style={styles.eventBlockText} numberOfLines={2}>{ev.name}</Text>
                     <Text style={styles.eventBlockTime}>{new Date(ev.eventTimestamp || ev.eventDate).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}</Text>
                   </TouchableOpacity>
@@ -1020,7 +1664,7 @@ export default function CalendarScreen() {
   );
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: bg }]}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: bg }]} edges={['top', 'left', 'right']}>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={isDark ? '#0D0D0F' : '#fff'} translucent={false} />
 
       {/* Navbar */}
@@ -1062,44 +1706,80 @@ export default function CalendarScreen() {
         ))}
       </View>
 
-      {/* Toolbar: Today · ‹ › · Date range · View switchers · New event */}
-      <View style={[styles.toolbar, { backgroundColor: card, borderBottomColor: bdr }]}>
-        <View style={styles.toolbarLeft}>
-          <TouchableOpacity style={styles.todayBtn} onPress={goToday}>
-            <Text style={styles.todayBtnText}>Today</Text>
+      {/* Toolbar wrapper — relative position so the dropdown anchors here */}
+      <View style={{ position: 'relative', zIndex: 50 }}>
+        <View style={[styles.toolbar, { backgroundColor: card, borderBottomColor: bdr }]}>
+          {/* Today button → opens view-mode dropdown */}
+          <TouchableOpacity
+            ref={todayBtnRef}
+            style={styles.todayBtn}
+            onPress={() => (showViewMenu ? setShowViewMenu(false) : openViewMenu())}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.todayBtnText}>Day</Text>
+            <Text style={[styles.todayBtnChevron, showViewMenu && { transform: [{ rotate: '180deg' }] }]}>▾</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.arrowBtn} onPress={goPrev}>
-            <Text style={[styles.arrowText, { color: txt }]}>‹</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.arrowBtn} onPress={goNext}>
-            <Text style={[styles.arrowText, { color: txt }]}>›</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => setShowMiniCal(s => !s)} style={styles.dateRangeBtn}>
-            <Text style={[styles.dateRange, { color: txt }]} numberOfLines={1}>{getHeaderLabel()}</Text>
-            <Text style={{ fontSize: 10, color: sub, marginLeft: 4 }}>{showMiniCal ? '▲' : '▾'}</Text>
+
+          {/* Center group: prev arrow · date range (tap to open mini-cal) · next arrow */}
+          <View style={styles.toolbarCenter}>
+            <TouchableOpacity style={styles.arrowBtn} onPress={goPrev}>
+              <Text style={[styles.arrowText, { color: txt }]}>‹</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setShowMiniCal(s => !s)} style={styles.dateRangeBtn}>
+              <Text style={[styles.dateRange, { color: txt }]} numberOfLines={1}>{getHeaderLabel()}</Text>
+              <Text style={{ fontSize: 10, color: sub, marginLeft: 4 }}>{showMiniCal ? '▲' : '▾'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.arrowBtn} onPress={goNext}>
+              <Text style={[styles.arrowText, { color: txt }]}>›</Text>
+            </TouchableOpacity>
+          </View>
+
+          <TouchableOpacity style={styles.newEventBtn} onPress={() => openModal()}>
+            <Text style={styles.newEventBtnText}>+ New event</Text>
           </TouchableOpacity>
         </View>
-        <TouchableOpacity style={styles.newEventBtn} onPress={() => openModal()}>
-          <Text style={styles.newEventBtnText}>+ New event</Text>
-        </TouchableOpacity>
-      </View>
 
-      {/* View mode switcher */}
-      <View style={[styles.viewSwitcher, { backgroundColor: card, borderBottomColor: bdr }]}>
-        {[
-          { id: 'day',      label: 'Day' },
-          { id: 'workWeek', label: 'Work Week' },
-          { id: 'week',     label: 'Week' },
-          { id: 'month',    label: 'Month' },
-        ].map(v => (
-          <TouchableOpacity
-            key={v.id}
-            style={[styles.viewBtn, viewMode === v.id && styles.viewBtnActive]}
-            onPress={() => setViewMode(v.id)}
-          >
-            <Text style={[styles.viewBtnText, { color: viewMode === v.id ? '#1A1A2E' : sub }]}>{v.label}</Text>
-          </TouchableOpacity>
-        ))}
+        {/* View-mode dropdown — anchored under the Today button.
+            Everything is rendered inside a Modal so the menu items sit on
+            top of the backdrop (otherwise the Modal's overlay swallows taps). */}
+        {showViewMenu && (
+          <Modal transparent visible animationType="none" onRequestClose={() => setShowViewMenu(false)}>
+            {/* Tap-anywhere-to-close backdrop */}
+            <TouchableOpacity
+              style={{ flex: 1 }}
+              activeOpacity={1}
+              onPress={() => setShowViewMenu(false)}
+            >
+              {/* Menu — absolute-positioned over the backdrop, anchored under Today.
+                  Toolbar y-position is roughly 8px padding + ~28px content + a bit of
+                  safe-area; we use a top offset that lands the menu under the button.
+                  The exact value of `top` here is in screen coordinates because Modal
+                  renders in a separate overlay. */}
+              <View
+                onStartShouldSetResponder={() => true}
+                style={[styles.viewMenu, { backgroundColor: card, borderColor: bdr, top: viewMenuPos.top, left: viewMenuPos.left }]}
+              >
+                {[
+                  { id: 'day',      label: 'Today' },
+                  { id: 'workWeek', label: 'Work Week' },
+                  { id: 'week',     label: 'Week' },
+                  { id: 'month',    label: 'Month' },
+                ].map(v => (
+                  <TouchableOpacity
+                    key={v.id}
+                    style={[styles.viewMenuItem, viewMode === v.id && { backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
+                    onPress={() => { setViewMode(v.id); setShowViewMenu(false); }}
+                  >
+                    <Text style={[styles.viewMenuItemText, { color: viewMode === v.id ? '#4ECDC4' : txt, fontWeight: viewMode === v.id ? '700' : '500' }]}>
+                      {v.label}
+                    </Text>
+                    {viewMode === v.id && <Text style={styles.viewMenuCheck}>✓</Text>}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </TouchableOpacity>
+          </Modal>
+        )}
       </View>
 
       {/* ── Ask Dyuksa AI input bar ── */}
@@ -1387,10 +2067,24 @@ export default function CalendarScreen() {
       {modalVisible && (
         <Modal transparent visible animationType="none" onRequestClose={closeModal} statusBarTranslucent>
           <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={closeModal} />
-          <Animated.View style={[styles.topPanel, { backgroundColor: card, transform: [{ translateY: slideAnim }] }]}>
-            <SafeAreaView>
+          <Animated.View
+            style={[
+              styles.topPanel,
+              {
+                backgroundColor: card,
+                transform: [{ translateY: slideAnim }],
+                maxHeight: Dimensions.get('window').height - kbHeight,
+              },
+            ]}
+          >
+            <SafeAreaView style={{ flexShrink: 1 }}>
               <View style={[styles.handle, { backgroundColor: isDark ? '#3A3A48' : '#DEDEE8' }]} />
-              <ScrollView style={styles.panelScroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              <ScrollView
+                style={styles.panelScroll}
+                contentContainerStyle={{ paddingBottom: kbHeight > 0 ? 24 : 40 }}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
 
                 <View style={styles.panelHeader}>
                   <Text style={[styles.modalTitle, { color: txt }]}>Create event</Text>
@@ -1859,21 +2553,79 @@ export default function CalendarScreen() {
                   </View>
                 </View>
 
-                {/* Attendees */}
-                {Array.isArray(aiSuggestion.attendee_names) && aiSuggestion.attendee_names.length > 0 && (
-                  <>
-                    <Text style={[aiStyles.label, { color: sub }]}>Participants</Text>
-                    <View style={aiStyles.attendeeRow}>
-                      {aiSuggestion.attendee_names.map((n, i) => (
-                        <View key={`${n}_${i}`} style={[aiStyles.attendee, { backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}>
-                          <View style={aiStyles.avatar}>
-                            <Text style={aiStyles.avatarText}>{aiInitials(n)}</Text>
-                          </View>
-                          <Text style={[aiStyles.attendeeName, { color: txt }]} numberOfLines={1}>{n}</Text>
-                        </View>
-                      ))}
-                    </View>
-                  </>
+                {/* Attendees — editable: tap a chip to remove, tap '+' to add */}
+                <Text style={[aiStyles.label, { color: sub }]}>Participants</Text>
+                <View style={aiStyles.attendeeRow}>
+                  {(Array.isArray(aiSuggestion.attendee_names) ? aiSuggestion.attendee_names : []).map((n, i) => (
+                    <TouchableOpacity
+                      key={`${n}_${i}`}
+                      style={[aiStyles.attendee, { backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
+                      onPress={() => aiRemoveParticipantAt(i)}
+                      activeOpacity={0.7}
+                    >
+                      <View style={aiStyles.avatar}>
+                        <Text style={aiStyles.avatarText}>{aiInitials(n)}</Text>
+                      </View>
+                      <Text style={[aiStyles.attendeeName, { color: txt }]} numberOfLines={1}>{n}</Text>
+                      <Text style={[aiStyles.attendeeRemove, { color: sub }]}>×</Text>
+                    </TouchableOpacity>
+                  ))}
+                  <TouchableOpacity
+                    style={[aiStyles.attendeeAddBtn, { borderColor: isDark ? '#3A3A48' : '#DEDEE8' }]}
+                    onPress={() => setAiPickerOpen(o => !o)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[aiStyles.attendeeAddBtnText, { color: '#7C3AED' }]}>
+                      {aiPickerOpen ? '× Close' : '+ Add'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* AI Participant picker — search + scrollable user list */}
+                {aiPickerOpen && (
+                  <View style={[aiStyles.pickerBox, { backgroundColor: isDark ? '#1A1A20' : '#FAFAFA', borderColor: bdr }]}>
+                    <TextInput
+                      style={[aiStyles.pickerSearch, { backgroundColor: card, borderColor: bdr, color: txt }]}
+                      placeholder="Search users..."
+                      placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
+                      value={aiPickerSearch}
+                      onChangeText={setAiPickerSearch}
+                    />
+                    <ScrollView style={{ maxHeight: 180 }} nestedScrollEnabled>
+                      {aiFilteredUsers().length === 0 ? (
+                        <Text style={[aiStyles.pickerEmpty, { color: sub }]}>No users found</Text>
+                      ) : (
+                        aiFilteredUsers().map(u => {
+                          const isSelected = (aiSuggestion.attendee_ids || []).map(String).includes(String(u.id));
+                          const display = (u.first_name && u.last_name)
+                            ? `${u.first_name} ${u.last_name}`
+                            : (u.first_name || u.username || 'User');
+                          return (
+                            <TouchableOpacity
+                              key={u.id}
+                              style={[aiStyles.pickerRow, { borderBottomColor: bdr }]}
+                              onPress={() => aiToggleParticipant(u)}
+                              activeOpacity={0.7}
+                            >
+                              <View style={aiStyles.pickerAvatar}>
+                                <Text style={aiStyles.pickerAvatarText}>
+                                  {((u.first_name || u.username || 'U')[0] || 'U').toUpperCase()}
+                                </Text>
+                              </View>
+                              <Text style={[aiStyles.pickerName, { color: txt }]}>{display}</Text>
+                              <View style={[
+                                aiStyles.pickerCheck,
+                                { borderColor: isDark ? '#3A3A48' : '#DEDEE8' },
+                                isSelected && { backgroundColor: '#7C3AED', borderColor: '#7C3AED' },
+                              ]}>
+                                {isSelected && <Text style={aiStyles.pickerCheckMark}>✓</Text>}
+                              </View>
+                            </TouchableOpacity>
+                          );
+                        })
+                      )}
+                    </ScrollView>
+                  </View>
                 )}
 
                 {/* Slot chips — 4 per row */}
@@ -1942,6 +2694,551 @@ export default function CalendarScreen() {
           </View>
         </Modal>
       )}
+      {/* ── Event Detail / Edit Modal ─────────────────────────────────── */}
+      {!!detailEvent && (() => {
+        const isOrganizer = !!user && (
+          String(user.id) === String(detailEvent.organizer) ||
+          (detailEvent.my_invitation_status === 'ORGANIZER')
+        );
+        const fmtDate = (iso) => {
+          try { return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }); } catch { return iso; }
+        };
+        const fmtTime = (iso) => {
+          try { return new Date(iso).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' }); } catch { return iso; }
+        };
+        return (
+          <Modal
+            visible
+            transparent
+            animationType="fade"
+            onRequestClose={closeEventDetail}
+          >
+            <KeyboardAvoidingView
+              style={detailStyles.backdrop}
+              behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            >
+              <View style={[detailStyles.card, { backgroundColor: card, borderColor: bdr }]}>
+                {/* ── Header ── */}
+                <View style={detailStyles.header}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[detailStyles.title, { color: txt }]}>
+                      {editMode ? 'Edit event' : 'Event details'}
+                    </Text>
+                    {isOrganizer && (
+                      <View style={detailStyles.organizerBadge}>
+                        <Text style={detailStyles.organizerBadgeText}>ORGANIZER</Text>
+                      </View>
+                    )}
+                  </View>
+                  <TouchableOpacity onPress={closeEventDetail} disabled={savingEdit} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                    <Text style={[detailStyles.closeBtn, { color: sub }]}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <ScrollView
+                  style={{ flexGrow: 0, flexShrink: 1 }}
+                  contentContainerStyle={{ paddingBottom: 80 }}
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator={false}
+                >
+                  {/* ── Read-only view ── */}
+                  {!editMode && (
+                    <View style={{ gap: 12 }}>
+                      <View>
+                        <Text style={[detailStyles.label, { color: sub }]}>EVENT NAME</Text>
+                        <Text style={[detailStyles.bigValue, { color: txt }]}>{detailEvent.name}</Text>
+                      </View>
+
+                      <View style={{ flexDirection: 'row', gap: 12 }}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[detailStyles.label, { color: sub }]}>DATE</Text>
+                          <Text style={[detailStyles.value, { color: txt }]}>{fmtDate(detailEvent.eventTimestamp)}</Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[detailStyles.label, { color: sub }]}>TIME</Text>
+                          <Text style={[detailStyles.value, { color: txt }]}>
+                            {fmtTime(detailEvent.eventTimestamp)} – {fmtTime(detailEvent.end_time)}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <View>
+                        <Text style={[detailStyles.label, { color: sub }]}>TYPE</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <Text style={[detailStyles.value, { color: txt }]}>
+                            {(EVENT_TYPES.find(t => t.id === detailEvent.event_type)?.icon || '👥')} {detailEvent.event_type || 'Meeting'}
+                          </Text>
+                          {detailEvent.is_online_meeting && (
+                            <View style={detailStyles.onlinePill}>
+                              <Text style={detailStyles.onlinePillText}>📹 Online</Text>
+                            </View>
+                          )}
+                        </View>
+                      </View>
+
+                      {!!detailEvent.location && (
+                        <View>
+                          <Text style={[detailStyles.label, { color: sub }]}>LOCATION</Text>
+                          <Text style={[detailStyles.value, { color: txt }]}>📍 {detailEvent.location}</Text>
+                        </View>
+                      )}
+
+                      {!!detailEvent.description && (
+                        <View>
+                          <Text style={[detailStyles.label, { color: sub }]}>DESCRIPTION</Text>
+                          <Text style={[detailStyles.value, { color: txt, lineHeight: 20 }]}>
+                            {detailEvent.description}
+                          </Text>
+                        </View>
+                      )}
+
+                      <View>
+                        <Text style={[detailStyles.label, { color: sub }]}>ORGANIZER</Text>
+                        <Text style={[detailStyles.value, { color: txt }]}>
+                          {detailEvent.organizer_name || `User #${detailEvent.organizer || '—'}`}
+                        </Text>
+                      </View>
+
+                      <View>
+                        {(() => {
+                          // Prefer the dedicated rsvp-status payload if we got it —
+                          // it gives us names + invitation statuses straight from the
+                          // server, no matching against allUsers needed.
+                          const rsvpRows = Array.isArray(detailEvent.rsvp?.attendee_status)
+                            ? detailEvent.rsvp.attendee_status
+                            : null;
+                          const fallbackIds = Array.isArray(detailEvent.attendees) ? detailEvent.attendees : [];
+                          const total = rsvpRows ? rsvpRows.length : fallbackIds.length;
+
+                          // Status → display config (matches the website's pill colours)
+                          const statusInfo = (s) => {
+                            const v = String(s || '').toUpperCase();
+                            if (v === 'ORGANIZER') return { label: 'Organizer', color: '#4ECDC4' };
+                            if (v === 'ACCEPTED')  return { label: 'Accepted',  color: '#4ADE80' };
+                            if (v === 'PENDING')   return { label: 'Pending',   color: '#F59E0B' };
+                            if (v === 'DECLINED')  return { label: 'Declined',  color: '#EF4444' };
+                            if (v === 'TENTATIVE') return { label: 'Tentative', color: '#A78BFA' };
+                            return { label: v || 'Invited', color: sub };
+                          };
+
+                          return (
+                            <>
+                              <Text style={[detailStyles.label, { color: sub }]}>
+                                PARTICIPANTS ({total})
+                              </Text>
+
+                              {total === 0 ? (
+                                <Text style={[detailStyles.value, { color: sub, fontStyle: 'italic' }]}>
+                                  No participants
+                                </Text>
+                              ) : (
+                                <View style={{ flexDirection: 'column', gap: 8, marginTop: 4 }}>
+                                  {rsvpRows
+                                    ? rsvpRows.map((row, i) => {
+                                        const name = row.name || `User #${row.user_id}`;
+                                        const initial = (name || '?').charAt(0).toUpperCase();
+                                        const info = statusInfo(row.status);
+                                        return (
+                                          <View key={`rsvp-${row.user_id ?? i}`} style={detailStyles.attendeeRow}>
+                                            <View style={detailStyles.attendeeAvatar}>
+                                              <Text style={detailStyles.attendeeInitial}>{initial}</Text>
+                                            </View>
+                                            <View style={{ flex: 1 }}>
+                                              <Text style={[detailStyles.attendeeName, { color: txt }]} numberOfLines={1}>
+                                                {name}
+                                              </Text>
+                                              <Text style={[detailStyles.attendeeStatus, { color: info.color }]}>
+                                                {info.label}
+                                              </Text>
+                                            </View>
+                                          </View>
+                                        );
+                                      })
+                                    : fallbackIds.map((aid) => {
+                                        const u = allUsers.find(x => String(x.id) === String(aid));
+                                        const name = u ? (u.full_name || `${u.first_name || ''} ${u.last_name || ''}`.trim() || u.username) : `User #${aid}`;
+                                        const initial = (name || '?').charAt(0).toUpperCase();
+                                        return (
+                                          <View key={aid} style={detailStyles.attendeeRow}>
+                                            <View style={detailStyles.attendeeAvatar}>
+                                              <Text style={detailStyles.attendeeInitial}>{initial}</Text>
+                                            </View>
+                                            <Text style={[detailStyles.attendeeName, { color: txt, flex: 1 }]} numberOfLines={1}>{name}</Text>
+                                          </View>
+                                        );
+                                      })}
+                                </View>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </View>
+                    </View>
+                  )}
+
+                  {/* ── Edit mode ── */}
+                  {editMode && (
+                    <View style={{ gap: 12 }}>
+                      {/* Date row */}
+                      <View>
+                        <Text style={[detailStyles.label, { color: sub }]}>DATE</Text>
+                        <TouchableOpacity
+                          style={[detailStyles.input, { borderColor: bdr }]}
+                          onPress={() => {
+                            setDraftDate(new Date(editStart));
+                            setShowEditStart(false);
+                            setShowEditEnd(false);
+                            setShowEditDate(s => !s);
+                          }}
+                          activeOpacity={0.7}
+                        >
+                          <Text style={{ color: txt, fontSize: 14 }}>📅 {fmtDate(editStart.toISOString())}</Text>
+                        </TouchableOpacity>
+                        {showEditDate && (
+                          <View style={[detailStyles.inlinePickerWrap, { borderColor: bdr, backgroundColor: bg }]}>
+                            <DateTimePicker
+                              value={draftDate}
+                              mode="date"
+                              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                              themeVariant={isDark ? 'dark' : 'light'}
+                              onChange={(_e, d) => {
+                                if (Platform.OS === 'android') {
+                                  setShowEditDate(false);
+                                  if (d) {
+                                    setEditStart(combineDateTime(d, editStart));
+                                    setEditEnd(combineDateTime(d, editEnd));
+                                  }
+                                  return;
+                                }
+                                if (d) setDraftDate(d);
+                              }}
+                            />
+                            {Platform.OS === 'ios' && (
+                              <View style={detailStyles.inlinePickerActions}>
+                                <TouchableOpacity onPress={() => setShowEditDate(false)}>
+                                  <Text style={[detailStyles.pickerCancel, { color: sub }]}>Cancel</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity onPress={() => {
+                                  setEditStart(combineDateTime(draftDate, editStart));
+                                  setEditEnd(combineDateTime(draftDate, editEnd));
+                                  setShowEditDate(false);
+                                }}>
+                                  <Text style={detailStyles.pickerDone}>Done</Text>
+                                </TouchableOpacity>
+                              </View>
+                            )}
+                          </View>
+                        )}
+                      </View>
+
+                      {/* Times row */}
+                      <View style={{ flexDirection: 'row', gap: 8 }}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[detailStyles.label, { color: sub }]}>START</Text>
+                          <TouchableOpacity
+                            style={[detailStyles.input, { borderColor: bdr }]}
+                            onPress={() => {
+                              setDraftStart(new Date(editStart));
+                              setShowEditDate(false);
+                              setShowEditEnd(false);
+                              setShowEditStart(s => !s);
+                            }}
+                            activeOpacity={0.7}
+                          >
+                            <Text style={{ color: txt, fontSize: 14 }}>{fmtTime(editStart.toISOString())}</Text>
+                          </TouchableOpacity>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[detailStyles.label, { color: sub }]}>END</Text>
+                          <TouchableOpacity
+                            style={[detailStyles.input, { borderColor: bdr }]}
+                            onPress={() => {
+                              setDraftEnd(new Date(editEnd));
+                              setShowEditDate(false);
+                              setShowEditStart(false);
+                              setShowEditEnd(s => !s);
+                            }}
+                            activeOpacity={0.7}
+                          >
+                            <Text style={{ color: txt, fontSize: 14 }}>{fmtTime(editEnd.toISOString())}</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+
+                      {/* Inline START wheel picker — same UI on iOS + Android */}
+                      {showEditStart && (
+                        <View style={[detailStyles.inlinePickerWrap, { borderColor: bdr, backgroundColor: bg }]}>
+                          <Text style={[detailStyles.inlinePickerTitle, { color: sub }]}>SELECT START TIME</Text>
+                          <WheelTimePicker
+                            value={draftStart}
+                            onChange={setDraftStart}
+                            txtColor={txt}
+                            subColor={sub}
+                            bdrColor={bdr}
+                          />
+                          <View style={detailStyles.inlinePickerActions}>
+                            <TouchableOpacity onPress={() => setShowEditStart(false)}>
+                              <Text style={[detailStyles.pickerCancel, { color: sub }]}>Cancel</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity onPress={() => {
+                              const newStart = combineDateTime(editStart, draftStart);
+                              setEditStart(newStart);
+                              // Auto-bump: if end is now ≤ start, push end to start + 30 min
+                              if (editEnd.getTime() <= newStart.getTime()) {
+                                const bumped = new Date(newStart.getTime() + 30 * 60 * 1000);
+                                setEditEnd(bumped);
+                              }
+                              setShowEditStart(false);
+                            }}>
+                              <Text style={detailStyles.pickerDone}>Done</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      )}
+
+                      {/* Inline END wheel picker */}
+                      {showEditEnd && (
+                        <View style={[detailStyles.inlinePickerWrap, { borderColor: bdr, backgroundColor: bg }]}>
+                          <Text style={[detailStyles.inlinePickerTitle, { color: sub }]}>SELECT END TIME</Text>
+                          <WheelTimePicker
+                            value={draftEnd}
+                            onChange={setDraftEnd}
+                            txtColor={txt}
+                            subColor={sub}
+                            bdrColor={bdr}
+                          />
+                          <View style={detailStyles.inlinePickerActions}>
+                            <TouchableOpacity onPress={() => setShowEditEnd(false)}>
+                              <Text style={[detailStyles.pickerCancel, { color: sub }]}>Cancel</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity onPress={() => {
+                              let newEnd = combineDateTime(editEnd, draftEnd);
+                              // Auto-bump: end must be after start. If user picked
+                              // a time at or before start, silently set end = start + 30 min.
+                              if (newEnd.getTime() <= editStart.getTime()) {
+                                newEnd = new Date(editStart.getTime() + 30 * 60 * 1000);
+                              }
+                              setEditEnd(newEnd);
+                              setShowEditEnd(false);
+                            }}>
+                              <Text style={detailStyles.pickerDone}>Done</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      )}
+
+                      {/* Title */}
+                      <View>
+                        <Text style={[detailStyles.label, { color: sub }]}>EVENT NAME</Text>
+                        <TextInput
+                          style={[detailStyles.input, { color: txt, borderColor: bdr }]}
+                          value={editTitle}
+                          onChangeText={setEditTitle}
+                          placeholder="Event name"
+                          placeholderTextColor={isDark ? '#5C5C6E' : '#AAAABC'}
+                          editable={!savingEdit}
+                        />
+                      </View>
+
+                      {/* Type */}
+                      <View>
+                        <Text style={[detailStyles.label, { color: sub }]}>EVENT TYPE</Text>
+                        <TouchableOpacity
+                          style={[detailStyles.input, { borderColor: bdr, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}
+                          onPress={() => setShowEditTypeMenu(s => !s)}
+                          activeOpacity={0.7}
+                        >
+                          <Text style={{ color: txt, fontSize: 14 }}>
+                            {(EVENT_TYPES.find(t => t.id === editType)?.icon || '👥')} {editType}
+                          </Text>
+                          <Text style={{ color: sub, fontSize: 12 }}>{showEditTypeMenu ? '▲' : '▼'}</Text>
+                        </TouchableOpacity>
+                        {showEditTypeMenu && (
+                          <View style={[detailStyles.dropdown, { backgroundColor: card, borderColor: bdr }]}>
+                            {EVENT_TYPES.map(t => (
+                              <TouchableOpacity
+                                key={t.id}
+                                style={[detailStyles.dropdownItem, { borderBottomColor: bdr }, t.id === editType && { backgroundColor: 'rgba(78,205,196,0.08)' }]}
+                                onPress={() => { setEditType(t.id); setShowEditTypeMenu(false); }}
+                              >
+                                <Text style={{ color: txt, fontSize: 14 }}>{t.icon} {t.label}</Text>
+                                {t.id === editType && <Text style={{ color: '#4ECDC4', fontWeight: '700' }}>✓</Text>}
+                              </TouchableOpacity>
+                            ))}
+                          </View>
+                        )}
+                      </View>
+
+                      {/* Online meeting toggle */}
+                      <TouchableOpacity
+                        style={[detailStyles.toggleRow, { borderColor: bdr, backgroundColor: editOnline ? 'rgba(78,205,196,0.08)' : 'transparent' }]}
+                        onPress={() => setEditOnline(v => !v)}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={{ fontSize: 16 }}>📹</Text>
+                        <Text style={{ flex: 1, color: txt, fontSize: 14 }}>Online meeting</Text>
+                        <View style={[detailStyles.toggleSwitch, editOnline && { backgroundColor: '#4ECDC4' }]}>
+                          <View style={[detailStyles.toggleKnob, editOnline && { transform: [{ translateX: 16 }] }]} />
+                        </View>
+                      </TouchableOpacity>
+
+                      {/* Description */}
+                      <View>
+                        <Text style={[detailStyles.label, { color: sub }]}>DESCRIPTION</Text>
+                        <TextInput
+                          style={[detailStyles.input, { color: txt, borderColor: bdr, minHeight: 70, textAlignVertical: 'top' }]}
+                          value={editDescription}
+                          onChangeText={setEditDescription}
+                          placeholder="Add a description"
+                          placeholderTextColor={isDark ? '#5C5C6E' : '#AAAABC'}
+                          multiline
+                          editable={!savingEdit}
+                        />
+                      </View>
+
+                      {/* Location */}
+                      <View>
+                        <Text style={[detailStyles.label, { color: sub }]}>LOCATION</Text>
+                        <TextInput
+                          style={[detailStyles.input, { color: txt, borderColor: bdr }]}
+                          value={editLocation}
+                          onChangeText={setEditLocation}
+                          placeholder="Add location (optional)"
+                          placeholderTextColor={isDark ? '#5C5C6E' : '#AAAABC'}
+                          editable={!savingEdit}
+                        />
+                      </View>
+
+                      {/* Participants */}
+                      <View>
+                        <Text style={[detailStyles.label, { color: sub }]}>
+                          PARTICIPANTS ({editAttendees.length})
+                        </Text>
+                        <TouchableOpacity
+                          style={[detailStyles.input, { borderColor: bdr }]}
+                          onPress={() => setShowEditAttendees(s => !s)}
+                          activeOpacity={0.7}
+                        >
+                          <Text style={{ color: txt, fontSize: 14 }}>
+                            {editAttendees.length === 0 ? 'Tap to add participants' : `${editAttendees.length} selected · tap to manage`}
+                          </Text>
+                        </TouchableOpacity>
+                        {showEditAttendees && (
+                          <View style={[detailStyles.attendeeList, { borderColor: bdr, backgroundColor: bg }]}>
+                            <TextInput
+                              style={[detailStyles.attendeeSearch, { color: txt, borderBottomColor: bdr }]}
+                              value={editAttendeeSearch}
+                              onChangeText={setEditAttendeeSearch}
+                              placeholder="Search users…"
+                              placeholderTextColor={isDark ? '#5C5C6E' : '#AAAABC'}
+                            />
+                            <ScrollView style={{ maxHeight: 200 }}>
+                              {allUsers
+                                .filter(u => {
+                                  const q = editAttendeeSearch.toLowerCase().trim();
+                                  if (!q) return true;
+                                  return (u.first_name || '').toLowerCase().includes(q) ||
+                                         (u.full_name  || '').toLowerCase().includes(q) ||
+                                         (u.username   || '').toLowerCase().includes(q);
+                                })
+                                .map(u => {
+                                  const selected = editAttendees.includes(u.id);
+                                  const name = u.full_name || `${u.first_name || ''} ${u.last_name || ''}`.trim() || u.username || `User #${u.id}`;
+                                  return (
+                                    <TouchableOpacity
+                                      key={u.id}
+                                      style={[detailStyles.attendeeListItem, { borderBottomColor: bdr }, selected && { backgroundColor: 'rgba(78,205,196,0.08)' }]}
+                                      onPress={() => toggleEditAttendee(u.id)}
+                                    >
+                                      <View style={detailStyles.attendeeAvatar}>
+                                        <Text style={detailStyles.attendeeInitial}>{(name || '?').charAt(0).toUpperCase()}</Text>
+                                      </View>
+                                      <Text style={{ flex: 1, color: txt, fontSize: 13 }}>{name}</Text>
+                                      {selected && <Text style={{ color: '#4ECDC4', fontWeight: '700' }}>✓</Text>}
+                                    </TouchableOpacity>
+                                  );
+                                })
+                              }
+                            </ScrollView>
+                          </View>
+                        )}
+                      </View>
+                    </View>
+                  )}
+                </ScrollView>
+
+                {/* ── Footer buttons ── */}
+                <View style={detailStyles.footer}>
+                  {!editMode && (
+                    <>
+                      {isOrganizer && (
+                        <TouchableOpacity
+                          style={[detailStyles.btn, detailStyles.btnDanger]}
+                          onPress={() => {
+                            const id = detailEvent.id;
+                            closeEventDetail();
+                            setTimeout(() => deleteEvent(id), 100);
+                          }}
+                        >
+                          <Text style={detailStyles.btnDangerText}>🗑 Delete</Text>
+                        </TouchableOpacity>
+                      )}
+                      <TouchableOpacity
+                        style={[detailStyles.btn, detailStyles.btnSecondary, { borderColor: bdr }]}
+                        onPress={closeEventDetail}
+                      >
+                        <Text style={[detailStyles.btnSecondaryText, { color: txt }]}>Close</Text>
+                      </TouchableOpacity>
+                      {isOrganizer && (
+                        <TouchableOpacity
+                          style={[detailStyles.btn, detailStyles.btnPrimary]}
+                          onPress={startEditMode}
+                        >
+                          <Text style={detailStyles.btnPrimaryText}>✏️ Edit</Text>
+                        </TouchableOpacity>
+                      )}
+                    </>
+                  )}
+                  {editMode && (
+                    <>
+                      <TouchableOpacity
+                        style={[detailStyles.btn, detailStyles.btnSecondary, { borderColor: bdr }]}
+                        onPress={cancelEdit}
+                        disabled={savingEdit}
+                      >
+                        <Text style={[detailStyles.btnSecondaryText, { color: txt }]}>Cancel</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[detailStyles.btn, detailStyles.btnPrimary, savingEdit && { opacity: 0.6 }]}
+                        onPress={saveEditedEvent}
+                        disabled={savingEdit}
+                      >
+                        {savingEdit
+                          ? <ActivityIndicator size="small" color="#fff" />
+                          : <Text style={detailStyles.btnPrimaryText}>Save changes</Text>
+                        }
+                      </TouchableOpacity>
+                    </>
+                  )}
+                </View>
+              </View>
+            </KeyboardAvoidingView>
+          </Modal>
+        );
+      })()}
+
+      {/* Task detail modal — opened from the All Day / Tasks row */}
+      <TaskDetailModal
+        visible={!!detailTask}
+        task={detailTask}
+        onClose={() => setDetailTask(null)}
+        onUpdated={(updatedTask) => {
+          // Refresh the tasks list and update the open task with server response
+          fetchTasks();
+          if (updatedTask) setDetailTask(updatedTask);
+        }}
+      />
+
     </SafeAreaView>
   );
 }
@@ -2102,7 +3399,7 @@ const du = StyleSheet.create({
 });
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0 },
+  safe: { flex: 1 },
   navbar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, elevation: 2 },
   navLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   navRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -2119,27 +3416,29 @@ const styles = StyleSheet.create({
   statLabel: { fontSize: 10, fontWeight: '600', marginTop: 2, letterSpacing: 0.5 },
 
   // Toolbar
-  toolbar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingVertical: 8, borderBottomWidth: 1 },
+  toolbar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingVertical: 8, borderBottomWidth: 1, gap: 8 },
   toolbarLeft: { flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 },
-  todayBtn: { backgroundColor: '#1A1A2E', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5 },
+  toolbarCenter: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 2 },
+  todayBtn: { backgroundColor: '#1A1A2E', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5, flexDirection: 'row', alignItems: 'center', gap: 4 },
   todayBtnText: { color: '#fff', fontSize: 12, fontWeight: '600' },
+  todayBtnChevron: { color: '#fff', fontSize: 9, marginTop: 1 },
   arrowBtn: { width: 28, height: 28, justifyContent: 'center', alignItems: 'center' },
   arrowText: { fontSize: 22, fontWeight: '300' },
   dateRange: { fontSize: 13, fontWeight: '600' },
   newEventBtn: { backgroundColor: '#4ECDC4', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5 },
   newEventBtnText: { color: '#fff', fontSize: 12, fontWeight: '600' },
 
-  // View switcher
-  viewSwitcher: { flexDirection: 'row', borderBottomWidth: 1, paddingHorizontal: 8, paddingVertical: 6, gap: 4 },
-  viewBtn: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6, borderWidth: 1, borderColor: 'transparent' },
-  viewBtnActive: { backgroundColor: '#F0F0F5', borderColor: '#DEDEE8' },
-  viewBtnText: { fontSize: 12, fontWeight: '500' },
+  // View-mode dropdown menu (positioned dynamically — see openViewMenu)
+  viewMenu: { position: 'absolute', minWidth: 140, borderRadius: 8, borderWidth: 1, paddingVertical: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.12, shadowRadius: 12, elevation: 12 },
+  viewMenuItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingVertical: 10 },
+  viewMenuItemText: { fontSize: 13 },
+  viewMenuCheck: { color: '#4ECDC4', fontSize: 13, fontWeight: '700' },
 
   // Sidebar
   miniCalOverlay: { position: 'absolute', top: 0, left: 0, width: 300, borderRadius: 12, borderWidth: 1, zIndex: 100, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.12, shadowRadius: 12, elevation: 20, padding: 8 },
   miniCalBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 99 },
   miniCalClose: { alignItems: 'center', paddingVertical: 10, borderTopWidth: 1, borderTopColor: '#F0F0F5', marginTop: 6 },
-  dateRangeBtn: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  dateRangeBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 4 },
   miniCal: { padding: 8, borderRadius: 10, margin: 4, borderWidth: 1 },
   miniCalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
   miniArrow: { fontSize: 22, fontWeight: '600', paddingHorizontal: 6 },
@@ -2175,6 +3474,11 @@ const styles = StyleSheet.create({
   noTasksText: { fontSize: 9, textAlign: 'center', marginTop: 6 },
   allDayEvent: { backgroundColor: '#4ECDC420', borderRadius: 4, padding: 2, marginBottom: 2 },
   allDayEventText: { fontSize: 9, color: '#4ECDC4', fontWeight: '600' },
+  allDayHeader: { alignItems: 'center', justifyContent: 'flex-start', paddingTop: 4, gap: 1 },
+  allDayChevron: { fontSize: 14, fontWeight: '700', lineHeight: 14 },
+  allDayCountText: { fontSize: 9, fontWeight: '500', marginTop: 1 },
+  allDayTask: { backgroundColor: 'rgba(124,58,237,0.10)', borderLeftWidth: 2, borderLeftColor: '#7C3AED', borderRadius: 3, paddingHorizontal: 4, paddingVertical: 2, marginBottom: 2 },
+  allDayTaskText: { fontSize: 9, fontWeight: '600' },
 
   // Hour rows
   hourRow: { flexDirection: 'row', minHeight: 56, borderBottomWidth: 1 },
@@ -2418,6 +3722,20 @@ const aiStyles = StyleSheet.create({
   avatar: { width: 22, height: 22, borderRadius: 11, backgroundColor: '#E9D5FF', justifyContent: 'center', alignItems: 'center' },
   avatarText: { fontSize: 9, fontWeight: '700', color: '#7C3AED' },
   attendeeName: { fontSize: 12, fontWeight: '500', maxWidth: 120 },
+  attendeeRemove: { fontSize: 16, fontWeight: '600', marginLeft: 2, marginTop: -1 },
+  attendeeAddBtn: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 20, borderWidth: 1, borderStyle: 'dashed', justifyContent: 'center' },
+  attendeeAddBtnText: { fontSize: 12, fontWeight: '600' },
+
+  // Add-participant picker (search box + scrollable user list)
+  pickerBox: { borderRadius: 10, borderWidth: 1, padding: 8, marginTop: -6, marginBottom: 14 },
+  pickerSearch: { borderRadius: 8, borderWidth: 1, paddingHorizontal: 10, paddingVertical: 8, fontSize: 13, marginBottom: 6 },
+  pickerEmpty: { fontSize: 12, textAlign: 'center', paddingVertical: 16 },
+  pickerRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 9, paddingHorizontal: 4, borderBottomWidth: 1, gap: 10 },
+  pickerAvatar: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#E9D5FF', justifyContent: 'center', alignItems: 'center' },
+  pickerAvatarText: { fontSize: 12, fontWeight: '700', color: '#7C3AED' },
+  pickerName: { flex: 1, fontSize: 13, fontWeight: '500' },
+  pickerCheck: { width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, justifyContent: 'center', alignItems: 'center' },
+  pickerCheckMark: { color: '#fff', fontSize: 13, fontWeight: '700' },
 
   slotsHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   slotGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 4 },
@@ -2447,4 +3765,160 @@ const aiStyles = StyleSheet.create({
   cancelTxt: { fontSize: 14, fontWeight: '600' },
   createBtn: { flex: 1.3, backgroundColor: '#7C3AED', borderRadius: 10, height: 46, justifyContent: 'center', alignItems: 'center' },
   createTxt: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
+});
+
+// ── Event Detail / Edit modal styles ────────────────────────────────────
+const detailStyles = StyleSheet.create({
+  backdrop: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center', alignItems: 'center',
+    paddingHorizontal: 16,
+  },
+  card: {
+    width: '100%', maxWidth: 420,
+    borderRadius: 16, borderWidth: 1,
+    padding: 16,
+    maxHeight: '90%',
+  },
+  header: {
+    flexDirection: 'row', alignItems: 'center',
+    marginBottom: 14,
+  },
+  title: { fontSize: 17, fontWeight: '700' },
+  organizerBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(78,205,196,0.12)',
+    paddingHorizontal: 8, paddingVertical: 2,
+    borderRadius: 4, marginTop: 4,
+  },
+  organizerBadgeText: { color: '#4ECDC4', fontSize: 9, fontWeight: '700', letterSpacing: 0.4 },
+  closeBtn: { fontSize: 18, fontWeight: '700', paddingHorizontal: 4 },
+
+  label: { fontSize: 10, fontWeight: '700', letterSpacing: 0.6, marginBottom: 4 },
+  value: { fontSize: 14, fontWeight: '500' },
+  bigValue: { fontSize: 17, fontWeight: '700' },
+
+  onlinePill: {
+    backgroundColor: 'rgba(124,58,237,0.12)',
+    paddingHorizontal: 8, paddingVertical: 2,
+    borderRadius: 6, marginLeft: 6,
+  },
+  onlinePillText: { color: '#7C3AED', fontSize: 10, fontWeight: '700' },
+
+  attendeeChip: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: 'rgba(78,205,196,0.10)',
+    paddingHorizontal: 8, paddingVertical: 5,
+    borderRadius: 16, gap: 6,
+    maxWidth: 180,
+  },
+  attendeeRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingVertical: 4,
+  },
+  attendeeStatus: { fontSize: 11, fontWeight: '600', marginTop: 1 },
+  attendeeAvatar: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: '#4ECDC4',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  attendeeInitial: { color: '#fff', fontSize: 13, fontWeight: '700' },
+  attendeeName: { fontSize: 13, fontWeight: '600', color: '#1A1A2E' },
+
+  // Edit-mode inputs
+  input: {
+    borderWidth: 1, borderRadius: 10,
+    paddingHorizontal: 12, paddingVertical: 10,
+    fontSize: 14,
+  },
+  dropdown: {
+    borderWidth: 1, borderRadius: 10,
+    marginTop: 6, overflow: 'hidden',
+  },
+  dropdownItem: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 12, paddingVertical: 11,
+    borderBottomWidth: 1,
+  },
+  toggleRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingHorizontal: 12, paddingVertical: 10,
+    borderRadius: 10, borderWidth: 1,
+  },
+  toggleSwitch: {
+    width: 38, height: 22, borderRadius: 11,
+    backgroundColor: '#D1D5DB',
+    padding: 2,
+  },
+  toggleKnob: {
+    width: 18, height: 18, borderRadius: 9,
+    backgroundColor: '#fff',
+  },
+  attendeeList: {
+    borderWidth: 1, borderRadius: 10,
+    marginTop: 6,
+    overflow: 'hidden',
+  },
+  attendeeSearch: {
+    borderBottomWidth: 1,
+    paddingHorizontal: 12, paddingVertical: 8,
+    fontSize: 13,
+  },
+  attendeeListItem: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingHorizontal: 12, paddingVertical: 8,
+    borderBottomWidth: 1,
+  },
+
+  // Footer buttons
+  footer: {
+    flexDirection: 'row', gap: 8,
+    marginTop: 14, paddingTop: 12,
+    borderTopWidth: 1, borderTopColor: '#EBEBF0',
+  },
+  btn: {
+    flex: 1, height: 44, borderRadius: 10,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  btnPrimary: { backgroundColor: '#1A1A2E' },
+  btnPrimaryText: { color: '#fff', fontSize: 14, fontWeight: '700' },
+  btnSecondary: { borderWidth: 1, backgroundColor: 'transparent' },
+  btnSecondaryText: { fontSize: 14, fontWeight: '600' },
+  btnDanger: { backgroundColor: 'rgba(239,68,68,0.10)' },
+  btnDangerText: { color: '#EF4444', fontSize: 14, fontWeight: '700' },
+
+  // Picker modals (date / start / end)
+  pickerBackdrop: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-end',
+  },
+  pickerSheet: {
+    borderTopLeftRadius: 16, borderTopRightRadius: 16,
+    borderTopWidth: 1, borderLeftWidth: 1, borderRightWidth: 1,
+    paddingBottom: 20,
+  },
+  pickerHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingVertical: 12,
+    borderBottomWidth: 1, borderBottomColor: '#EBEBF0',
+  },
+  pickerTitle: { fontSize: 14, fontWeight: '700' },
+  pickerCancel: { fontSize: 14, fontWeight: '500' },
+  pickerDone:   { fontSize: 14, fontWeight: '700', color: '#4ECDC4' },
+
+  // Inline (non-modal) date/time spinner that appears below the field
+  inlinePickerWrap: {
+    borderRadius: 10, borderWidth: 1,
+    paddingHorizontal: 8, paddingTop: 6, paddingBottom: 4,
+  },
+  inlinePickerTitle: {
+    fontSize: 10, fontWeight: '700', letterSpacing: 0.6,
+    marginBottom: 2, marginLeft: 6,
+  },
+  inlinePickerActions: {
+    flexDirection: 'row', justifyContent: 'space-between',
+    paddingHorizontal: 8, paddingTop: 6, paddingBottom: 4,
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EBEBF0',
+    marginTop: 4,
+  },
 });

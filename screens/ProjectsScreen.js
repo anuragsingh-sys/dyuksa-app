@@ -923,7 +923,7 @@ export default function ProjectsScreen() {
   }));
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: bg }]}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: bg }]} edges={['top', 'left', 'right']}>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={isDark ? '#0D0D0F' : '#fff'} translucent={false} />
 
       {/* Navbar */}
@@ -1001,7 +1001,7 @@ export default function ProjectsScreen() {
         <FlatList
           data={filtered}
           keyExtractor={i => String(i.id)}
-          contentContainerStyle={{ padding: 12 }}
+          contentContainerStyle={{ padding: 12, paddingBottom: 110 }}
           onRefresh={fetchProjects}
           refreshing={loadingProjects}
           renderItem={({ item }) => (
