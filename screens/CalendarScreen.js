@@ -14,7 +14,7 @@ import { ThemeContext } from '../context/ThemeContext';
 import { AuthContext } from '../context/AuthContext';
 import NotificationBell from '../components/NotificationBell';
 import { NotificationsContext } from '../context/NotificationsContext';
-import { getUsers, getAccessToken } from '../services/ApiService';
+import { getUsers, getAccessToken, getWorkspaceId } from '../services/ApiService';
 import * as Notifications from 'expo-notifications';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
@@ -212,7 +212,7 @@ export default function CalendarScreen() {
   const today = new Date();
 
   // ── View state ──
-  const [viewMode,    setViewMode]    = useState('day'); // day | workWeek | week | month
+  const [viewMode,    setViewMode]    = useState('twoDay'); // day | twoDay | workWeek | week | month
   const [showViewMenu, setShowViewMenu] = useState(false);
   // Where to place the dropdown — measured from the Today button's position
   // in window coordinates. We render the menu inside a Modal (so taps don't
@@ -239,6 +239,10 @@ export default function CalendarScreen() {
   const [events, setEvents] = useState([]);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [eventsError,   setEventsError]   = useState(null);
+
+  // ── Task stats for the header bar ──
+  const [taskStats, setTaskStats] = useState({ total: 0, done: 0, active: 0, pending: 0 });
+  const [statsLoading, setStatsLoading] = useState(false);
 
   // ── Event detail / edit modal ──
   const [detailEvent,    setDetailEvent]    = useState(null);   // event currently open
@@ -320,6 +324,33 @@ export default function CalendarScreen() {
   const [aiPickerOpen,   setAiPickerOpen]   = useState(false);
   const [aiPickerSearch, setAiPickerSearch] = useState('');
 
+  // ── Fetch task stats for header bar ──
+  const fetchTaskStats = useCallback(async () => {
+    setStatsLoading(true);
+    try {
+      const token       = await getAccessToken();
+      const workspaceId = await getWorkspaceId();
+      const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` };
+      if (workspaceId) headers['X-Workspace-ID'] = workspaceId;
+
+      const res = await fetch('http://192.168.1.164:8000/api/v1/tasksite/', { headers });
+      if (!res.ok) return;
+      const data = await res.json();
+      const tasks = Array.isArray(data) ? data : (data.results || []);
+
+      setTaskStats({
+        total:   tasks.length,
+        done:    tasks.filter(t => t.status === 'completed' || t.status === 'deployed').length,
+        active:  tasks.filter(t => t.status === 'in_progress').length,
+        pending: tasks.filter(t => t.status === 'pending' || t.status === 'backlog' || t.status === 'review' || t.status === 'deferred').length,
+      });
+    } catch (e) {
+      console.warn('fetchTaskStats failed:', e.message);
+    } finally {
+      setStatsLoading(false);
+    }
+  }, []);
+
   const handleAskDyuksa = async () => {
     if (!askDyuksaText.trim()) return;
     setAskDyuksaLoading(true);
@@ -359,6 +390,53 @@ export default function CalendarScreen() {
     } finally {
       setAskDyuksaLoading(false);
     }
+  };
+
+  // ── Share modal helpers (local-state only for now) ──
+  const shareSearchResults = () => {
+    const q = (shareSearch || '').toLowerCase().trim();
+    if (!q) return [];
+    const alreadySharedIds = new Set(sharedWith.map(p => String(p.id)));
+    return allUsers
+      .filter(u => {
+        if (!u?.id || alreadySharedIds.has(String(u.id))) return false;
+        const fullName = `${u.first_name || ''} ${u.last_name || ''}`.trim().toLowerCase();
+        return fullName.includes(q)
+          || (u.username || '').toLowerCase().includes(q)
+          || (u.email || '').toLowerCase().includes(q);
+      })
+      .slice(0, 6);
+  };
+
+  const addSharedPerson = (user) => {
+    if (!user?.id) return;
+    if (sharedWith.some(p => String(p.id) === String(user.id))) return;
+    const today = new Date();
+    const sharedAt = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${today.getFullYear()}`;
+    const name = (user.first_name && user.last_name)
+      ? `${user.first_name} ${user.last_name}`
+      : (user.first_name || user.username || `User #${user.id}`);
+    setSharedWith(prev => [...prev, { id: user.id, name, sharedAt, permission: 'view' }]);
+    setShareSearch('');
+  };
+
+  const removeSharedPerson = (id) => {
+    // Backend currently has no delete endpoint — show a friendly placeholder
+    // until the API supports removal. (When the endpoint lands, swap this
+    // with a fetch DELETE and the local state filter.)
+    Alert.alert('Coming soon', 'Removing shared users will be available soon.');
+    // Keep id in scope for when we wire the real delete:
+    void id;
+  };
+
+  // Permission options (label = visible text, value = backend value)
+  const PERMISSION_LABELS = { view: 'View only', edit: 'Can edit', full: 'Full access' };
+
+  const setSharedPermission = (id, value) => {
+    setSharedWith(prev => prev.map(p =>
+      String(p.id) === String(id) ? { ...p, permission: value } : p
+    ));
+    setOpenPermDropdownId(null);
   };
 
   const closeAiModal = () => {
@@ -524,6 +602,20 @@ export default function CalendarScreen() {
   const [expandedDays,    setExpandedDays]    = useState({});
   // Task tapped from the All Day / Tasks list — opens TaskDetailModal
   const [detailTask,      setDetailTask]      = useState(null);
+  // Calendar-sharing controls (top-left of grid). UI only for now; backend
+  // wiring will follow once the share endpoints are captured.
+  const [shareModalOpen,  setShareModalOpen]  = useState(false);
+  const [calendarShared,  setCalendarShared]  = useState(false);
+  // Local-only state for the share modal — replaced with API data later.
+  // Each entry shape: { id, name, sharedAt: 'DD/MM/YYYY', permission: 'view'|'edit'|'full' }
+  const [sharedWith,      setSharedWith]      = useState([]);
+  const [sharedWithMe,    setSharedWithMe]    = useState([]);
+  const [shareSearch,     setShareSearch]     = useState('');
+  const [publicLinkOn,    setPublicLinkOn]    = useState(false);
+  // Which row's permission dropdown is open (null = none).
+  const [openPermDropdownId, setOpenPermDropdownId] = useState(null);
+  // Public link is generated locally for UI demo; replaced by server URL later.
+  const publicLinkUrl = 'http://192.168.1.160:3001/calendar/shared/local-demo';
   const slideAnim = useRef(new Animated.Value(-600)).current;
 
   // ── Daily Update panel state ──
@@ -663,6 +755,8 @@ export default function CalendarScreen() {
     fetchEvents();
     // Fetch tasks for the All Day / Tasks row
     fetchTasks();
+    // Fetch task stats for the header bar
+    fetchTaskStats();
 
     // Load daily updates from local cache first (fast), then refresh from backend
     AsyncStorage.getItem(DAILY_UPDATE_STORAGE_KEY).then(data => {
@@ -672,7 +766,7 @@ export default function CalendarScreen() {
     });
     // Fetch fresh from backend (will overwrite my updates + populate team updates)
     fetchDailyUpdates();
-  }, [currentUserId, fetchEvents, fetchTasks]));
+  }, [currentUserId, fetchEvents, fetchTasks, fetchTaskStats]));
 
   // Fetch all users once for participants list
   useEffect(() => {
@@ -713,6 +807,8 @@ export default function CalendarScreen() {
   const goToday  = () => setCurrentDate(new Date());
 
   const goPrev = () => {
+    // twoDay is anchored to today + tomorrow — no navigation
+    if (viewMode === 'twoDay') return;
     const d = new Date(currentDate);
     if (viewMode === 'day')      d.setDate(d.getDate() - 1);
     else if (viewMode === 'week' || viewMode === 'workWeek') d.setDate(d.getDate() - 7);
@@ -721,6 +817,7 @@ export default function CalendarScreen() {
   };
 
   const goNext = () => {
+    if (viewMode === 'twoDay') return;
     const d = new Date(currentDate);
     if (viewMode === 'day')      d.setDate(d.getDate() + 1);
     else if (viewMode === 'week' || viewMode === 'workWeek') d.setDate(d.getDate() + 7);
@@ -737,15 +834,29 @@ export default function CalendarScreen() {
     return workWeek ? days.slice(0, 5) : days;
   };
 
-  const weekDays = viewMode === 'day'
-    ? [currentDate]
-    : getWeekDays(currentDate, viewMode === 'workWeek');
+  const weekDays = (() => {
+    if (viewMode === 'day') return [currentDate];
+    if (viewMode === 'twoDay') {
+      // Always today + tomorrow, regardless of currentDate
+      const today = new Date();
+      const tomorrow = new Date(today);
+      tomorrow.setDate(today.getDate() + 1);
+      return [today, tomorrow];
+    }
+    return getWeekDays(currentDate, viewMode === 'workWeek');
+  })();
 
   // ── Header label ──
   const getHeaderLabel = () => {
     if (viewMode === 'day') {
       // Compact: 'Wed, April 29' — year is implied for the current view
       return currentDate.toLocaleDateString('en-US', { weekday: 'short', month: 'long', day: 'numeric' });
+    }
+    if (viewMode === 'twoDay') {
+      // Today + Tomorrow — short labels because there's only ever 2 days
+      const a = weekDays[0];
+      const b = weekDays[1];
+      return `${MONTHS_SHORT[a.getMonth()]} ${a.getDate()} – ${MONTHS_SHORT[b.getMonth()]} ${b.getDate()}`;
     }
     if (viewMode === 'month') {
       return `${MONTHS[currentDate.getMonth()]} ${currentDate.getFullYear()}`;
@@ -794,11 +905,11 @@ export default function CalendarScreen() {
     setExpandedDays(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
-  // ── Stats ──
-  const totalEvents  = events.length;
-  const doneEvents   = events.filter(e => e.status === 'Done').length;
-  const activeEvents = events.filter(e => e.status === 'Todo' && new Date(e.eventTimestamp || e.eventDate) >= today).length;
-  const pendingEvents= events.filter(e => e.status === 'Todo').length;
+  // ── Stats — based on tasks for current workspace ──
+  const totalEvents   = taskStats.total;
+  const doneEvents    = taskStats.done;
+  const activeEvents  = taskStats.active;
+  const pendingEvents = taskStats.pending;
 
   // ── Daily Update Panel ──
 
@@ -1694,15 +1805,23 @@ export default function CalendarScreen() {
       {/* Stats bar */}
       <View style={[styles.statsBar, { backgroundColor: card, borderBottomColor: bdr }]}>
         {[
-          { label: 'TOTAL',   value: totalEvents,  color: txt },
-          { label: 'DONE',    value: doneEvents,   color: '#4ADE80' },
-          { label: 'ACTIVE',  value: activeEvents, color: '#4ECDC4' },
-          { label: 'PENDING', value: pendingEvents, color: '#FBBF24' },
+          { label: 'TOTAL',   value: totalEvents,  color: txt,        filter: 'All' },
+          { label: 'DONE',    value: doneEvents,   color: '#4ADE80',  filter: 'completed' },
+          { label: 'ACTIVE',  value: activeEvents, color: '#4ECDC4',  filter: 'in_progress' },
+          { label: 'PENDING', value: pendingEvents, color: '#FBBF24', filter: 'pending' },
         ].map((s, i, arr) => (
-          <View key={s.label} style={[styles.statItem, i < arr.length - 1 && { borderRightWidth: 1, borderRightColor: bdr }]}>
+          <TouchableOpacity
+            key={s.label}
+            style={[styles.statItem, i < arr.length - 1 && { borderRightWidth: 1, borderRightColor: bdr }]}
+            onPress={() => {
+              try { navigation.jumpTo('Tasks', { presetFilter: s.filter }); }
+              catch { navigation.navigate('Main', { screen: 'Tasks', params: { presetFilter: s.filter } }); }
+            }}
+            activeOpacity={0.7}
+          >
             <Text style={[styles.statNum, { color: s.color }]}>{s.value}</Text>
             <Text style={[styles.statLabel, { color: sub }]}>{s.label}</Text>
-          </View>
+          </TouchableOpacity>
         ))}
       </View>
 
@@ -1761,6 +1880,7 @@ export default function CalendarScreen() {
               >
                 {[
                   { id: 'day',      label: 'Today' },
+                  { id: 'twoDay',   label: '2 Days' },
                   { id: 'workWeek', label: 'Work Week' },
                   { id: 'week',     label: 'Week' },
                   { id: 'month',    label: 'Month' },
@@ -1768,7 +1888,12 @@ export default function CalendarScreen() {
                   <TouchableOpacity
                     key={v.id}
                     style={[styles.viewMenuItem, viewMode === v.id && { backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
-                    onPress={() => { setViewMode(v.id); setShowViewMenu(false); }}
+                    onPress={() => {
+                      // 2-day view is anchored to today, so snap the date back when picking it
+                      if (v.id === 'twoDay') setCurrentDate(new Date());
+                      setViewMode(v.id);
+                      setShowViewMenu(false);
+                    }}
                   >
                     <Text style={[styles.viewMenuItemText, { color: viewMode === v.id ? '#4ECDC4' : txt, fontWeight: viewMode === v.id ? '700' : '500' }]}>
                       {v.label}
@@ -1857,7 +1982,43 @@ export default function CalendarScreen() {
           {/* Day column headers */}
           {viewMode !== 'month' && (
             <View style={[styles.dayHeaders, { borderBottomColor: bdr, backgroundColor: card }]}>
-              <View style={styles.timeLabel} />
+              {/* Top-left corner cell — share icon + Shared On/Off toggle.
+                  This is the website's calendar-share controls, mobile-style. */}
+              <View style={[styles.timeLabel, styles.shareCornerCell]}>
+                <TouchableOpacity
+                  style={styles.shareIconBtn}
+                  onPress={() => setShareModalOpen(true)}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                >
+                  {/* "Share" glyph: 3 dots connected by 2 lines, drawn with Views.
+                      The icon resembles the network/share symbol from the website. */}
+                  <View style={styles.shareGlyph}>
+                    <View style={[styles.shareGlyphLine, styles.shareGlyphLineTop]} />
+                    <View style={[styles.shareGlyphLine, styles.shareGlyphLineBottom]} />
+                    <View style={[styles.shareGlyphDot, styles.shareGlyphDotTopRight]} />
+                    <View style={[styles.shareGlyphDot, styles.shareGlyphDotLeft]} />
+                    <View style={[styles.shareGlyphDot, styles.shareGlyphDotBottomRight]} />
+                  </View>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.sharedPill,
+                    calendarShared
+                      ? { backgroundColor: '#4ECDC4', borderColor: '#4ECDC4' }
+                      : { backgroundColor: 'transparent', borderColor: isDark ? '#3A3A48' : '#DEDEE8' },
+                  ]}
+                  onPress={() => setCalendarShared(s => !s)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[
+                    styles.sharedPillText,
+                    { color: calendarShared ? '#fff' : sub },
+                  ]} numberOfLines={1}>
+                    {calendarShared ? 'On' : 'Off'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
               {weekDays.map((d, i) => {
                 const isToday = d.toDateString() === today.toDateString();
                 return (
@@ -2696,10 +2857,25 @@ export default function CalendarScreen() {
       )}
       {/* ── Event Detail / Edit Modal ─────────────────────────────────── */}
       {!!detailEvent && (() => {
-        const isOrganizer = !!user && (
-          String(user.id) === String(detailEvent.organizer) ||
-          (detailEvent.my_invitation_status === 'ORGANIZER')
+        // Multiple signals — any one of these means the viewer is the organizer.
+        // We're permissive here because backend serialisers occasionally omit
+        // fields (e.g. `my_invitation_status` is null for some events).
+        const userId   = user?.id ?? user?.pk ?? user?.user_id;
+        const userName = user ? `${user.first_name || ''} ${user.last_name || ''}`.trim() : '';
+        const isOrganizer = !!detailEvent && (
+          // a) numeric id match against `organizer`
+          (userId != null && String(userId) === String(detailEvent.organizer)) ||
+          // b) explicit invitation flag
+          (detailEvent.my_invitation_status === 'ORGANIZER') ||
+          // c) name match against the `organizer` string in the rsvp payload
+          (!!userName && !!detailEvent.rsvp?.organizer && userName === detailEvent.rsvp.organizer) ||
+          // d) name match against the `organizer_name` event field
+          (!!userName && !!detailEvent.organizer_name && userName === detailEvent.organizer_name)
         );
+        if (__DEV__) {
+          console.log('[Calendar] detail open — isOrganizer:', isOrganizer,
+            { userId, userName, organizer: detailEvent.organizer, organizer_name: detailEvent.organizer_name, my_invitation_status: detailEvent.my_invitation_status, rsvpOrganizer: detailEvent.rsvp?.organizer });
+        }
         const fmtDate = (iso) => {
           try { return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }); } catch { return iso; }
         };
@@ -3239,6 +3415,239 @@ export default function CalendarScreen() {
         }}
       />
 
+      {/* Calendar share — UI matches the website's Share Calendar modal.
+          Local state only for now; backend wiring will follow once the
+          share endpoints are captured. */}
+      <Modal
+        transparent
+        visible={shareModalOpen}
+        animationType="fade"
+        onRequestClose={() => setShareModalOpen(false)}
+      >
+        <TouchableOpacity
+          style={shareStyles.backdrop}
+          activeOpacity={1}
+          onPress={() => setShareModalOpen(false)}
+        />
+        <View style={[shareStyles.card, { backgroundColor: card }]}>
+          {/* Header */}
+          <View style={shareStyles.header}>
+            <View style={shareStyles.headerIcon}>
+              <View style={[styles.shareGlyph, { width: 18, height: 18 }]}>
+                <View style={[styles.shareGlyphLine, styles.shareGlyphLineTop, { left: 5, top: 5.5, width: 10 }]} />
+                <View style={[styles.shareGlyphLine, styles.shareGlyphLineBottom, { left: 5, bottom: 5.5, width: 10 }]} />
+                <View style={[styles.shareGlyphDot, styles.shareGlyphDotTopRight, { width: 6, height: 6, borderRadius: 3 }]} />
+                <View style={[styles.shareGlyphDot, styles.shareGlyphDotLeft, { width: 6, height: 6, borderRadius: 3, top: 6 }]} />
+                <View style={[styles.shareGlyphDot, styles.shareGlyphDotBottomRight, { width: 6, height: 6, borderRadius: 3 }]} />
+              </View>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[shareStyles.title, { color: txt }]}>Share Calendar</Text>
+              <Text style={[shareStyles.subtitle, { color: sub }]}>Share your calendar with team members</Text>
+            </View>
+            <TouchableOpacity onPress={() => setShareModalOpen(false)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+              <Text style={[shareStyles.close, { color: sub }]}>✕</Text>
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+            {/* Add people */}
+            <Text style={[shareStyles.sectionLabel, { color: txt }]}>Add people</Text>
+            <View style={[shareStyles.searchBox, { backgroundColor: isDark ? '#1A1A20' : '#F5F5F7', borderColor: bdr }]}>
+              <Text style={{ color: sub, fontSize: 13, marginRight: 6 }}>🔍</Text>
+              <TextInput
+                style={{ flex: 1, color: txt, fontSize: 13, paddingVertical: 0 }}
+                placeholder="Search by name or email..."
+                placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
+                value={shareSearch}
+                onChangeText={setShareSearch}
+              />
+            </View>
+
+            {/* Search results dropdown — only when typing */}
+            {shareSearch.trim().length > 0 && (
+              <View style={[shareStyles.searchResults, { backgroundColor: card, borderColor: bdr }]}>
+                {shareSearchResults().length === 0 ? (
+                  <Text style={[shareStyles.empty, { color: sub }]}>No matching users</Text>
+                ) : (
+                  shareSearchResults().map(u => {
+                    const display = (u.first_name && u.last_name)
+                      ? `${u.first_name} ${u.last_name}`
+                      : (u.first_name || u.username || 'User');
+                    return (
+                      <TouchableOpacity
+                        key={u.id}
+                        style={[shareStyles.searchResultRow, { borderBottomColor: bdr }]}
+                        onPress={() => addSharedPerson(u)}
+                      >
+                        <View style={shareStyles.avatar}>
+                          <Text style={shareStyles.avatarText}>
+                            {((u.first_name || u.username || 'U')[0] || 'U').toUpperCase()}
+                          </Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[shareStyles.personName, { color: txt }]}>{display}</Text>
+                          {u.email ? <Text style={[shareStyles.personMeta, { color: sub }]} numberOfLines={1}>{u.email}</Text> : null}
+                        </View>
+                        <Text style={shareStyles.addBtn}>+ Add</Text>
+                      </TouchableOpacity>
+                    );
+                  })
+                )}
+              </View>
+            )}
+
+            {/* Shared with */}
+            <Text style={[shareStyles.sectionLabel, { color: txt, marginTop: 18 }]}>
+              Shared with ({sharedWith.length})
+            </Text>
+            {sharedWith.length === 0 ? (
+              <Text style={[shareStyles.empty, { color: sub, paddingVertical: 12 }]}>
+                Not shared with anyone yet.
+              </Text>
+            ) : (
+              sharedWith.map(p => {
+                const isOpen = String(openPermDropdownId) === String(p.id);
+                const currentLabel = PERMISSION_LABELS[p.permission] || PERMISSION_LABELS.view;
+                return (
+                <View key={p.id} style={[shareStyles.personRow, { backgroundColor: isDark ? '#1A1A20' : '#FAFAFA', borderColor: bdr }]}>
+                  <View style={shareStyles.avatar}>
+                    <Text style={shareStyles.avatarText}>
+                      {(p.name[0] || '?').toUpperCase()}
+                    </Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[shareStyles.personName, { color: txt }]} numberOfLines={1}>{p.name}</Text>
+                    <Text style={[shareStyles.personMeta, { color: sub }]}>Shared {p.sharedAt}</Text>
+                  </View>
+                  <View>
+                    <TouchableOpacity
+                      onPress={() => setOpenPermDropdownId(isOpen ? null : p.id)}
+                      style={[shareStyles.permPill, { borderColor: bdr }]}
+                    >
+                      <Text style={[shareStyles.permPillText, { color: txt }]}>
+                        {currentLabel} ▾
+                      </Text>
+                    </TouchableOpacity>
+                    {isOpen && (
+                      <View style={[shareStyles.permDropdown, { backgroundColor: card, borderColor: bdr }]}>
+                        {Object.entries(PERMISSION_LABELS).map(([value, label]) => {
+                          const selected = p.permission === value;
+                          return (
+                            <TouchableOpacity
+                              key={value}
+                              style={[shareStyles.permDropdownItem, selected && { backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
+                              onPress={() => setSharedPermission(p.id, value)}
+                            >
+                              <Text style={[shareStyles.permDropdownCheck, { color: selected ? '#10B981' : 'transparent' }]}>✓</Text>
+                              <Text style={[shareStyles.permDropdownLabel, { color: txt }]}>{label}</Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    )}
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => removeSharedPerson(p.id)}
+                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                    style={{ marginLeft: 6 }}
+                  >
+                    <Text style={{ color: '#EF4444', fontSize: 16 }}>🗑</Text>
+                  </TouchableOpacity>
+                </View>
+                );
+              })
+            )}
+
+            {/* Calendars shared with you */}
+            <Text style={[shareStyles.sectionLabel, { color: txt, marginTop: 18 }]}>
+              Calendars shared with you ({sharedWithMe.length})
+            </Text>
+            {sharedWithMe.length === 0 ? (
+              <Text style={[shareStyles.empty, { color: sub, paddingVertical: 12 }]}>
+                No calendars shared with you yet.
+              </Text>
+            ) : (
+              sharedWithMe.map(p => (
+                <View key={p.id} style={[shareStyles.personRow, { backgroundColor: isDark ? '#1A1A20' : '#FAFAFA', borderColor: bdr }]}>
+                  <View style={[shareStyles.avatar, { backgroundColor: '#E9D5FF' }]}>
+                    <Text style={[shareStyles.avatarText, { color: '#7C3AED' }]}>
+                      {(p.name[0] || '?').toUpperCase()}
+                    </Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[shareStyles.personName, { color: txt }]} numberOfLines={1}>{p.name}</Text>
+                    <Text style={[shareStyles.personMeta, { color: sub }]}>{PERMISSION_LABELS[p.permission] || PERMISSION_LABELS.view}</Text>
+                  </View>
+                  {!calendarShared && (
+                    <View style={shareStyles.enableHint}>
+                      <Text style={shareStyles.enableHintText}>Enable "Shared: On" to view</Text>
+                    </View>
+                  )}
+                </View>
+              ))
+            )}
+
+            {/* Or share via link */}
+            <View style={[shareStyles.divider, { backgroundColor: bdr, marginTop: 18 }]}>
+              <View style={[shareStyles.dividerLabel, { backgroundColor: card }]}>
+                <Text style={{ color: sub, fontSize: 11 }}>Or share via link</Text>
+              </View>
+            </View>
+
+            <View style={shareStyles.publicLinkRow}>
+              <Text style={[shareStyles.publicLinkLabel, { color: txt }]}>🔗  Public link</Text>
+              <TouchableOpacity
+                style={[
+                  shareStyles.toggle,
+                  publicLinkOn ? { backgroundColor: '#3B82F6' } : { backgroundColor: isDark ? '#3A3A48' : '#DEDEE8' },
+                ]}
+                onPress={() => setPublicLinkOn(o => !o)}
+                activeOpacity={0.8}
+              >
+                <View style={[shareStyles.toggleKnob, publicLinkOn && { transform: [{ translateX: 18 }] }]} />
+              </TouchableOpacity>
+            </View>
+
+            {publicLinkOn && (
+              <>
+                <View style={[shareStyles.linkBox, { backgroundColor: isDark ? '#1A1A20' : '#F5F5F7', borderColor: bdr }]}>
+                  <Text style={[shareStyles.linkText, { color: txt }]} numberOfLines={1}>{publicLinkUrl}</Text>
+                  <TouchableOpacity style={shareStyles.copyBtn}>
+                    <Text style={shareStyles.copyBtnText}>📋 Copy</Text>
+                  </TouchableOpacity>
+                </View>
+                <Text style={[shareStyles.linkNote, { color: sub }]}>
+                  🔒 Anyone with this link can view your calendar (read-only)
+                </Text>
+              </>
+            )}
+
+            {/* Export Calendar */}
+            <View style={[shareStyles.exportRow, { backgroundColor: isDark ? '#0F2C25' : '#ECFDF5', borderColor: '#10B981' }]}>
+              <View style={shareStyles.exportLeft}>
+                <Text style={{ fontSize: 18, marginRight: 8 }}>⬇️</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={[shareStyles.exportTitle, { color: txt }]}>Export Calendar</Text>
+                  <Text style={[shareStyles.exportSub, { color: sub }]}>Download as ICS file for Google/Outlook</Text>
+                </View>
+              </View>
+              <TouchableOpacity style={shareStyles.exportBtn}>
+                <Text style={shareStyles.exportBtnText}>⬇  Export All</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+
+          {/* Close */}
+          <TouchableOpacity
+            style={[shareStyles.closeFooter, { borderTopColor: bdr }]}
+            onPress={() => setShareModalOpen(false)}
+          >
+            <Text style={[shareStyles.closeFooterText, { color: txt }]}>Close</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
+
     </SafeAreaView>
   );
 }
@@ -3461,6 +3870,21 @@ const styles = StyleSheet.create({
   // Calendar grid
   dayHeaders: { flexDirection: 'row', borderBottomWidth: 1 },
   timeLabel: { width: 48, justifyContent: 'center', alignItems: 'flex-end', paddingRight: 6 },
+  // Top-left corner cell holding the Share icon + Shared On/Off pill
+  shareCornerCell: { alignItems: 'center', justifyContent: 'center', paddingRight: 0, gap: 3 },
+  shareIconBtn: { width: 28, height: 28, borderRadius: 14, justifyContent: 'center', alignItems: 'center', backgroundColor: '#E6F9F6' },
+  // Custom-drawn share glyph (3 connected dots, mimics standard "share" icon)
+  shareGlyph: { width: 16, height: 16, position: 'relative' },
+  shareGlyphDot: { position: 'absolute', width: 5, height: 5, borderRadius: 2.5, backgroundColor: '#10B981' },
+  shareGlyphDotTopRight:    { top: 0,  right: 0 },
+  shareGlyphDotLeft:        { top: 5.5, left: 0 },
+  shareGlyphDotBottomRight: { bottom: 0, right: 0 },
+  shareGlyphLine: { position: 'absolute', height: 1.4, backgroundColor: '#10B981', borderRadius: 1 },
+  // Top line: from left dot to top-right dot (slanting up-right)
+  shareGlyphLineTop:    { width: 9, top: 4.5,  left: 4, transform: [{ rotate: '-30deg' }] },
+  shareGlyphLineBottom: { width: 9, bottom: 4.5, left: 4, transform: [{ rotate:  '30deg' }] },
+  sharedPill: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 10, borderWidth: 1, minWidth: 30, alignItems: 'center' },
+  sharedPillText: { fontSize: 9, fontWeight: '700' },
   timeLabelText: { fontSize: 10, fontWeight: '500' },
   dayHeaderCell: { flex: 1, alignItems: 'center', paddingVertical: 7, borderLeftWidth: 1 },
   dayHeaderDay: { fontSize: 10, fontWeight: '600', letterSpacing: 0.5 },
@@ -3921,4 +4345,102 @@ const detailStyles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EBEBF0',
     marginTop: 4,
   },
+});
+
+const shareStyles = StyleSheet.create({
+  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)' },
+  // Card sized to take up most of the screen, with a max height so the inner ScrollView can scroll
+  card: {
+    position: 'absolute',
+    left: 16, right: 16, top: '8%', bottom: '8%',
+    borderRadius: 14, padding: 16,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.18, shadowRadius: 14, elevation: 18,
+  },
+  // Header
+  header: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 14, paddingBottom: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(0,0,0,0.06)' },
+  headerIcon: { width: 36, height: 36, borderRadius: 8, backgroundColor: '#E0F2FE', justifyContent: 'center', alignItems: 'center' },
+  title: { fontSize: 16, fontWeight: '700' },
+  subtitle: { fontSize: 11, marginTop: 1 },
+  close: { fontSize: 18, fontWeight: '500', paddingHorizontal: 4 },
+  // Section heading
+  sectionLabel: { fontSize: 14, fontWeight: '700', marginBottom: 8 },
+  // Search input wrapper
+  searchBox: {
+    flexDirection: 'row', alignItems: 'center',
+    height: 40, borderWidth: 1, borderRadius: 10,
+    paddingHorizontal: 10,
+  },
+  // Search results dropdown
+  searchResults: {
+    marginTop: 6, borderWidth: 1, borderRadius: 10, overflow: 'hidden',
+  },
+  searchResultRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingVertical: 8, paddingHorizontal: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  // Person row (Shared with / Shared with you)
+  personRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    padding: 10, borderRadius: 10, borderWidth: 1,
+    marginBottom: 8,
+  },
+  avatar: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#FED7AA', justifyContent: 'center', alignItems: 'center' },
+  avatarText: { color: '#9A3412', fontSize: 12, fontWeight: '700' },
+  personName: { fontSize: 13, fontWeight: '600' },
+  personMeta: { fontSize: 11, marginTop: 1 },
+  // "+ Add" inline button on the search-result row
+  addBtn: { color: '#3B82F6', fontSize: 12, fontWeight: '700', paddingHorizontal: 6 },
+  // Permission pill
+  permPill: { paddingHorizontal: 8, paddingVertical: 5, borderWidth: 1, borderRadius: 6 },
+  permPillText: { fontSize: 11, fontWeight: '600' },
+  // Permission dropdown menu (shown below the pill when tapped)
+  permDropdown: {
+    position: 'absolute', top: 28, right: 0,
+    minWidth: 130, borderWidth: 1, borderRadius: 8,
+    paddingVertical: 4,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15, shadowRadius: 8, elevation: 8,
+    zIndex: 50,
+  },
+  permDropdownItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, paddingHorizontal: 10, gap: 6 },
+  permDropdownCheck: { fontSize: 12, width: 12, fontWeight: '700' },
+  permDropdownLabel: { fontSize: 12, fontWeight: '500' },
+  // "Enable Shared On to view" hint pill on shared-with-me rows when sharing is off
+  enableHint: { backgroundColor: '#FEF3C7', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
+  enableHintText: { color: '#92400E', fontSize: 10, fontWeight: '600' },
+  // Empty-state text
+  empty: { fontSize: 12, paddingVertical: 8 },
+  // Divider with centered label ("Or share via link")
+  divider: { height: StyleSheet.hairlineWidth, marginVertical: 6, position: 'relative' },
+  dividerLabel: { position: 'absolute', alignSelf: 'center', paddingHorizontal: 10, top: -8 },
+  // Public link toggle row
+  publicLinkRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 14 },
+  publicLinkLabel: { fontSize: 13, fontWeight: '600' },
+  toggle: { width: 38, height: 22, borderRadius: 11, padding: 2, justifyContent: 'center' },
+  toggleKnob: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#fff' },
+  // Public link copy box
+  linkBox: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 10, paddingVertical: 8,
+    marginTop: 10, borderRadius: 10, borderWidth: 1,
+  },
+  linkText: { flex: 1, fontSize: 12 },
+  copyBtn: { backgroundColor: '#DBEAFE', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6 },
+  copyBtnText: { color: '#1D4ED8', fontSize: 11, fontWeight: '700' },
+  linkNote: { fontSize: 11, marginTop: 6 },
+  // Export Calendar row
+  exportRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    padding: 10, marginTop: 14, borderRadius: 10, borderWidth: 1,
+  },
+  exportLeft: { flexDirection: 'row', alignItems: 'center', flex: 1, gap: 4 },
+  exportTitle: { fontSize: 13, fontWeight: '700' },
+  exportSub: { fontSize: 11, marginTop: 1 },
+  exportBtn: { backgroundColor: '#10B981', paddingHorizontal: 12, paddingVertical: 7, borderRadius: 6 },
+  exportBtnText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+  // Footer Close button
+  closeFooter: { paddingVertical: 12, alignItems: 'center', borderTopWidth: StyleSheet.hairlineWidth, marginTop: 8 },
+  closeFooterText: { fontSize: 14, fontWeight: '600' },
 });

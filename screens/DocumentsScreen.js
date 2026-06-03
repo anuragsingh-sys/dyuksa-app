@@ -9,69 +9,87 @@ import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import SidebarMenu from '../components/SidebarMenu';
 import NotificationBell from '../components/NotificationBell';
 import { ThemeContext } from '../context/ThemeContext';
-import { getAccessToken } from '../services/ApiService';
+import { getAccessToken, getWorkspaceId } from '../services/ApiService';
+
+// DocumentPicker — loaded lazily so screen still works if package isn't installed
+let DocumentPicker = null;
+try { DocumentPicker = require('expo-document-picker'); } catch {}
 
 const API_BASE     = 'http://192.168.1.164:8000';
 const DOCS_API     = `${API_BASE}/api/v1/documents/`;
 const PROJECTS_API = `${API_BASE}/api/v1/projects/`;
+
+// Always includes X-Workspace-ID so every request is workspace-aware
+const buildAuthHeaders = async (isMultipart = false) => {
+  const token       = await getAccessToken();
+  const workspaceId = await getWorkspaceId();
+  const h = isMultipart
+    ? { 'Authorization': `Bearer ${token}` }
+    : { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` };
+  if (workspaceId) h['X-Workspace-ID'] = workspaceId;
+  return h;
+};
 
 // ─────────────────────────────────────────────────────────────
 // File type → icon + colour mapping
 // ─────────────────────────────────────────────────────────────
 const TYPE_META = {
   // Images
-  png:  { icon: '🖼️', color: '#A78BFA', group: 'image' },
-  jpg:  { icon: '🖼️', color: '#A78BFA', group: 'image' },
-  jpeg: { icon: '🖼️', color: '#A78BFA', group: 'image' },
-  gif:  { icon: '🖼️', color: '#A78BFA', group: 'image' },
-  webp: { icon: '🖼️', color: '#A78BFA', group: 'image' },
-  svg:  { icon: '🖼️', color: '#A78BFA', group: 'image' },
-  heic: { icon: '🖼️', color: '#A78BFA', group: 'image' },
-  bmp:  { icon: '🖼️', color: '#A78BFA', group: 'image' },
+  png:  { label: 'PNG',  color: '#8B5CF6', bg: '#F5F3FF', group: 'image' },
+  jpg:  { label: 'JPG',  color: '#8B5CF6', bg: '#F5F3FF', group: 'image' },
+  jpeg: { label: 'JPG',  color: '#8B5CF6', bg: '#F5F3FF', group: 'image' },
+  gif:  { label: 'GIF',  color: '#8B5CF6', bg: '#F5F3FF', group: 'image' },
+  webp: { label: 'WEBP', color: '#8B5CF6', bg: '#F5F3FF', group: 'image' },
+  svg:  { label: 'SVG',  color: '#8B5CF6', bg: '#F5F3FF', group: 'image' },
+  heic: { label: 'HEIC', color: '#8B5CF6', bg: '#F5F3FF', group: 'image' },
+  bmp:  { label: 'BMP',  color: '#8B5CF6', bg: '#F5F3FF', group: 'image' },
   // Documents
-  pdf:  { icon: '📕', color: '#EF4444', group: 'document' },
-  doc:  { icon: '📘', color: '#3B82F6', group: 'document' },
-  docx: { icon: '📘', color: '#3B82F6', group: 'document' },
-  xls:  { icon: '📗', color: '#4ADE80', group: 'document' },
-  xlsx: { icon: '📗', color: '#4ADE80', group: 'document' },
-  csv:  { icon: '📗', color: '#4ADE80', group: 'document' },
-  ppt:  { icon: '📙', color: '#F97316', group: 'document' },
-  pptx: { icon: '📙', color: '#F97316', group: 'document' },
-  key:  { icon: '📙', color: '#F97316', group: 'document' },
-  txt:  { icon: '📄', color: '#9898A6', group: 'document' },
-  rtf:  { icon: '📄', color: '#9898A6', group: 'document' },
+  pdf:  { label: 'PDF',  color: '#EF4444', bg: '#FEF2F2', group: 'document' },
+  doc:  { label: 'DOC',  color: '#2563EB', bg: '#EFF6FF', group: 'document' },
+  docx: { label: 'DOCX', color: '#2563EB', bg: '#EFF6FF', group: 'document' },
+  xls:  { label: 'XLS',  color: '#16A34A', bg: '#F0FDF4', group: 'document' },
+  xlsx: { label: 'XLSX', color: '#16A34A', bg: '#F0FDF4', group: 'document' },
+  csv:  { label: 'CSV',  color: '#16A34A', bg: '#F0FDF4', group: 'document' },
+  ppt:  { label: 'PPT',  color: '#EA580C', bg: '#FFF7ED', group: 'document' },
+  pptx: { label: 'PPTX', color: '#EA580C', bg: '#FFF7ED', group: 'document' },
+  key:  { label: 'KEY',  color: '#EA580C', bg: '#FFF7ED', group: 'document' },
+  txt:  { label: 'TXT',  color: '#6B7280', bg: '#F9FAFB', group: 'document' },
+  rtf:  { label: 'RTF',  color: '#6B7280', bg: '#F9FAFB', group: 'document' },
+  md:   { label: 'MD',   color: '#6B7280', bg: '#F9FAFB', group: 'document' },
   // Code
-  js:   { icon: '💻', color: '#FBBF24', group: 'code' },
-  ts:   { icon: '💻', color: '#3B82F6', group: 'code' },
-  tsx:  { icon: '💻', color: '#4ECDC4', group: 'code' },
-  jsx:  { icon: '💻', color: '#4ECDC4', group: 'code' },
-  py:   { icon: '💻', color: '#4ADE80', group: 'code' },
-  java: { icon: '💻', color: '#F97316', group: 'code' },
-  html: { icon: '💻', color: '#F97316', group: 'code' },
-  css:  { icon: '💻', color: '#3B82F6', group: 'code' },
-  json: { icon: '💻', color: '#FBBF24', group: 'code' },
-  xml:  { icon: '💻', color: '#FBBF24', group: 'code' },
-  yml:  { icon: '💻', color: '#FBBF24', group: 'code' },
-  yaml: { icon: '💻', color: '#FBBF24', group: 'code' },
+  js:   { label: 'JS',   color: '#D97706', bg: '#FFFBEB', group: 'code' },
+  ts:   { label: 'TS',   color: '#2563EB', bg: '#EFF6FF', group: 'code' },
+  tsx:  { label: 'TSX',  color: '#0891B2', bg: '#ECFEFF', group: 'code' },
+  jsx:  { label: 'JSX',  color: '#0891B2', bg: '#ECFEFF', group: 'code' },
+  py:   { label: 'PY',   color: '#16A34A', bg: '#F0FDF4', group: 'code' },
+  java: { label: 'JAVA', color: '#EA580C', bg: '#FFF7ED', group: 'code' },
+  html: { label: 'HTML', color: '#EA580C', bg: '#FFF7ED', group: 'code' },
+  css:  { label: 'CSS',  color: '#2563EB', bg: '#EFF6FF', group: 'code' },
+  json: { label: 'JSON', color: '#D97706', bg: '#FFFBEB', group: 'code' },
+  xml:  { label: 'XML',  color: '#D97706', bg: '#FFFBEB', group: 'code' },
+  yml:  { label: 'YML',  color: '#D97706', bg: '#FFFBEB', group: 'code' },
+  yaml: { label: 'YAML', color: '#D97706', bg: '#FFFBEB', group: 'code' },
+  ipynb:{ label: 'IPYNB',color: '#D97706', bg: '#FFFBEB', group: 'code' },
+  pem:  { label: 'PEM',  color: '#6B7280', bg: '#F9FAFB', group: 'code' },
   // Archives
-  zip:  { icon: '📦', color: '#888899', group: 'other' },
-  rar:  { icon: '📦', color: '#888899', group: 'other' },
-  '7z': { icon: '📦', color: '#888899', group: 'other' },
-  tar:  { icon: '📦', color: '#888899', group: 'other' },
-  gz:   { icon: '📦', color: '#888899', group: 'other' },
+  zip:  { label: 'ZIP',  color: '#6B7280', bg: '#F9FAFB', group: 'other' },
+  rar:  { label: 'RAR',  color: '#6B7280', bg: '#F9FAFB', group: 'other' },
+  '7z': { label: '7Z',   color: '#6B7280', bg: '#F9FAFB', group: 'other' },
+  tar:  { label: 'TAR',  color: '#6B7280', bg: '#F9FAFB', group: 'other' },
+  gz:   { label: 'GZ',   color: '#6B7280', bg: '#F9FAFB', group: 'other' },
   // Video
-  mp4:  { icon: '🎬', color: '#F472B6', group: 'other' },
-  mov:  { icon: '🎬', color: '#F472B6', group: 'other' },
-  avi:  { icon: '🎬', color: '#F472B6', group: 'other' },
-  mkv:  { icon: '🎬', color: '#F472B6', group: 'other' },
-  webm: { icon: '🎬', color: '#F472B6', group: 'other' },
+  mp4:  { label: 'MP4',  color: '#DB2777', bg: '#FDF2F8', group: 'other' },
+  mov:  { label: 'MOV',  color: '#DB2777', bg: '#FDF2F8', group: 'other' },
+  avi:  { label: 'AVI',  color: '#DB2777', bg: '#FDF2F8', group: 'other' },
+  mkv:  { label: 'MKV',  color: '#DB2777', bg: '#FDF2F8', group: 'other' },
+  webm: { label: 'WEBM', color: '#DB2777', bg: '#FDF2F8', group: 'other' },
   // Audio
-  mp3:  { icon: '🎵', color: '#8B5CF6', group: 'other' },
-  wav:  { icon: '🎵', color: '#8B5CF6', group: 'other' },
-  m4a:  { icon: '🎵', color: '#8B5CF6', group: 'other' },
+  mp3:  { label: 'MP3',  color: '#7C3AED', bg: '#F5F3FF', group: 'other' },
+  wav:  { label: 'WAV',  color: '#7C3AED', bg: '#F5F3FF', group: 'other' },
+  m4a:  { label: 'M4A',  color: '#7C3AED', bg: '#F5F3FF', group: 'other' },
 };
 
-const FALLBACK_META = { icon: '📄', color: '#9898A6', group: 'other' };
+const FALLBACK_META = { label: 'FILE', color: '#6B7280', bg: '#F9FAFB', group: 'other' };
 
 const TYPE_GROUPS = [
   { id: 'all',      label: 'All Types' },
@@ -147,6 +165,84 @@ const getAvatarColor = (str = '') => {
 // ─────────────────────────────────────────────────────────────
 // Component
 // ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// FileIcon — renders a document-style icon matching the web app
+// Shape: white rectangle with folded top-right corner, colored bottom bar
+// with extension label — same visual language as the webpage
+// ─────────────────────────────────────────────────────────────────────────────
+function FileIcon({ ext, meta }) {
+  const color = meta?.color || '#6B7280';
+  const bg    = meta?.bg    || '#F9FAFB';
+  const label = (meta?.label || (ext ? ext.toUpperCase() : 'FILE')).slice(0, 4);
+
+  return (
+    <View style={fileIconStyles.wrap}>
+      {/* Main file body */}
+      <View style={[fileIconStyles.body, { backgroundColor: bg, borderColor: color + '30' }]}>
+        {/* Folded corner — top right */}
+        <View style={[fileIconStyles.corner, { borderTopColor: color + '40', borderLeftColor: color + '40' }]} />
+        {/* Content lines */}
+        <View style={fileIconStyles.lines}>
+          <View style={[fileIconStyles.line, { backgroundColor: color + '35', width: '80%' }]} />
+          <View style={[fileIconStyles.line, { backgroundColor: color + '35', width: '60%' }]} />
+          <View style={[fileIconStyles.line, { backgroundColor: color + '35', width: '70%' }]} />
+        </View>
+        {/* Colored footer with label */}
+        <View style={[fileIconStyles.footer, { backgroundColor: color }]}>
+          <Text style={fileIconStyles.footerText}>{label}</Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+const fileIconStyles = StyleSheet.create({
+  wrap: {
+    width: 48, height: 58,
+    alignItems: 'center', justifyContent: 'center',
+    flexShrink: 0,
+  },
+  body: {
+    width: 44, height: 54,
+    borderRadius: 6,
+    borderWidth: 1,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  corner: {
+    position: 'absolute',
+    top: 0, right: 0,
+    width: 12, height: 12,
+    borderTopWidth: 12,
+    borderLeftWidth: 12,
+    borderTopColor: '#E5E7EB',
+    borderLeftColor: 'transparent',
+    backgroundColor: 'transparent',
+  },
+  lines: {
+    paddingHorizontal: 6,
+    paddingTop: 10,
+    paddingBottom: 4,
+    gap: 4,
+    flex: 1,
+  },
+  line: {
+    height: 3,
+    borderRadius: 2,
+  },
+  footer: {
+    height: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  footerText: {
+    fontSize: 7,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 0.5,
+  },
+});
+
 export default function DocumentsScreen() {
   const navigation = useNavigation();
   const { theme, fontScale } = useContext(ThemeContext);
@@ -168,8 +264,17 @@ export default function DocumentsScreen() {
   const [projectFilter,setProjectFilter]= useState('all'); // 'all' | numeric project id (as string)
   const [pickerOpen,   setPickerOpen]   = useState(null);  // null | 'type' | 'project'
 
+  // ── Upload modal state ──
+  const [uploadModalVisible, setUploadModalVisible] = useState(false);
+  const [uploadFile,         setUploadFile]         = useState(null);   // { name, uri, mimeType, size }
+  const [uploadProjectId,    setUploadProjectId]    = useState(null);
+  const [uploadProjectSearch,setUploadProjectSearch]= useState('');
+  const [uploadProjects,     setUploadProjects]     = useState([]);
+  const [uploading,          setUploading]          = useState(false);
+  const [uploadPickerOpen,   setUploadPickerOpen]   = useState(false);
+
   // ── Fetch all documents (follow `next` pagination) ──
-  const fetchDocs = useCallback(async (token) => {
+  const fetchDocs = useCallback(async () => {
     const all = [];
     let url = DOCS_API;
     let safety = 20; // cap: 20 pages max
@@ -177,10 +282,7 @@ export default function DocumentsScreen() {
     while (url && safety-- > 0) {
       const res = await fetch(url, {
         method: 'GET',
-        headers: {
-          'Content-Type':  'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
+        headers: await buildAuthHeaders(),
       });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
@@ -208,14 +310,11 @@ export default function DocumentsScreen() {
   }, []);
 
   // ── Fetch projects → build id→name map ──
-  const fetchProjectMap = useCallback(async (token) => {
+  const fetchProjectMap = useCallback(async () => {
     try {
       const res = await fetch(PROJECTS_API, {
         method: 'GET',
-        headers: {
-          'Content-Type':  'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
+        headers: await buildAuthHeaders(),
       });
       if (!res.ok) return {};
       const data = await res.json();
@@ -238,10 +337,9 @@ export default function DocumentsScreen() {
   const loadAll = useCallback(async () => {
     try {
       setError(null);
-      const token = await getAccessToken();
       const [docsList, projMap] = await Promise.all([
-        fetchDocs(token),
-        fetchProjectMap(token),
+        fetchDocs(),
+        fetchProjectMap(),
       ]);
       setDocs(docsList);
       setProjectMap(projMap);
@@ -252,6 +350,90 @@ export default function DocumentsScreen() {
       setRefreshing(false);
     }
   }, [fetchDocs, fetchProjectMap]);
+
+  // ── Upload helpers ──────────────────────────────────────────────────────
+  const openUploadModal = async () => {
+    // Load projects for the picker
+    try {
+      const res = await fetch(PROJECTS_API, {
+        headers: await buildAuthHeaders(),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const list = Array.isArray(data) ? data : (data.results || data.projects || []);
+        setUploadProjects(list);
+        if (list.length > 0 && !uploadProjectId) setUploadProjectId(list[0].id);
+      }
+    } catch {}
+    setUploadFile(null);
+    setUploadProjectSearch('');
+    setUploadPickerOpen(false);
+    setUploadModalVisible(true);
+  };
+
+  const pickDocument = async () => {
+    if (!DocumentPicker) {
+      Alert.alert('Not available', 'expo-document-picker is not installed.');
+      return;
+    }
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (result.canceled) return;
+      const asset = result.assets?.[0] || result;
+      setUploadFile({
+        name:     asset.name || 'document',
+        uri:      asset.uri,
+        mimeType: asset.mimeType || 'application/octet-stream',
+        size:     asset.size,
+      });
+    } catch (e) {
+      Alert.alert('Error', e.message || 'Could not pick file.');
+    }
+  };
+
+  const submitUpload = async () => {
+    if (!uploadFile) { Alert.alert('No file', 'Please pick a file first.'); return; }
+    if (!uploadProjectId) { Alert.alert('No project', 'Please select a project.'); return; }
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('source_file', {
+        uri:  uploadFile.uri,
+        name: uploadFile.name,
+        type: uploadFile.mimeType,
+      });
+      formData.append('project', String(uploadProjectId));
+      formData.append('name',    uploadFile.name);
+
+      const res = await fetch(DOCS_API, {
+        method: 'POST',
+        headers: await buildAuthHeaders(true),
+        body: formData,
+      });
+      if (!res.ok) {
+        let detail = `${res.status}`;
+        try { const e = await res.json(); detail = e.detail || JSON.stringify(e); } catch {}
+        throw new Error(detail);
+      }
+      setUploadModalVisible(false);
+      setUploadFile(null);
+      // Refresh list
+      setLoading(true);
+      loadAll();
+    } catch (e) {
+      Alert.alert('Upload failed', e.message || 'Try again later.');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const filteredUploadProjects = uploadProjects.filter(p =>
+    (p.name || '').toLowerCase().includes(uploadProjectSearch.toLowerCase())
+  );
 
   useFocusEffect(useCallback(() => { loadAll(); }, [loadAll]));
 
@@ -353,10 +535,8 @@ export default function DocumentsScreen() {
         onPress={() => openDoc(item)}
         activeOpacity={0.7}
       >
-        {/* Icon tile */}
-        <View style={[styles.iconTile, { backgroundColor: meta.color + '22' }]}>
-          <Text style={{ fontSize: 20 }}>{meta.icon}</Text>
-        </View>
+        {/* File icon — matches webpage style */}
+        <FileIcon ext={ext} meta={meta} />
 
         {/* Main content */}
         <View style={{ flex: 1, marginRight: 8 }}>
@@ -373,12 +553,6 @@ export default function DocumentsScreen() {
             <View style={[styles.projectPill, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}>
               <Text style={[styles.projectPillText, { color: sub, fontSize: fs(9) }]} numberOfLines={1}>
                 {projectName}
-              </Text>
-            </View>
-            {/* Type pill */}
-            <View style={[styles.typePill, { backgroundColor: meta.color + '22' }]}>
-              <Text style={[styles.typePillText, { color: meta.color, fontSize: fs(9) }]}>
-                {displayExt}
               </Text>
             </View>
             {/* Task pill (when applicable) */}
@@ -469,13 +643,29 @@ export default function DocumentsScreen() {
         </View>
       </View>
 
-      {/* Sub header with count */}
+      {/* Sub header with count + action buttons */}
       <View style={[styles.subHeader, { backgroundColor: card, borderBottomColor: bdr }]}>
-        <View>
+        <View style={{ flex: 1 }}>
           <Text style={[styles.pageTitle, { color: txt, fontSize: fs(17) }]}>All Documents</Text>
           <Text style={[styles.pageSub, { color: sub, fontSize: fs(12) }]}>
             {loading ? 'Loading…' : `${filtered.length} of ${docs.length} document${docs.length !== 1 ? 's' : ''}`}
           </Text>
+        </View>
+        <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+          <TouchableOpacity
+            style={[styles.uploadBtn, { borderColor: bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
+            onPress={openUploadModal}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.uploadBtnText, { color: txt }]}>⬆ Upload</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.newDocBtn}
+            onPress={openUploadModal}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.newDocBtnText}>+ New</Text>
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -634,6 +824,156 @@ export default function DocumentsScreen() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      {/* ── Upload / New Document Modal ─────────────────────────────────── */}
+      <Modal
+        visible={uploadModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => !uploading && setUploadModalVisible(false)}
+      >
+        <Pressable
+          style={styles.pickerBackdrop}
+          onPress={() => !uploading && setUploadModalVisible(false)}
+        >
+          <Pressable
+            style={[styles.uploadSheet, { backgroundColor: card, borderColor: bdr }]}
+            onPress={() => {}}
+          >
+            {/* Header */}
+            <View style={[styles.pickerHeader, { borderBottomColor: bdr }]}>
+              <Text style={[styles.pickerTitle, { color: txt, fontSize: fs(16) }]}>Upload Document</Text>
+              <TouchableOpacity onPress={() => !uploading && setUploadModalVisible(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Text style={{ color: sub, fontSize: 18 }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={{ padding: 16 }} keyboardShouldPersistTaps="handled">
+
+              {/* File picker area */}
+              <Text style={[styles.uploadLabel, { color: sub }]}>File</Text>
+              <TouchableOpacity
+                style={[styles.filePicker, { borderColor: uploadFile ? '#4ECDC4' : bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
+                onPress={pickDocument}
+                activeOpacity={0.7}
+                disabled={uploading}
+              >
+                {uploadFile ? (
+                  <View style={{ flex: 1 }}>
+                    <Text style={[{ fontSize: fs(13), fontWeight: '600', color: txt }]} numberOfLines={1}>
+                      📄 {uploadFile.name}
+                    </Text>
+                    {uploadFile.size && (
+                      <Text style={[{ fontSize: fs(11), color: sub, marginTop: 2 }]}>
+                        {(uploadFile.size / 1024).toFixed(1)} KB
+                      </Text>
+                    )}
+                  </View>
+                ) : (
+                  <View style={{ alignItems: 'center', gap: 6 }}>
+                    <Text style={{ fontSize: 32 }}>📁</Text>
+                    <Text style={[{ fontSize: fs(13), fontWeight: '600', color: sub }]}>Tap to choose a file</Text>
+                    <Text style={[{ fontSize: fs(11), color: isDark ? '#5C5C6E' : '#AAAABC' }]}>
+                      PDF, DOCX, XLSX, PPTX, images, and more
+                    </Text>
+                  </View>
+                )}
+                {uploadFile && (
+                  <TouchableOpacity
+                    onPress={() => setUploadFile(null)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    style={{ marginLeft: 8 }}
+                  >
+                    <Text style={{ color: '#EF4444', fontSize: 16, fontWeight: '700' }}>✕</Text>
+                  </TouchableOpacity>
+                )}
+              </TouchableOpacity>
+
+              {/* Project selector */}
+              <Text style={[styles.uploadLabel, { color: sub, marginTop: 14 }]}>Project *</Text>
+              <TouchableOpacity
+                style={[styles.projectSelector, { borderColor: uploadPickerOpen ? '#4ECDC4' : bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
+                onPress={() => setUploadPickerOpen(o => !o)}
+                activeOpacity={0.7}
+                disabled={uploading}
+              >
+                <Text style={[{ flex: 1, fontSize: fs(13), fontWeight: '600', color: uploadProjectId ? txt : sub }]} numberOfLines={1}>
+                  {uploadProjects.find(p => p.id === uploadProjectId)?.name || 'Select project…'}
+                </Text>
+                <Text style={{ color: sub, fontSize: 12 }}>{uploadPickerOpen ? '▲' : '▾'}</Text>
+              </TouchableOpacity>
+
+              {/* Project dropdown */}
+              {uploadPickerOpen && (
+                <View style={[styles.uploadDropdown, { backgroundColor: card, borderColor: '#4ECDC4' }]}>
+                  {/* Search */}
+                  <View style={[styles.uploadDropdownSearch, { borderBottomColor: bdr }]}>
+                    <Text style={{ fontSize: 12, marginRight: 6 }}>🔍</Text>
+                    <TextInput
+                      style={[{ flex: 1, fontSize: fs(13), color: txt }]}
+                      placeholder="Search projects…"
+                      placeholderTextColor={sub}
+                      value={uploadProjectSearch}
+                      onChangeText={setUploadProjectSearch}
+                      autoCapitalize="none"
+                    />
+                  </View>
+                  <ScrollView style={{ maxHeight: 180 }} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                    {filteredUploadProjects.length === 0 ? (
+                      <Text style={[{ fontSize: fs(12), color: sub, padding: 14, textAlign: 'center', fontStyle: 'italic' }]}>No projects found</Text>
+                    ) : (
+                      filteredUploadProjects.map(p => {
+                        const active = p.id === uploadProjectId;
+                        return (
+                          <TouchableOpacity
+                            key={p.id}
+                            style={[styles.uploadDropdownItem, { borderBottomColor: bdr }, active && { backgroundColor: isDark ? '#252530' : '#F0FDF4' }]}
+                            onPress={() => { setUploadProjectId(p.id); setUploadPickerOpen(false); setUploadProjectSearch(''); }}
+                          >
+                            <Text style={[{ flex: 1, fontSize: fs(13), color: active ? '#4ECDC4' : txt, fontWeight: active ? '700' : '500' }]} numberOfLines={1}>
+                              {p.name}
+                            </Text>
+                            {active && <Text style={{ color: '#4ECDC4', fontSize: 14 }}>✓</Text>}
+                          </TouchableOpacity>
+                        );
+                      })
+                    )}
+                  </ScrollView>
+                </View>
+              )}
+
+              {/* Info box */}
+              <View style={[styles.uploadInfo, { borderColor: 'rgba(78,205,196,0.3)', backgroundColor: 'rgba(78,205,196,0.06)' }]}>
+                <Text style={{ fontSize: fs(12), color: '#4ECDC4', lineHeight: 18 }}>
+                  💾  File will be uploaded and linked to the selected project. It will appear in the Documents list immediately.
+                </Text>
+              </View>
+
+              {/* Buttons */}
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 4, marginBottom: 24 }}>
+                <TouchableOpacity
+                  style={[styles.uploadCancelBtn, { borderColor: bdr }]}
+                  onPress={() => setUploadModalVisible(false)}
+                  disabled={uploading}
+                >
+                  <Text style={[{ fontSize: fs(14), fontWeight: '600', color: sub }]}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.uploadSubmitBtn, (!uploadFile || !uploadProjectId || uploading) && { opacity: 0.6 }]}
+                  onPress={submitUpload}
+                  disabled={!uploadFile || !uploadProjectId || uploading}
+                >
+                  {uploading
+                    ? <ActivityIndicator color="#fff" size="small" />
+                    : <Text style={{ color: '#fff', fontSize: fs(14), fontWeight: '700' }}>⬆ Upload</Text>
+                  }
+                </TouchableOpacity>
+              </View>
+
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -680,10 +1020,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center',
     padding: 12, borderRadius: 12, borderWidth: 1, gap: 12,
   },
-  iconTile: {
-    width: 44, height: 44, borderRadius: 10,
-    justifyContent: 'center', alignItems: 'center',
-  },
+  iconTile: { width: 48, height: 58, flexShrink: 0 }, // kept for spacing reference only
   fileName: { fontWeight: '600', marginBottom: 4 },
 
   metaRow:  { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 4 },
@@ -782,4 +1119,72 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   pickerRowText: { flex: 1, marginRight: 8 },
+
+  // ── Upload button styles (sub-header) ──
+  uploadBtn: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 10, paddingVertical: 7,
+    borderRadius: 8, borderWidth: 1,
+  },
+  uploadBtnText: { fontSize: 12, fontWeight: '600' },
+  newDocBtn: {
+    backgroundColor: '#1A1A2E',
+    paddingHorizontal: 12, paddingVertical: 7,
+    borderRadius: 8,
+  },
+  newDocBtnText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+
+  // ── Upload modal styles ──
+  uploadSheet: {
+    width: '100%', maxWidth: 440,
+    borderRadius: 16, borderWidth: 1,
+    maxHeight: '88%',
+    overflow: 'hidden',
+  },
+  uploadLabel: {
+    fontSize: 12, fontWeight: '600',
+    marginBottom: 6, letterSpacing: 0.3,
+  },
+  filePicker: {
+    minHeight: 90,
+    borderWidth: 1.5, borderStyle: 'dashed',
+    borderRadius: 12,
+    justifyContent: 'center', alignItems: 'center',
+    flexDirection: 'row',
+    paddingHorizontal: 16, paddingVertical: 14,
+    gap: 10,
+  },
+  projectSelector: {
+    flexDirection: 'row', alignItems: 'center',
+    borderWidth: 1.5, borderRadius: 10,
+    paddingHorizontal: 14, height: 46,
+  },
+  uploadDropdown: {
+    borderWidth: 1.5, borderRadius: 10,
+    marginTop: 4, marginBottom: 8,
+    overflow: 'hidden',
+  },
+  uploadDropdownSearch: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 12, paddingVertical: 8,
+    borderBottomWidth: 1,
+  },
+  uploadDropdownItem: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 14, paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  uploadInfo: {
+    borderWidth: 1, borderRadius: 10,
+    padding: 12, marginTop: 14, marginBottom: 16,
+  },
+  uploadCancelBtn: {
+    flex: 1, height: 48, borderWidth: 1,
+    borderRadius: 10, justifyContent: 'center', alignItems: 'center',
+  },
+  uploadSubmitBtn: {
+    flex: 1, height: 48,
+    backgroundColor: '#1A1A2E',
+    borderRadius: 10, justifyContent: 'center', alignItems: 'center',
+  },
 });

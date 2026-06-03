@@ -211,13 +211,40 @@ export function AuthProvider({ children }) {
           errorField: 'both',
         };
       }
-      const mockUser = {
+      // ── Fetch real profile from /auth/me/ after login ──────────────
+      let realUser = null;
+      try {
+        const meRes = await fetch('http://192.168.1.164:8000/api/v1/auth/me/', {
+          headers: {
+            'Content-Type':  'application/json',
+            'Authorization': `Bearer ${data.access}`,
+          },
+        });
+        if (meRes.ok) {
+          const me = await meRes.json();
+          realUser = {
+            id:        me.id || data.user_id || cleanUsername,
+            name:      [me.first_name, me.last_name].filter(Boolean).join(' ') || me.username || cleanUsername,
+            username:  me.username || cleanUsername,
+            email:     me.email || '',
+            role:      me.role  || 'Member',
+            avatar:    ([me.first_name, me.last_name].filter(Boolean).join(' ') || me.username || cleanUsername)[0]?.toUpperCase() || 'U',
+            avatarUrl: me.avatar || null,   // S3 URL
+            skills:    me.skills || [],
+            createdAt: me.date_joined || new Date().toISOString(),
+          };
+        }
+      } catch {}
+
+      const mockUser = realUser || {
         id:        data.user_id || cleanUsername,
         name:      cleanUsername.replace(/[._]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
         username:  cleanUsername,
         email:     data.email || '',
         role:      data.role  || 'Member',
         avatar:    cleanUsername[0].toUpperCase(),
+        avatarUrl: null,
+        skills:    [],
         createdAt: new Date().toISOString(),
       };
       await persistSession(data.access, mockUser, data.refresh, 3600);
@@ -277,9 +304,15 @@ export function AuthProvider({ children }) {
   // ── Update profile ────────────────────────────────────────────────────
   const updateUser = async (updates) => {
     if (!user) return;
+    // Fields that should NOT be sanitized (URLs, arrays, non-string values)
+    const noSanitize = ['avatarUrl', 'avatar', 'skills'];
     const sanitized = {};
     for (const [k, v] of Object.entries(updates)) {
-      sanitized[k] = typeof v === 'string' ? sanitize(v) : v;
+      if (noSanitize.includes(k) || typeof v !== 'string') {
+        sanitized[k] = v; // keep as-is
+      } else {
+        sanitized[k] = sanitize(v);
+      }
     }
     const updated = { ...user, ...sanitized };
     await SecureStore.setItemAsync(AUTH_USER_KEY, JSON.stringify(updated));

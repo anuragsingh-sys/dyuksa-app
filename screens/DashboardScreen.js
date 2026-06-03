@@ -1,6 +1,6 @@
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, StatusBar, Platform,
-  ActivityIndicator, Modal, TextInput, KeyboardAvoidingView, Alert,
+  ActivityIndicator, Modal, TextInput, KeyboardAvoidingView, Alert, Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
@@ -8,10 +8,21 @@ import SidebarMenu from '../components/SidebarMenu';
 import { ThemeContext } from '../context/ThemeContext';
 import { AuthContext } from '../context/AuthContext';
 import NotificationBell from '../components/NotificationBell';
-import { useRef, useCallback, useState, useContext } from 'react';
-import { getProjects, getTasks, getAccessToken } from '../services/ApiService';
+import { useRef, useCallback, useState, useContext, useEffect } from 'react';
+import { getProjects, getTasks, getAccessToken, getWorkspaceId } from '../services/ApiService';
+import { canCreateProject, canManageMembers } from '../utils/permissions';
+import { useWorkspace } from '../context/WorkspaceContext';
 
 const API_BASE = 'http://192.168.1.164:8000';
+
+// Always includes X-Workspace-ID so every request is workspace-aware
+const authHeaders = async () => {
+  const token       = await getAccessToken();
+  const workspaceId = await getWorkspaceId();
+  const h = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` };
+  if (workspaceId) h['X-Workspace-ID'] = workspaceId;
+  return h;
+};
 
 // Map common file extensions to a small label + colour for the doc icon
 const fileMeta = (name = '') => {
@@ -61,6 +72,7 @@ export default function DashboardScreen() {
   const navigation = useNavigation();
   const { theme, fontScale } = useContext(ThemeContext);
   const { user } = useContext(AuthContext);
+  const { currentWorkspace } = useWorkspace();
   const isDark = theme === 'Dark';
   const bg   = isDark ? '#0D0D0F' : '#F5F5F7';
   const card = isDark ? '#1A1A20' : '#FFFFFF';
@@ -144,9 +156,8 @@ export default function DashboardScreen() {
   // Fetch the 3 most recently uploaded documents
   const fetchRecentDocs = useCallback(async () => {
     try {
-      const token = await getAccessToken();
       const res = await fetch(`${API_BASE}/api/v1/documents/?ordering=-created_at`, {
-        headers: { 'Authorization': `Bearer ${token}` },
+        headers: await authHeaders(),
       });
       if (!res.ok) throw new Error(`docs ${res.status}`);
       const data = await res.json();
@@ -216,9 +227,8 @@ export default function DashboardScreen() {
   // (title is auto-generated server-side, content is plain text)
   const fetchQuickNotes = useCallback(async () => {
     try {
-      const token = await getAccessToken();
       const res = await fetch(`${API_BASE}/api/v1/quicknotes/notes/`, {
-        headers: { 'Authorization': `Bearer ${token}` },
+        headers: await authHeaders(),
       });
       if (!res.ok) throw new Error(`notes ${res.status}`);
       const data = await res.json();
@@ -241,12 +251,11 @@ export default function DashboardScreen() {
   // unconditional double-fetch on every dashboard mount.
   const ensureComposerData = async () => {
     try {
-      const token = await getAccessToken();
       const tasks = [];
       if (foldersList.length === 0) {
         tasks.push(
           fetch(`${API_BASE}/api/v1/quicknotes/folders/`, {
-            headers: { 'Authorization': `Bearer ${token}` },
+            headers: await authHeaders(),
           }).then(r => r.ok ? r.json() : null)
         );
       } else { tasks.push(null); }
@@ -296,13 +305,9 @@ export default function DashboardScreen() {
     }
     setSavingNote(true);
     try {
-      const token = await getAccessToken();
       const res = await fetch(`${API_BASE}/api/v1/quicknotes/notes/`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type':  'application/json',
-        },
+        headers: await authHeaders(),
         body: JSON.stringify({
           content,
           folder:  draftFolderId,
@@ -328,6 +333,20 @@ export default function DashboardScreen() {
     }
   };
 
+  // Refetch all data when workspace changes — handles case where
+  // Dashboard is already focused so useFocusEffect doesn't fire
+  useEffect(() => {
+    if (!currentWorkspace?.id) return;
+    setLoadingTasks(true);
+    setLoadingDocs(true);
+    setLoadingProjects(true);
+    setLoadingNotes(true);
+    fetchInProgress();
+    fetchRecentDocs();
+    fetchFavProjects();
+    fetchQuickNotes();
+  }, [currentWorkspace?.id]);
+
   useFocusEffect(useCallback(() => {
     // Refresh all backend-wired sections every time we land here
     setLoadingTasks(true);
@@ -339,31 +358,15 @@ export default function DashboardScreen() {
     fetchFavProjects();
     fetchQuickNotes();
 
-    // If navigated here with scrollToNotes param, expand and scroll to Quick Actions
+    // If navigated here with scrollToNotes param, go to the QuickNotes screen
     if (route.params?.scrollToNotes) {
-      setNotesExpanded(true);
-      setTimeout(() => {
-        quickActionsRef.current?.measureLayout(
-          scrollRef.current,
-          (_x, y) => scrollRef.current?.scrollTo({ y: y - 12, animated: true }),
-          () => {}
-        );
-      }, 400);
+      navigation.navigate('QuickNotes');
       navigation.setParams({ scrollToNotes: false });
     }
   }, [route.params?.scrollToNotes, fetchInProgress, fetchRecentDocs, fetchFavProjects, fetchQuickNotes]));
 
   const handleQuickNotesPress = () => {
-    setNotesExpanded(prev => !prev);
-    if (!notesExpanded) {
-      setTimeout(() => {
-        quickActionsRef.current?.measureLayout(
-          scrollRef.current,
-          (_x, y) => scrollRef.current?.scrollTo({ y: y - 12, animated: true }),
-          () => {}
-        );
-      }, 100);
-    }
+    navigation.navigate('QuickNotes');
   };
 
   const formatDate = iso => {
@@ -410,13 +413,9 @@ export default function DashboardScreen() {
       ? `${API_BASE}/api/v1/tasksite/${id}/`
       : `${API_BASE}/api/v1/documents/${id}/`;
     try {
-      const token = await getAccessToken();
       const res = await fetch(url, {
         method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type':  'application/json',
-        },
+        headers: await authHeaders(),
         body: JSON.stringify({ status: newStatus }),
       });
       if (!res.ok) {
@@ -461,13 +460,9 @@ export default function DashboardScreen() {
     setFavProjects(prev => prev.filter(p => p.id !== project.id));
 
     try {
-      const token = await getAccessToken();
       const res = await fetch(`${API_BASE}/api/v1/projects/${project.id}/`, {
         method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type':  'application/json',
-        },
+        headers: await authHeaders(),
         body: JSON.stringify({ [key]: false }),
       });
       if (!res.ok) {
@@ -488,6 +483,21 @@ export default function DashboardScreen() {
   };
 
   const userFirstName = (user?.name || user?.username || 'there').split(' ')[0];
+
+  // Welcome banner — visible for 10 s then fades out
+  const [showWelcome, setShowWelcome] = useState(true);
+  const welcomeOpacity = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    const hideTimer = setTimeout(() => {
+      Animated.timing(welcomeOpacity, {
+        toValue: 0,
+        duration: 600,
+        useNativeDriver: true,
+      }).start(() => setShowWelcome(false));
+    }, 10000);
+    return () => clearTimeout(hideTimer);
+  }, []);
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: bg }]} edges={['top', 'left', 'right']}>
@@ -517,11 +527,13 @@ export default function DashboardScreen() {
         </View>
       </View>
 
-      {/* Welcome Header */}
-      <View style={[styles.pageHeader, { backgroundColor: card, borderBottomColor: bdr }]}>
-        <Text style={[styles.welcomeText, { color: txt }]}>Welcome back, {userFirstName}!</Text>
-        <Text style={[styles.subText, { color: sub }]}>Here's a quick overview of your workspace.</Text>
-      </View>
+      {/* Welcome Header — auto-hides after 10 s */}
+      {showWelcome && (
+        <Animated.View style={[styles.pageHeader, { backgroundColor: card, borderBottomColor: bdr, opacity: welcomeOpacity }]}>
+          <Text style={[styles.welcomeText, { color: txt }]}>Welcome back, {userFirstName}!</Text>
+          <Text style={[styles.subText, { color: sub }]}>Here's a quick overview of your workspace.</Text>
+        </Animated.View>
+      )}
 
       <ScrollView
         ref={scrollRef}

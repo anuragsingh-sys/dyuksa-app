@@ -12,6 +12,7 @@ import { AuthProvider, AuthContext } from './context/AuthContext';
 import { registerForPushNotifications, addNotificationListeners, rescheduleAllEvents } from './services/PushNotificationService';
 import { DataService } from './services/DataService';
 import { ThemeProvider, ThemeContext } from './context/ThemeContext';
+import { WorkspaceProvider, useWorkspace } from './context/WorkspaceContext';
 import ErrorBoundary from './components/ErrorBoundary';
 import OnboardingScreen, { ONBOARDING_KEY } from './screens/OnboardingScreen';
 
@@ -28,6 +29,8 @@ import TasksScreen     from './screens/TasksScreen';
 import DocumentsScreen from './screens/DocumentsScreen';
 import ChatScreen      from './screens/ChatScreen';
 import SettingsScreen  from './screens/SettingsScreen';
+import ProfileScreen   from './screens/ProfileScreen';
+import QuickNotesScreen from './screens/QuickNotesScreen';
 
 export const STORAGE_KEY = 'DYUKSA_QUICK_TASKS';
 
@@ -346,6 +349,16 @@ function MainTabs() {
   );
 }
 
+// Wrapper that gives MainTabs a new key whenever the workspace changes.
+// React treats a new key as a completely new component — fully unmounts and
+// remounts all tab screens, so useFocusEffect fires fresh and every screen
+// refetches its data with the correct X-Workspace-ID header.
+function MainTabsWithWorkspaceKey(props) {
+  const { currentWorkspace } = useWorkspace();
+  const workspaceKey = currentWorkspace?.id ? `ws_${currentWorkspace.id}` : 'ws_default';
+  return <MainTabs key={workspaceKey} {...props} />;
+}
+
 function RootNavigator() {
   const { isAuthenticated, isLoading } = useContext(AuthContext);
   const [showOnboarding, setShowOnboarding] = useState(null);
@@ -397,10 +410,12 @@ function RootNavigator() {
         </>
       ) : (
         <>
-          <Stack.Screen name="Main"            component={MainTabs} />
+          <Stack.Screen name="Main"            component={MainTabsWithWorkspaceKey} />
           <Stack.Screen name="Chat"            component={ChatScreen} />
           <Stack.Screen name="Settings"        component={SettingsScreen} />
           <Stack.Screen name="Docs"            component={DocumentsScreen} />
+          <Stack.Screen name="QuickNotes"      component={QuickNotesScreen} />
+          <Stack.Screen name="Profile"         component={ProfileScreen} />
           <Stack.Screen name="TeamManagement"  component={TeamManagementScreen} />
           <Stack.Screen name="EditProfile"     component={EditProfileScreen} />
           <Stack.Screen name="ChangePassword"  component={ChangePasswordScreen} />
@@ -417,9 +432,11 @@ export default function App() {
     <AuthProvider>
       <NotificationsProvider>
         <ThemeProvider>
-          <NavigationContainer>
-            <RootNavigator />
-          </NavigationContainer>
+          <WorkspaceProvider>
+            <NavigationContainer>
+              <RootNavigator />
+            </NavigationContainer>
+          </WorkspaceProvider>
         </ThemeProvider>
       </NotificationsProvider>
     </AuthProvider>
