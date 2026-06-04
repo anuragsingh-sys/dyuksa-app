@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { setCachedToken, clearTokenCache } from '../services/ApiService';
+import WebSocketService from '../services/WebSocketService';
 
 const AUTH_TOKEN_KEY     = 'DYUKSA_AUTH_TOKEN';
 const AUTH_REFRESH_KEY   = 'DYUKSA_REFRESH_TOKEN';
@@ -60,6 +62,7 @@ export function AuthProvider({ children }) {
           } else {
             setToken(storedToken);
             setUser(JSON.parse(storedUser));
+            WebSocketService.connect(); // reconnect on app boot
           }
         }
       } catch {
@@ -106,9 +109,13 @@ export function AuthProvider({ children }) {
       refreshTok
         ? SecureStore.setItemAsync(AUTH_REFRESH_KEY, refreshTok)
         : Promise.resolve(),
+      AsyncStorage.setItem('DYUKSA_AUTH_TOKEN', authToken),
     ]);
+    setCachedToken(authToken);
     setToken(authToken);
     setUser(userData);
+    // Connect WebSocket for real-time notifications
+    WebSocketService.connect();
   };
 
   const clearSession = async () => {
@@ -117,9 +124,13 @@ export function AuthProvider({ children }) {
       SecureStore.deleteItemAsync(AUTH_USER_KEY),
       SecureStore.deleteItemAsync(AUTH_REFRESH_KEY),
       SecureStore.deleteItemAsync(TOKEN_EXPIRY_KEY),
+      AsyncStorage.removeItem('DYUKSA_AUTH_TOKEN'),
     ]).catch(() => {});
+    clearTokenCache();
     setToken(null);
     setUser(null);
+    // Disconnect WebSocket on logout
+    WebSocketService.disconnect();
   };
 
   // ── Token refresh ─────────────────────────────────────────────────────

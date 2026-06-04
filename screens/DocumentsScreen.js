@@ -1,8 +1,10 @@
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   TextInput, StatusBar, Platform, ScrollView, ActivityIndicator,
-  Linking, RefreshControl, Alert, Modal, Pressable,
+  Linking, RefreshControl, Alert, Modal, Pressable, KeyboardAvoidingView,
+  Animated, Dimensions, Image,
 } from 'react-native';
+import { WebView } from 'react-native-webview';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useState, useContext, useEffect, useCallback, useMemo } from 'react';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -261,10 +263,40 @@ export default function DocumentsScreen() {
   const [error,        setError]        = useState(null);
   const [search,       setSearch]       = useState('');
   const [typeFilter,   setTypeFilter]   = useState('all');
-  const [projectFilter,setProjectFilter]= useState('all'); // 'all' | numeric project id (as string)
-  const [pickerOpen,   setPickerOpen]   = useState(null);  // null | 'type' | 'project'
+  const [projectFilter,setProjectFilter]= useState('all');
+  const [pickerOpen,   setPickerOpen]   = useState(null);
 
-  // ── Upload modal state ──
+  // ── Selection state ──
+  const [selectedIds,    setSelectedIds]    = useState(new Set());
+  const [shareModalDoc,  setShareModalDoc]  = useState(null);
+  const [users,          setUsers]          = useState([]);
+  const [shareUserId,    setShareUserId]    = useState(null);
+  const [shareUserOpen,  setShareUserOpen]  = useState(false);
+  const [sharing,        setSharing]        = useState(false);
+  const [sharedWithMap,  setSharedWithMap]  = useState({}); // { [docId]: [{user}] }
+
+  // ── Move modal state ──
+  const [moveModalDoc,   setMoveModalDoc]   = useState(null);
+  const [moveProjectId,  setMoveProjectId]  = useState(null);
+  const [moveProjects,   setMoveProjects]   = useState([]);
+  const [movePickerOpen, setMovePickerOpen] = useState(false);
+  const [moving,         setMoving]         = useState(false);
+
+  // ── Tags modal state ──
+  const [tagsModalDoc,   setTagsModalDoc]   = useState(null);
+  const [availableTags,  setAvailableTags]  = useState([]);
+  const [selectedTags,   setSelectedTags]   = useState([]);
+  const [tagSearch,      setTagSearch]      = useState('');
+  const [addingTags,     setAddingTags]     = useState(false);
+  const [loadingTags,    setLoadingTags]    = useState(false);
+
+  const isSelecting    = selectedIds.size > 0;
+  const toggleSelect   = (id) => setSelectedIds(prev => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+  const clearSelection = () => setSelectedIds(new Set());
   const [uploadModalVisible, setUploadModalVisible] = useState(false);
   const [uploadFile,         setUploadFile]         = useState(null);   // { name, uri, mimeType, size }
   const [uploadProjectId,    setUploadProjectId]    = useState(null);
@@ -343,6 +375,14 @@ export default function DocumentsScreen() {
       ]);
       setDocs(docsList);
       setProjectMap(projMap);
+      // Populate sharedWithMap from shared_with field in each doc
+      const swMap = {};
+      docsList.forEach(d => {
+        if (d.shared_with?.length > 0) {
+          swMap[d.id] = d.shared_with.map((u, i) => ({ id: u.id || i, user: u }));
+        }
+      });
+      setSharedWithMap(swMap);
     } catch (err) {
       setError(err.message || 'Failed to load documents');
     } finally {
@@ -437,28 +477,288 @@ export default function DocumentsScreen() {
 
   useFocusEffect(useCallback(() => { loadAll(); }, [loadAll]));
 
+  // ── Fetch users for share modal ──────────────────────────────────
+  useEffect(() => {
+    (async () => {
+      try {
+        const headers = await buildAuthHeaders();
+        const res = await fetch(`${API_BASE}/api/v1/tasksite/all-users/`, { headers });
+        if (res.ok) {
+          const data = await res.json();
+          setUsers(data.users || data.results || (Array.isArray(data) ? data : []));
+        }
+      } catch {}
+    })();
+  }, []);
+
+  // ── Share document ────────────────────────────────────────────────
+  const shareDocument = async (doc, userId) => {
+    if (!userId) { Alert.alert('Select a user', 'Please select a user to share with.'); return; }
+    setSharing(true);
+    try {
+      const headers = await buildAuthHeaders();
+
+      // Try POST with user_id
+      const res = await fetch(`${API_BASE}/api/v1/documents/${doc.id}/share/`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ user_id: userId }),
+      });
+      const responseText = await res.text();
+
+      if (!res.ok) {
+        let errMsg = `Share failed (${res.status})`;
+        try {
+          const e = JSON.parse(responseText);
+          errMsg = e.detail || e.message || e.error || Object.values(e)[0] || errMsg;
+        } catch {}
+        throw new Error(errMsg);
+      }
+
+      const selectedUser = users.find(u => u.id === userId);
+      setSharedWithMap(prev => ({
+        ...prev,
+        [doc.id]: [...(prev[doc.id] || []), { id: userId, user: selectedUser || { id: userId } }],
+      }));
+      setDocs(prev => prev.map(d => d.id === doc.id
+        ? { ...d, shared_with: [...(d.shared_with || []), selectedUser].filter(Boolean) }
+        : d
+      ));
+      Alert.alert('✅ Shared', `Document shared with ${selectedUser?.full_name || selectedUser?.username || 'user'} successfully.`);
+      setShareUserId(null);
+      clearSelection();
+    } catch (e) {
+      Alert.alert('Could not share', e.message || 'Try again.');
+    } finally {
+      setSharing(false);
+    }
+  }; // end shareDocument
+
+  // ── Bulk delete ───────────────────────────────────────────────────
+  const bulkDelete = () => {
+    Alert.alert(
+      `Delete ${selectedIds.size} document${selectedIds.size > 1 ? 's' : ''}?`,
+      'This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete', style: 'destructive',
+          onPress: async () => {
+            try {
+              const headers = await buildAuthHeaders();
+              await Promise.all([...selectedIds].map(id =>
+                fetch(`${API_BASE}/api/v1/documents/${id}/`, { method: 'DELETE', headers })
+              ));
+              setDocs(prev => prev.filter(d => !selectedIds.has(d.id)));
+              clearSelection();
+            } catch (e) {
+              Alert.alert('Error', e.message || 'Could not delete.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  // ── Bulk status change ────────────────────────────────────────────
+  const bulkChangeStatus = (newStatus) => {
+    Alert.alert(
+      `Change status to "${newStatus}"?`,
+      `This will update ${selectedIds.size} document${selectedIds.size > 1 ? 's' : ''}.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Update',
+          onPress: async () => {
+            try {
+              const headers = await buildAuthHeaders();
+              await Promise.all([...selectedIds].map(id =>
+                fetch(`${API_BASE}/api/v1/documents/${id}/`, {
+                  method: 'PATCH',
+                  headers,
+                  body: JSON.stringify({ status: newStatus }),
+                })
+              ));
+              setDocs(prev => prev.map(d => selectedIds.has(d.id) ? { ...d, status: newStatus } : d));
+              clearSelection();
+            } catch (e) {
+              Alert.alert('Error', e.message || 'Could not update status.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  // ── Open Move modal ───────────────────────────────────────────────
+  const openMoveModal = async () => {
+    const doc = docs.find(d => selectedIds.has(d.id));
+    if (!doc) return;
+    setMoveProjectId(null);
+    setMovePickerOpen(false);
+    try {
+      const headers = await buildAuthHeaders();
+      const res = await fetch(`${API_BASE}/api/v1/projects/`, { headers });
+      if (res.ok) {
+        const data = await res.json();
+        setMoveProjects(Array.isArray(data) ? data : (data.results || []));
+      }
+    } catch {}
+    setMoveModalDoc(doc);
+  };
+
+  // ── Move document to project ──────────────────────────────────────
+  const moveDocument = async () => {
+    if (!moveProjectId) { Alert.alert('Select a project', 'Please select a project to move to.'); return; }
+    setMoving(true);
+    try {
+      const headers = await buildAuthHeaders();
+      await Promise.all([...selectedIds].map(id =>
+        fetch(`${API_BASE}/api/v1/documents/${id}/`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({ project: moveProjectId }),
+        })
+      ));
+      const projName = moveProjects.find(p => p.id === moveProjectId)?.name || 'project';
+      setDocs(prev => prev.map(d => selectedIds.has(d.id) ? { ...d, project: moveProjectId } : d));
+      setProjectMap(prev => ({ ...prev, [moveProjectId]: projName }));
+      setMoveModalDoc(null);
+      clearSelection();
+      Alert.alert('✅ Moved', `Moved to ${projName}.`);
+    } catch (e) {
+      Alert.alert('Error', e.message || 'Could not move document.');
+    } finally {
+      setMoving(false);
+    }
+  };
+
+  // ── Open Tags modal ───────────────────────────────────────────────
+  const openTagsModal = async () => {
+    const doc = docs.find(d => selectedIds.has(d.id));
+    if (!doc) return;
+    setTagSearch('');
+    setSelectedTags(doc.tags?.map(t => t.id || t) || []);
+    setLoadingTags(true);
+    setTagsModalDoc(doc);
+    try {
+      const headers = await buildAuthHeaders();
+      const res = await fetch(`${API_BASE}/api/v1/documents/tags/`, { headers });
+      if (res.ok) {
+        const data = await res.json();
+        setAvailableTags(Array.isArray(data) ? data : (data.results || []));
+      }
+    } catch (e) {
+      console.warn('fetchTags:', e.message);
+    } finally {
+      setLoadingTags(false);
+    }
+  };
+
+  // ── Add tags to document ──────────────────────────────────────────
+  const applyTags = async () => {
+    setAddingTags(true);
+    try {
+      const headers = await buildAuthHeaders();
+      await Promise.all([...selectedIds].map(id =>
+        fetch(`${API_BASE}/api/v1/documents/${id}/`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({ tags: selectedTags }),
+        })
+      ));
+      setDocs(prev => prev.map(d => selectedIds.has(d.id)
+        ? { ...d, tags: availableTags.filter(t => selectedTags.includes(t.id)) }
+        : d
+      ));
+      setTagsModalDoc(null);
+      clearSelection();
+    } catch (e) {
+      Alert.alert('Error', e.message || 'Could not update tags.');
+    } finally {
+      setAddingTags(false);
+    }
+  };
+
+  // ── Fetch shared-with for a doc ───────────────────────────────────
+  const fetchSharedWith = async (docId) => {
+    // First check if we already have it from the document data
+    const doc = docs.find(d => d.id === docId);
+    if (doc?.shared_with?.length > 0) {
+      setSharedWithMap(prev => ({ ...prev, [docId]: doc.shared_with.map((u, i) => ({ id: i, user: u })) }));
+    }
+    // Also try the dedicated endpoint
+    try {
+      const headers = await buildAuthHeaders();
+      const res = await fetch(`${API_BASE}/api/v1/documents/${docId}/`, { headers });
+      if (res.ok) {
+        const data = await res.json();
+        const sharedWith = data.shared_with || [];
+        if (sharedWith.length > 0) {
+          setSharedWithMap(prev => ({
+            ...prev,
+            [docId]: sharedWith.map((u, i) => ({ id: u.id || i, user: u })),
+          }));
+        }
+      }
+    } catch (e) {
+      console.warn('fetchSharedWith:', e.message);
+    }
+  };
+
+  // ── Revoke share ──────────────────────────────────────────────────
+  const revokeShare = async (docId, shareEntry) => {
+    const userId = shareEntry?.user?.id || shareEntry?.id;
+    const userName = shareEntry?.user?.full_name || shareEntry?.user?.username || 'this user';
+    Alert.alert('Revoke access?', `${userName} will no longer have access to this document.`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Revoke', style: 'destructive',
+        onPress: async () => {
+          try {
+            const headers = await buildAuthHeaders();
+            // Try revoke endpoint with user_id
+            const res = await fetch(`${API_BASE}/api/v1/documents/${docId}/share/`, {
+              method: 'DELETE',
+              headers,
+              body: JSON.stringify({ user_id: userId }),
+            });
+            if (!res.ok && res.status !== 204) {
+              const txt = await res.text();
+              console.warn('Revoke failed:', txt);
+            }
+            // Update local state regardless
+            setSharedWithMap(prev => ({
+              ...prev,
+              [docId]: (prev[docId] || []).filter(s => (s.user?.id || s.id) !== userId),
+            }));
+            setDocs(prev => prev.map(d => d.id === docId
+              ? { ...d, shared_with: (d.shared_with || []).filter(u => u.id !== userId) }
+              : d
+            ));
+          } catch (e) {
+            Alert.alert('Error', e.message || 'Could not revoke access.');
+          }
+        },
+      },
+    ]);
+  };
+
   const onRefresh = () => {
     setRefreshing(true);
     loadAll();
   };
 
   // ── Open file in native viewer / browser ──
-  const openDoc = async (doc) => {
-    const url = doc.source_file || doc.source_file_url || doc.file_url;
-    if (!url) {
-      Alert.alert('Unavailable', 'This document does not have a viewable URL.');
-      return;
-    }
-    try {
-      const supported = await Linking.canOpenURL(url);
-      if (supported) {
-        await Linking.openURL(url);
-      } else {
-        Alert.alert('Cannot open', 'Your device cannot open this file type.');
-      }
-    } catch {
-      Alert.alert('Error', 'Unable to open document.');
-    }
+  const [detailDoc,   setDetailDoc]   = useState(null);
+  const [showWebView, setShowWebView] = useState(false);
+  const [showInfo,    setShowInfo]    = useState(false);
+
+  const openDoc = (doc) => {
+    if (isSelecting) { toggleSelect(doc.id); return; }
+    setShowWebView(false);
+    setShowInfo(false);
+    setDetailDoc(doc);
   };
 
   // ── Filter + search ──
@@ -529,63 +829,115 @@ export default function DocumentsScreen() {
     const creatorName = creator.full_name || creator.username || 'Unknown';
     const status      = item.status || null;
 
+    const isSelected = selectedIds.has(item.id);
+
     return (
       <TouchableOpacity
-        style={[styles.row, { backgroundColor: card, borderColor: bdr }]}
-        onPress={() => openDoc(item)}
+        style={[
+          styles.row,
+          { backgroundColor: isSelected ? (isDark ? '#1A2E2E' : '#F0FFFE') : card, borderColor: isSelected ? '#4ECDC4' : bdr },
+        ]}
+        onPress={() => {
+          if (isSelecting) {
+            toggleSelect(item.id);
+          } else {
+            openDoc(item);
+          }
+        }}
+        onLongPress={() => toggleSelect(item.id)}
+        delayLongPress={300}
         activeOpacity={0.7}
       >
+        {/* Selection checkbox */}
+        {isSelecting && (
+          <View style={[
+            styles.selectionCheck,
+            { borderColor: isSelected ? '#4ECDC4' : bdr, backgroundColor: isSelected ? '#4ECDC4' : 'transparent' },
+          ]}>
+            {isSelected && <Text style={{ color: '#fff', fontSize: 10, fontWeight: '800' }}>✓</Text>}
+          </View>
+        )}
+
         {/* File icon — matches webpage style */}
         <FileIcon ext={ext} meta={meta} />
 
-        {/* Main content */}
-        <View style={{ flex: 1, marginRight: 8 }}>
-          <Text
-            style={[styles.fileName, { color: txt, fontSize: fs(13) }]}
-            numberOfLines={1}
-          >
+        {/* Main content — 3 rows */}
+        <View style={{ flex: 1, marginRight: 4 }}>
+
+          {/* Row 1 — File name */}
+          <Text style={[styles.fileName, { color: txt, fontSize: fs(13) }]} numberOfLines={1}>
             {name}
           </Text>
 
-          {/* Pills: project + type + task + status */}
-          <View style={styles.metaRow}>
+          {/* Row 2 — Project · Tags · Status */}
+          <View style={[styles.metaRow, { marginBottom: 4 }]}>
             {/* Project pill */}
             <View style={[styles.projectPill, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}>
               <Text style={[styles.projectPillText, { color: sub, fontSize: fs(9) }]} numberOfLines={1}>
                 {projectName}
               </Text>
             </View>
-            {/* Task pill (when applicable) */}
-            {taskId != null && (
-              <View style={[styles.taskPill, { backgroundColor: isDark ? '#1F3F4F' : '#CFFAFE' }]}>
-                <Text style={[styles.taskPillText, { color: '#06B6D4', fontSize: fs(9) }]}>
-                  Task #{taskId}
+            {/* Tags */}
+            {(item.tags || []).slice(0, 2).map((tag, ti) => (
+              <View
+                key={ti}
+                style={[styles.tagPill, { backgroundColor: (tag.color || '#6B7280') + '22', borderColor: (tag.color || '#6B7280') + '44' }]}
+              >
+                <Text style={[styles.tagPillTxt, { color: tag.color || '#6B7280', fontSize: fs(9) }]}>
+                  {tag.name || tag}
                 </Text>
               </View>
-            )}
-            {/* Status pill */}
-            {status === 'draft' && (
-              <View style={styles.draftPill}>
-                <Text style={[styles.draftPillText, { fontSize: fs(9) }]}>DRAFT</Text>
+            ))}
+            {/* Status */}
+            {!!status && (
+              <View style={[styles.statusPill, {
+                backgroundColor:
+                  status === 'approved'  ? '#D1FAE5' :
+                  status === 'in_review' ? '#FEF3C7' :
+                  status === 'archived'  ? '#F3F4F6' : '#F5F5F7',
+              }]}>
+                <Text style={[styles.statusPillTxt, {
+                  color:
+                    status === 'approved'  ? '#065F46' :
+                    status === 'in_review' ? '#92400E' :
+                    status === 'archived'  ? '#6B7280' : '#374151',
+                  fontSize: fs(9),
+                }]}>
+                  {status === 'in_review' ? 'IN REVIEW' : status.toUpperCase()}
+                </Text>
               </View>
             )}
           </View>
 
-          {/* Date + Shared-by row */}
+          {/* Row 3 — Date · Owner avatar · Owner name · Shared badge */}
           <View style={styles.bottomRow}>
             <Text style={[styles.dateText, { color: sub, fontSize: fs(10) }]}>
               {formatRelative(item.updated_at || item.created_at || item.uploaded_at)}
             </Text>
-            <Text style={[styles.dotSep, { color: sub, fontSize: fs(10) }]}>·</Text>
+            <Text style={[styles.dotSep, { color: sub }]}>·</Text>
             <View style={[styles.avatar, { backgroundColor: getAvatarColor(creatorName) }]}>
               <Text style={styles.avatarText}>{getInitials(creatorName)}</Text>
             </View>
-            <Text
-              style={[styles.sharedByText, { color: sub, fontSize: fs(10) }]}
-              numberOfLines={1}
-            >
+            <Text style={[styles.sharedByText, { color: sub, fontSize: fs(10) }]} numberOfLines={1}>
               {creatorName}
             </Text>
+            {/* Shared indicator */}
+            {((item.shared_with?.length > 0) || (sharedWithMap[item.id]?.length > 0)) && (
+              <TouchableOpacity
+                style={[styles.sharedBadge, { backgroundColor: isDark ? '#1A2E2E' : '#F0FFFE', borderColor: '#4ECDC4' }]}
+                onPress={() => {
+                  fetchSharedWith(item.id);
+                  setShareUserId(null);
+                  setShareUserOpen(false);
+                  setShareModalDoc(item);
+                }}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              >
+                <Text style={{ fontSize: 9, color: '#4ECDC4', fontWeight: '700' }}>
+                  ⤴ Shared ({item.shared_with?.length || sharedWithMap[item.id]?.length || 0})
+                </Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
 
@@ -648,25 +1000,95 @@ export default function DocumentsScreen() {
         <View style={{ flex: 1 }}>
           <Text style={[styles.pageTitle, { color: txt, fontSize: fs(17) }]}>All Documents</Text>
           <Text style={[styles.pageSub, { color: sub, fontSize: fs(12) }]}>
-            {loading ? 'Loading…' : `${filtered.length} of ${docs.length} document${docs.length !== 1 ? 's' : ''}`}
+            {isSelecting
+              ? `${selectedIds.size} selected`
+              : loading ? 'Loading…' : `${filtered.length} of ${docs.length} document${docs.length !== 1 ? 's' : ''}`}
           </Text>
         </View>
-        <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-          <TouchableOpacity
-            style={[styles.uploadBtn, { borderColor: bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
-            onPress={openUploadModal}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.uploadBtnText, { color: txt }]}>⬆ Upload</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.newDocBtn}
-            onPress={openUploadModal}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.newDocBtnText}>+ New</Text>
-          </TouchableOpacity>
-        </View>
+
+        {isSelecting ? (
+          /* ── Selection action bar ── */
+          <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+            {/* Cancel */}
+            <TouchableOpacity
+              style={[styles.actionBarBtn, { borderColor: bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
+              onPress={clearSelection}
+            >
+              <Text style={[styles.actionBarBtnTxt, { color: sub }]}>✕ {selectedIds.size}</Text>
+            </TouchableOpacity>
+            {/* Move */}
+            <TouchableOpacity
+              style={[styles.actionBarBtn, { borderColor: '#60A5FA', backgroundColor: isDark ? '#1A2035' : '#EFF6FF' }]}
+              onPress={openMoveModal}
+            >
+              <Text style={[styles.actionBarBtnTxt, { color: '#2563EB' }]}>⇥ Move</Text>
+            </TouchableOpacity>
+            {/* Add Tags */}
+            <TouchableOpacity
+              style={[styles.actionBarBtn, { borderColor: '#A78BFA', backgroundColor: isDark ? '#1E1A30' : '#F5F3FF' }]}
+              onPress={openTagsModal}
+            >
+              <Text style={[styles.actionBarBtnTxt, { color: '#7C3AED' }]}>🏷 Tags</Text>
+            </TouchableOpacity>
+            {/* Change Status */}
+            <TouchableOpacity
+              style={[styles.actionBarBtn, { borderColor: '#FBBF24', backgroundColor: isDark ? '#2A2510' : '#FFFBEB' }]}
+              onPress={() => Alert.alert(
+                'Change Status',
+                `Update ${selectedIds.size} doc${selectedIds.size > 1 ? 's' : ''} to:`,
+                [
+                  { text: 'Draft',     onPress: () => bulkChangeStatus('draft') },
+                  { text: 'In Review', onPress: () => bulkChangeStatus('in_review') },
+                  { text: 'Approved',  onPress: () => bulkChangeStatus('approved') },
+                  { text: 'Archived',  onPress: () => bulkChangeStatus('archived') },
+                  { text: 'Cancel',    style: 'cancel' },
+                ]
+              )}
+            >
+              <Text style={[styles.actionBarBtnTxt, { color: '#D97706' }]}>⇅ Status</Text>
+            </TouchableOpacity>
+            {/* Share — only when 1 doc selected */}
+            {selectedIds.size === 1 && (
+              <TouchableOpacity
+                style={[styles.actionBarBtn, { borderColor: '#4ECDC4', backgroundColor: isDark ? '#1A2E2E' : '#F0FFFE' }]}
+                onPress={() => {
+                  const doc = docs.find(d => selectedIds.has(d.id));
+                  setShareUserId(null);
+                  setShareUserOpen(false);
+                  fetchSharedWith(doc.id);
+                  setShareModalDoc(doc);
+                }}
+              >
+                <Text style={[styles.actionBarBtnTxt, { color: '#4ECDC4' }]}>⤴ Share</Text>
+              </TouchableOpacity>
+            )}
+            {/* Delete */}
+            <TouchableOpacity
+              style={[styles.actionBarBtn, { borderColor: '#EF4444', backgroundColor: isDark ? '#2A1010' : '#FEF2F2' }]}
+              onPress={bulkDelete}
+            >
+              <Text style={[styles.actionBarBtnTxt, { color: '#EF4444' }]}>🗑 Delete</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          /* ── Normal Upload + New buttons ── */
+          <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+            <TouchableOpacity
+              style={[styles.uploadBtn, { borderColor: bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
+              onPress={openUploadModal}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.uploadBtnText, { color: txt }]}>⬆ Upload</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.newDocBtn}
+              onPress={openUploadModal}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.newDocBtnText}>+ New</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
 
       {/* Search bar */}
@@ -825,6 +1247,276 @@ export default function DocumentsScreen() {
         </Pressable>
       </Modal>
 
+      {/* ── Move Document Modal ───────────────────────────────────────────── */}
+      <Modal visible={!!moveModalDoc} transparent animationType="fade" statusBarTranslucent onRequestClose={() => !moving && setMoveModalDoc(null)}>
+        <View style={styles.shareOverlay}>
+          <Pressable style={StyleSheet.absoluteFillObject} onPress={() => !moving && setMoveModalDoc(null)} />
+          <View style={[styles.shareFloating, { backgroundColor: card, borderColor: bdr }]}>
+            <View style={[styles.shareHeader, { borderBottomColor: bdr }]}>
+              <Text style={{ fontSize: 16 }}>⇥</Text>
+              <Text style={[styles.shareTitle, { color: txt }]}>Move Document</Text>
+              <TouchableOpacity onPress={() => !moving && setMoveModalDoc(null)}>
+                <Text style={{ color: sub, fontSize: 18 }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={{ padding: 16 }}>
+              <View style={[styles.shareDocName, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}>
+                <Text style={{ fontSize: 13, color: sub }}>Document: </Text>
+                <Text style={{ fontSize: 13, color: txt, fontWeight: '600', flex: 1 }} numberOfLines={1}>
+                  {moveModalDoc?.name || moveModalDoc?.file_name}
+                </Text>
+              </View>
+              <Text style={[styles.shareFieldLabel, { color: sub }]}>Move to Project *</Text>
+              <TouchableOpacity
+                style={[styles.sharePickerBtn, { borderColor: movePickerOpen ? '#2563EB' : bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
+                onPress={() => setMovePickerOpen(v => !v)}
+                disabled={moving}
+              >
+                <Text style={{ flex: 1, fontSize: 13, color: moveProjectId ? txt : sub }} numberOfLines={1}>
+                  {moveProjects.find(p => p.id === moveProjectId)?.name || 'Select a project…'}
+                </Text>
+                <Text style={{ color: sub, fontSize: 11 }}>{movePickerOpen ? '▲' : '▾'}</Text>
+              </TouchableOpacity>
+              {movePickerOpen && (
+                <View style={[styles.shareDropdown, { backgroundColor: card, borderColor: '#2563EB' }]}>
+                  <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled showsVerticalScrollIndicator={false}>
+                    {moveProjects.map(p => {
+                      const sel = moveProjectId === p.id;
+                      return (
+                        <TouchableOpacity
+                          key={p.id}
+                          style={[styles.shareUserRow, { borderBottomColor: bdr }, sel && { backgroundColor: isDark ? '#1A203A' : '#EFF6FF' }]}
+                          onPress={() => { setMoveProjectId(p.id); setMovePickerOpen(false); }}
+                        >
+                          <Text style={{ fontSize: 13, color: sel ? '#2563EB' : txt, fontWeight: sel ? '700' : '500', flex: 1 }}>{p.name}</Text>
+                          {sel && <Text style={{ color: '#2563EB', fontWeight: '700' }}>✓</Text>}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+              )}
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
+                <TouchableOpacity style={[styles.shareCancelBtn, { borderColor: bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7' }]} onPress={() => setMoveModalDoc(null)} disabled={moving}>
+                  <Text style={{ fontSize: 14, fontWeight: '600', color: sub }}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.shareConfirmBtn, { backgroundColor: '#2563EB' }, moving && { opacity: 0.6 }]} onPress={moveDocument} disabled={moving || !moveProjectId}>
+                  {moving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>Move</Text>}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Add Tags Modal ────────────────────────────────────────────────── */}
+      <Modal visible={!!tagsModalDoc} transparent animationType="fade" statusBarTranslucent onRequestClose={() => !addingTags && setTagsModalDoc(null)}>
+        <View style={styles.shareOverlay}>
+          <Pressable style={StyleSheet.absoluteFillObject} onPress={() => !addingTags && setTagsModalDoc(null)} />
+          <View style={[styles.shareFloating, { backgroundColor: card, borderColor: bdr }]}>
+            <View style={[styles.shareHeader, { borderBottomColor: bdr }]}>
+              <Text style={{ fontSize: 16 }}>🏷</Text>
+              <Text style={[styles.shareTitle, { color: txt }]}>Add Tags to {selectedIds.size} Document{selectedIds.size > 1 ? 's' : ''}</Text>
+              <TouchableOpacity onPress={() => !addingTags && setTagsModalDoc(null)}>
+                <Text style={{ color: sub, fontSize: 18 }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={{ padding: 16 }}>
+              {/* Search */}
+              <View style={[styles.sharePickerBtn, { borderColor: bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7', marginBottom: 12 }]}>
+                <Text style={{ fontSize: 13, marginRight: 6 }}>🔍</Text>
+                <TextInput
+                  style={{ flex: 1, fontSize: 13, color: txt }}
+                  placeholder="Search tags…"
+                  placeholderTextColor={sub}
+                  value={tagSearch}
+                  onChangeText={setTagSearch}
+                />
+              </View>
+              {/* Create new label button */}
+              <TouchableOpacity style={[styles.createTagBtn, { borderColor: bdr }]} onPress={() => Alert.alert('Create Tag', 'Tag creation coming soon.')}>
+                <Text style={{ fontSize: 13, color: sub, fontWeight: '600' }}>+ Create New Label</Text>
+              </TouchableOpacity>
+              <Text style={[styles.shareFieldLabel, { color: sub, marginTop: 12 }]}>AVAILABLE TAGS</Text>
+              {loadingTags ? (
+                <ActivityIndicator color="#4ECDC4" style={{ marginVertical: 20 }} />
+              ) : (
+                <ScrollView style={{ maxHeight: 240 }} showsVerticalScrollIndicator={false}>
+                  {availableTags
+                    .filter(t => !tagSearch || (t.name || '').toLowerCase().includes(tagSearch.toLowerCase()))
+                    .map(tag => {
+                      const sel = selectedTags.includes(tag.id);
+                      const color = tag.color || '#6B7280';
+                      return (
+                        <TouchableOpacity
+                          key={tag.id}
+                          style={[styles.tagRow, { backgroundColor: color, marginBottom: 8 }]}
+                          onPress={() => setSelectedTags(prev => sel ? prev.filter(id => id !== tag.id) : [...prev, tag.id])}
+                        >
+                          <View style={[styles.tagCheckbox, { borderColor: '#fff', backgroundColor: sel ? '#fff' : 'transparent' }]}>
+                            {sel && <Text style={{ color, fontSize: 10, fontWeight: '800' }}>✓</Text>}
+                          </View>
+                          <Text style={{ color: '#fff', fontSize: 13, fontWeight: '700', flex: 1 }}>{tag.name}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  {availableTags.length === 0 && !loadingTags && (
+                    <Text style={{ color: sub, textAlign: 'center', padding: 16 }}>No tags found</Text>
+                  )}
+                </ScrollView>
+              )}
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
+                <TouchableOpacity style={[styles.shareCancelBtn, { borderColor: bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7' }]} onPress={() => setTagsModalDoc(null)} disabled={addingTags}>
+                  <Text style={{ fontSize: 14, fontWeight: '600', color: sub }}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.shareConfirmBtn, { backgroundColor: '#7C3AED' }, addingTags && { opacity: 0.6 }]} onPress={applyTags} disabled={addingTags}>
+                  {addingTags ? <ActivityIndicator color="#fff" size="small" /> : <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>🏷 Add Tags</Text>}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Share Document Modal ─────────────────────────────────────────── */}
+      <Modal
+        visible={!!shareModalDoc}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => !sharing && setShareModalDoc(null)}
+      >
+        <View style={styles.shareOverlay}>
+          <Pressable style={StyleSheet.absoluteFillObject} onPress={() => !sharing && setShareModalDoc(null)} />
+          <View style={[styles.shareFloating, { backgroundColor: card, borderColor: bdr, shadowColor: '#000' }]}>
+            {/* Header */}
+            <View style={[styles.shareHeader, { borderBottomColor: bdr }]}>
+              <Text style={{ fontSize: 16 }}>⤴</Text>
+              <Text style={[styles.shareTitle, { color: txt }]}>Share Document</Text>
+              <TouchableOpacity onPress={() => !sharing && setShareModalDoc(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Text style={{ color: sub, fontSize: 18, fontWeight: '300' }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={{ padding: 16 }}>
+              {/* Doc name */}
+              <View style={[styles.shareDocName, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}>
+                <Text style={{ fontSize: 13, color: sub }}>Sharing: </Text>
+                <Text style={{ fontSize: 13, color: txt, fontWeight: '600', flex: 1 }} numberOfLines={1}>
+                  {shareModalDoc?.name || shareModalDoc?.file_name || 'Document'}
+                </Text>
+              </View>
+
+              {/* Currently shared with */}
+              {(sharedWithMap[shareModalDoc?.id] || []).length > 0 && (
+                <View style={{ marginBottom: 16 }}>
+                  <Text style={[styles.shareFieldLabel, { color: sub }]}>
+                    CURRENTLY SHARED WITH ({sharedWithMap[shareModalDoc?.id]?.length})
+                  </Text>
+                  <View style={[{ borderRadius: 10, borderWidth: 1, borderColor: bdr, overflow: 'hidden' }]}>
+                    {(sharedWithMap[shareModalDoc?.id] || []).map((s, i) => {
+                      const sName = s.user?.full_name || s.user?.username || s.full_name || s.username || 'User';
+                      return (
+                        <View
+                          key={s.id || i}
+                          style={[styles.shareUserRow, { borderBottomColor: bdr }, i === sharedWithMap[shareModalDoc?.id].length - 1 && { borderBottomWidth: 0 }]}
+                        >
+                          <View style={[styles.shareUserAvatar, { backgroundColor: '#4ECDC4' }]}>
+                            <Text style={styles.shareUserAvatarTxt}>{sName[0]?.toUpperCase()}</Text>
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ fontSize: 13, color: txt, fontWeight: '600' }}>{sName}</Text>
+                            {(s.user?.username || s.username) && (
+                              <Text style={{ fontSize: 11, color: sub }}>{s.user?.username || s.username}</Text>
+                            )}
+                          </View>
+                          <TouchableOpacity
+                            style={[styles.revokeBtn, { borderColor: '#EF4444' }]}
+                            onPress={() => revokeShare(shareModalDoc?.id, s)}
+                          >
+                            <Text style={{ fontSize: 11, color: '#EF4444', fontWeight: '700' }}>🗑 Revoke</Text>
+                          </TouchableOpacity>
+                        </View>
+                      );
+                    })}
+                  </View>
+                </View>
+              )}
+
+              {/* Select user to share with */}
+              <Text style={[styles.shareFieldLabel, { color: sub }]}>Select User *</Text>
+              <TouchableOpacity
+                style={[styles.sharePickerBtn, { borderColor: shareUserOpen ? '#4ECDC4' : bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
+                onPress={() => setShareUserOpen(v => !v)}
+                disabled={sharing}
+              >
+                <Text style={{ flex: 1, fontSize: 13, color: shareUserId ? txt : sub }} numberOfLines={1}>
+                  {users.find(u => u.id === shareUserId)?.full_name ||
+                   users.find(u => u.id === shareUserId)?.name ||
+                   users.find(u => u.id === shareUserId)?.username || 'Click to select a user…'}
+                </Text>
+                <Text style={{ color: sub, fontSize: 11 }}>{shareUserOpen ? '▲' : '▾'}</Text>
+              </TouchableOpacity>
+
+              {/* User dropdown */}
+              {shareUserOpen && (
+                <View style={[styles.shareDropdown, { backgroundColor: card, borderColor: '#4ECDC4', shadowColor: '#000' }]}>
+                  <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+                    {users.map(u => {
+                      const uName = u.full_name || u.name || u.username || 'User';
+                      const selected = shareUserId === u.id;
+                      return (
+                        <TouchableOpacity
+                          key={u.id}
+                          style={[
+                            styles.shareUserRow,
+                            { borderBottomColor: bdr },
+                            selected && { backgroundColor: isDark ? '#1A2E2E' : '#F0FFFE' },
+                          ]}
+                          onPress={() => { setShareUserId(u.id); setShareUserOpen(false); }}
+                        >
+                          <View style={[styles.shareUserAvatar, { backgroundColor: '#4ECDC4' }]}>
+                            <Text style={styles.shareUserAvatarTxt}>{uName[0]?.toUpperCase()}</Text>
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ fontSize: 13, color: selected ? '#4ECDC4' : txt, fontWeight: selected ? '700' : '500' }}>
+                              {uName}
+                            </Text>
+                            {u.email && <Text style={{ fontSize: 11, color: sub }}>{u.email}</Text>}
+                          </View>
+                          {selected && <Text style={{ color: '#4ECDC4', fontWeight: '700' }}>✓</Text>}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+              )}
+
+              {/* Action buttons */}
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
+                <TouchableOpacity
+                  style={[styles.shareCancelBtn, { borderColor: bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
+                  onPress={() => { setShareModalDoc(null); setShareUserId(null); setShareUserOpen(false); }}
+                  disabled={sharing}
+                >
+                  <Text style={{ fontSize: 14, fontWeight: '600', color: sub }}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.shareConfirmBtn, sharing && { opacity: 0.6 }]}
+                  onPress={() => shareDocument(shareModalDoc, shareUserId)}
+                  disabled={sharing || !shareUserId}
+                >
+                  {sharing
+                    ? <ActivityIndicator color="#fff" size="small" />
+                    : <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>Share</Text>
+                  }
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* ── Upload / New Document Modal ─────────────────────────────────── */}
       <Modal
         visible={uploadModalVisible}
@@ -974,6 +1666,207 @@ export default function DocumentsScreen() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      {/* ── Document Detail Panel ─────────────────────────────────────────── */}
+      {detailDoc && (
+        <Modal
+          visible={!!detailDoc}
+          transparent={false}
+          animationType="slide"
+          statusBarTranslucent
+          onRequestClose={() => { setDetailDoc(null); setShowWebView(false); }}
+        >
+          <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={card} translucent={false} />
+          <SafeAreaView style={[styles.detailSafe, { backgroundColor: bg }]} edges={['top', 'left', 'right', 'bottom']}>
+            {/* Detail header */}
+            <View style={[styles.detailHeader, { backgroundColor: card, borderBottomColor: bdr }]}>
+              <TouchableOpacity onPress={() => { setDetailDoc(null); setShowWebView(false); }} style={styles.detailBackBtn}>
+                <Text style={{ color: '#4ECDC4', fontSize: 14, fontWeight: '600' }}>← Back</Text>
+              </TouchableOpacity>
+              <Text style={[styles.detailHeaderTitle, { color: txt }]} numberOfLines={1}>
+                {detailDoc?.name || detailDoc?.file_name || 'Document'}
+              </Text>
+              <TouchableOpacity
+                onPress={() => {
+                  const url = detailDoc?.source_file || detailDoc?.source_file_url || detailDoc?.file_url;
+                  if (url) Linking.openURL(url).catch(() => {});
+                }}
+                style={styles.detailOpenBtn}
+              >
+                <Text style={{ color: '#4ECDC4', fontSize: 12, fontWeight: '600' }}>⬡ Browser</Text>
+              </TouchableOpacity>
+            </View>
+
+            {showWebView ? (
+              /* ── WebView ── */
+              (() => {
+                const url = detailDoc?.source_file || detailDoc?.source_file_url || detailDoc?.file_url;
+                const ext = (detailDoc?.name || '').split('.').pop().toLowerCase();
+                const isImage = ['png','jpg','jpeg','gif','webp','heic','bmp','svg'].includes(ext);
+                const isPdf   = ext === 'pdf';
+                const viewUrl = isPdf
+                  ? `https://docs.google.com/viewer?url=${encodeURIComponent(url)}&embedded=true`
+                  : isImage ? null : `https://docs.google.com/viewer?url=${encodeURIComponent(url)}&embedded=true`;
+
+                return isImage ? (
+                  <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: isDark ? '#0D0D0F' : '#F5F5F7' }}>
+                    <Image source={{ uri: url }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
+                  </View>
+                ) : (
+                  <WebView
+                    source={{ uri: viewUrl || url }}
+                    style={{ flex: 1 }}
+                    startInLoadingState
+                    renderLoading={() => (
+                      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                        <ActivityIndicator size="large" color="#4ECDC4" />
+                        <Text style={{ color: sub, marginTop: 12 }}>Loading document…</Text>
+                      </View>
+                    )}
+                    onError={() => Alert.alert('Could not load', 'Try opening in browser instead.')}
+                  />
+                );
+              })()
+            ) : (
+              /* ── Detail info ── */
+              <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
+                {/* File icon + name */}
+                <View style={[styles.detailCard, { backgroundColor: card, borderColor: bdr }]}>
+                  <View style={styles.detailTopRow}>
+                    {(() => {
+                      const ext  = (detailDoc?.name || '').split('.').pop().toLowerCase();
+                      const meta = TYPE_META[ext] || FALLBACK_META;
+                      return <FileIcon ext={ext} meta={meta} />;
+                    })()}
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <Text style={[{ fontSize: 15, fontWeight: '700', color: txt }]} numberOfLines={2}>
+                        {detailDoc?.name || detailDoc?.file_name}
+                      </Text>
+                      <Text style={[{ fontSize: 11, color: sub, marginTop: 4 }]}>
+                        {(detailDoc?.name || '').split('.').pop().toUpperCase()} file
+                      </Text>
+                    </View>
+                  </View>
+
+                  {/* Metadata rows */}
+                  {[
+                    { label: 'Type',    value: (detailDoc?.name || '').split('.').pop().toUpperCase() },
+                    { label: 'Status',  value: detailDoc?.status ? detailDoc.status.replace('_', ' ').toUpperCase() : 'DRAFT' },
+                    { label: 'Project', value: projectMap[detailDoc?.project] || `Project ${detailDoc?.project}` || '—' },
+                    { label: 'Owner',   value: detailDoc?.created_by?.full_name || detailDoc?.created_by?.username || '—' },
+                    { label: 'Created', value: detailDoc?.created_at ? new Date(detailDoc.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—' },
+                    { label: 'Updated', value: detailDoc?.updated_at ? new Date(detailDoc.updated_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—' },
+                    { label: 'Location', value: `/ ${projectMap[detailDoc?.project] || 'Documents'}` },
+                  ].map(({ label, value }) => (
+                    <View key={label} style={[styles.detailMetaRow, { borderTopColor: bdr }]}>
+                      <Text style={[styles.detailMetaLabel, { color: sub }]}>{label}</Text>
+                      <Text style={[styles.detailMetaValue, { color: txt }]} numberOfLines={1}>{value}</Text>
+                    </View>
+                  ))}
+
+                  {/* Tags */}
+                  {(detailDoc?.tags || []).length > 0 && (
+                    <View style={[styles.detailMetaRow, { borderTopColor: bdr }]}>
+                      <Text style={[styles.detailMetaLabel, { color: sub }]}>Tags</Text>
+                      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, flex: 1, justifyContent: 'flex-end' }}>
+                        {(detailDoc.tags || []).map((tag, i) => (
+                          <View key={i} style={[styles.tagPill, { backgroundColor: (tag.color || '#6B7280') + '22', borderColor: (tag.color || '#6B7280') + '44' }]}>
+                            <Text style={[styles.tagPillTxt, { color: tag.color || '#6B7280', fontSize: 10 }]}>{tag.name || tag}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+                  )}
+                </View>
+
+                {/* Open document button */}
+                <TouchableOpacity
+                  style={[styles.openDocBtn, { backgroundColor: '#1A1A2E' }]}
+                  onPress={() => setShowWebView(true)}
+                >
+                  <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>⬡ Open Document</Text>
+                </TouchableOpacity>
+
+                {/* Open in browser */}
+                <TouchableOpacity
+                  style={[styles.openDocBtnOutline, { borderColor: bdr }]}
+                  onPress={() => {
+                    const url = detailDoc?.source_file || detailDoc?.source_file_url || detailDoc?.file_url;
+                    if (url) Linking.openURL(url).catch(() => Alert.alert('Error', 'Could not open URL.'));
+                    else Alert.alert('Unavailable', 'No URL available for this document.');
+                  }}
+                >
+                  <Text style={{ color: sub, fontSize: 13, fontWeight: '600' }}>🌐 Open in Browser</Text>
+                </TouchableOpacity>
+              </ScrollView>
+            )}
+
+            {/* ── Bottom toolbar ── */}
+            <SafeAreaView edges={['bottom']} style={[styles.viewerBottomBar, { backgroundColor: card, borderTopColor: bdr }]}>
+              <TouchableOpacity style={styles.viewerBottomBtn} onPress={() => setShowInfo(v => !v)}>
+                <Text style={[styles.viewerBottomIcon, { color: showInfo ? '#4ECDC4' : sub }]}>ⓘ</Text>
+                <Text style={[styles.viewerBottomLabel, { color: showInfo ? '#4ECDC4' : sub }]}>Info</Text>
+              </TouchableOpacity>
+              {!showWebView ? (
+                <TouchableOpacity style={styles.viewerBottomBtn} onPress={() => setShowWebView(true)}>
+                  <Text style={[styles.viewerBottomIcon, { color: sub }]}>⬡</Text>
+                  <Text style={[styles.viewerBottomLabel, { color: sub }]}>View</Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity style={styles.viewerBottomBtn} onPress={() => setShowWebView(false)}>
+                  <Text style={[styles.viewerBottomIcon, { color: sub }]}>☰</Text>
+                  <Text style={[styles.viewerBottomLabel, { color: sub }]}>Details</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity style={styles.viewerBottomBtn} onPress={() => {
+                const url = detailDoc?.source_file || detailDoc?.source_file_url || detailDoc?.file_url;
+                if (url) Linking.openURL(url).catch(() => {});
+              }}>
+                <Text style={[styles.viewerBottomIcon, { color: sub }]}>⬆</Text>
+                <Text style={[styles.viewerBottomLabel, { color: sub }]}>Browser</Text>
+              </TouchableOpacity>
+            </SafeAreaView>
+
+            {/* ── Info panel (slides up on ⓘ tap) ── */}
+            {showInfo && (
+              <View style={[styles.infoPanel, { backgroundColor: isDark ? '#1C1C1E' : '#F2F2F7' }]}>
+                <View style={[styles.infoPanelHandle, { backgroundColor: isDark ? '#48484A' : '#C7C7CC' }]} />
+                <Text style={[styles.infoPanelTitle, { color: txt }]}>{detailDoc?.name || 'Document'}</Text>
+                {[
+                  { label: 'Type',    value: (detailDoc?.name || '').split('.').pop().toUpperCase() },
+                  { label: 'Status',  value: (detailDoc?.status || 'draft').replace('_', ' ').toUpperCase() },
+                  { label: 'Project', value: projectMap[detailDoc?.project] || '—' },
+                  { label: 'Owner',   value: detailDoc?.created_by?.full_name || detailDoc?.created_by?.username || '—' },
+                  { label: 'Created', value: detailDoc?.created_at ? new Date(detailDoc.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—' },
+                  { label: 'Updated', value: detailDoc?.updated_at ? new Date(detailDoc.updated_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—' },
+                ].map(({ label, value }) => (
+                  <View key={label} style={[styles.infoRow, { borderBottomColor: isDark ? '#38383A' : '#E5E5EA' }]}>
+                    <Text style={[styles.infoLabel, { color: isDark ? '#8E8E93' : '#6C6C70' }]}>{label}</Text>
+                    <Text style={[styles.infoValue, { color: txt }]} numberOfLines={1}>{value}</Text>
+                  </View>
+                ))}
+                {(detailDoc?.tags || []).length > 0 && (
+                  <View style={[styles.infoRow, { borderBottomColor: isDark ? '#38383A' : '#E5E5EA' }]}>
+                    <Text style={[styles.infoLabel, { color: isDark ? '#8E8E93' : '#6C6C70' }]}>Tags</Text>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, justifyContent: 'flex-end', flex: 1 }}>
+                      {(detailDoc.tags || []).map((tag, i) => (
+                        <View key={i} style={[styles.tagPill, { backgroundColor: (tag.color || '#6B7280') + '22', borderColor: (tag.color || '#6B7280') + '44' }]}>
+                          <Text style={[styles.tagPillTxt, { color: tag.color || '#6B7280' }]}>{tag.name || tag}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+                )}
+                <TouchableOpacity onPress={() => setShowInfo(false)} style={styles.infoDoneBtn}>
+                  <Text style={{ color: '#4ECDC4', fontSize: 14, fontWeight: '600' }}>Done</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+          </SafeAreaView>
+        </Modal>
+      )}
+
     </SafeAreaView>
   );
 }
@@ -1121,6 +2014,123 @@ const styles = StyleSheet.create({
   pickerRowText: { flex: 1, marginRight: 8 },
 
   // ── Upload button styles (sub-header) ──
+  // ── Tag + status pills on card ──
+  tagPill: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 5, borderWidth: 1 },
+  tagPillTxt: { fontWeight: '700', letterSpacing: 0.2 },
+  statusPill: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 5 },
+  statusPillTxt: { fontWeight: '800', letterSpacing: 0.3 },
+  sharedBadge: {
+    paddingHorizontal: 6, paddingVertical: 2, borderRadius: 5,
+    borderWidth: 1, marginLeft: 4,
+  },
+
+  // ── Tags modal ──
+  createTagBtn: {
+    borderWidth: 1, borderStyle: 'dashed', borderRadius: 10,
+    paddingVertical: 12, alignItems: 'center',
+  },
+  tagRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    borderRadius: 8, paddingHorizontal: 14, paddingVertical: 12,
+  },
+  tagCheckbox: {
+    width: 20, height: 20, borderRadius: 4, borderWidth: 2,
+    justifyContent: 'center', alignItems: 'center',
+  },
+
+  // ── Revoke button ──
+  revokeBtn: {
+    paddingHorizontal: 8, paddingVertical: 5,
+    borderRadius: 6, borderWidth: 1,
+  },
+
+  // ── Selection ──
+  selectionCheck: {
+    width: 22, height: 22, borderRadius: 11, borderWidth: 2,
+    justifyContent: 'center', alignItems: 'center',
+    marginRight: 8, flexShrink: 0,
+  },
+  actionBarBtn: {
+    paddingHorizontal: 10, paddingVertical: 7,
+    borderRadius: 8, borderWidth: 1,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  actionBarBtnTxt: { fontSize: 11, fontWeight: '700' },
+
+  // ── Share modal ──
+  shareOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  shareFloating: {
+    width: '100%',
+    maxWidth: 400,
+    borderRadius: 16,
+    borderWidth: 1,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25,
+    shadowRadius: 20,
+    elevation: 20,
+  },
+  shareHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+  },
+  shareTitle: { flex: 1, fontSize: 16, fontWeight: '700' },
+  shareDocName: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 16,
+  },
+  shareFieldLabel: { fontSize: 11, fontWeight: '600', letterSpacing: 0.3, marginBottom: 8 },
+  sharePickerBtn: {
+    flexDirection: 'row', alignItems: 'center',
+    borderWidth: 1.5, borderRadius: 10,
+    paddingHorizontal: 14, height: 46,
+  },
+  shareDropdown: {
+    borderWidth: 1.5, borderRadius: 10,
+    marginTop: 6, overflow: 'hidden',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15, shadowRadius: 8, elevation: 8,
+  },
+  shareUserRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 14, paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    gap: 10,
+  },
+  shareUserAvatar: {
+    width: 32, height: 32, borderRadius: 16,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  shareUserAvatarTxt: { color: '#1A1A2E', fontSize: 12, fontWeight: '700' },
+  shareCancelBtn: {
+    flex: 1, height: 46, borderWidth: 1,
+    borderRadius: 10, justifyContent: 'center', alignItems: 'center',
+  },
+  shareConfirmBtn: {
+    flex: 1, height: 46,
+    backgroundColor: '#1A1A2E',
+    borderRadius: 10, justifyContent: 'center', alignItems: 'center',
+  },
+
+  // ── Old share card (remove) ──
+  shareModalCard: { width: 0, height: 0 },
+  userAvatar: { width: 28, height: 28, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginRight: 8 },
+  userAvatarTxt: { color: '#1A1A2E', fontSize: 11, fontWeight: '700' },
+
   uploadBtn: {
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: 10, paddingVertical: 7,
@@ -1178,6 +2188,42 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderRadius: 10,
     padding: 12, marginTop: 14, marginBottom: 16,
   },
+  // ── Document detail panel ──
+  detailSafe: { flex: 1 },
+  detailHeader: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 14, paddingVertical: 12,
+    borderBottomWidth: 1, gap: 10,
+  },
+  detailBackBtn: { width: 70 },
+  detailHeaderTitle: { flex: 1, fontSize: 13, fontWeight: '700', textAlign: 'center' },
+  detailOpenBtn: { width: 70, alignItems: 'flex-end' },
+  detailCard: {
+    borderRadius: 14, borderWidth: 1,
+    marginBottom: 16, overflow: 'hidden',
+  },
+  detailTopRow: {
+    flexDirection: 'row', alignItems: 'center',
+    padding: 16, gap: 12,
+  },
+  detailMetaRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 16, paddingVertical: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    gap: 12,
+  },
+  detailMetaLabel: { fontSize: 12, fontWeight: '600', width: 70 },
+  detailMetaValue: { flex: 1, fontSize: 13, fontWeight: '500', textAlign: 'right' },
+  openDocBtn: {
+    height: 50, borderRadius: 12,
+    justifyContent: 'center', alignItems: 'center',
+    marginBottom: 12,
+  },
+  openDocBtnOutline: {
+    height: 46, borderRadius: 12, borderWidth: 1,
+    justifyContent: 'center', alignItems: 'center',
+  },
+
   uploadCancelBtn: {
     flex: 1, height: 48, borderWidth: 1,
     borderRadius: 10, justifyContent: 'center', alignItems: 'center',
@@ -1187,4 +2233,31 @@ const styles = StyleSheet.create({
     backgroundColor: '#1A1A2E',
     borderRadius: 10, justifyContent: 'center', alignItems: 'center',
   },
+
+  // ── Bottom toolbar ──
+  viewerBottomBar: {
+    flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center',
+    paddingVertical: 8, borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  viewerBottomBtn: { alignItems: 'center', paddingHorizontal: 20, paddingVertical: 4 },
+  viewerBottomIcon: { fontSize: 22 },
+  viewerBottomLabel: { fontSize: 10, marginTop: 2, fontWeight: '500' },
+
+  // ── Info panel ──
+  infoPanel: {
+    position: 'absolute', bottom: 0, left: 0, right: 0,
+    borderTopLeftRadius: 16, borderTopRightRadius: 16,
+    padding: 16, paddingBottom: 32,
+    shadowColor: '#000', shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.2, shadowRadius: 12, elevation: 20,
+  },
+  infoPanelHandle: { width: 36, height: 4, borderRadius: 2, alignSelf: 'center', marginBottom: 14 },
+  infoPanelTitle: { fontSize: 15, fontWeight: '700', marginBottom: 12 },
+  infoRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  infoLabel: { fontSize: 13, fontWeight: '500' },
+  infoValue: { fontSize: 13, fontWeight: '400', maxWidth: '60%', textAlign: 'right' },
+  infoDoneBtn: { alignItems: 'center', marginTop: 16, paddingVertical: 8 },
 });

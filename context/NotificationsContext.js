@@ -1,120 +1,255 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import WebSocketService from '../services/WebSocketService';
 
-const STORAGE_KEY = 'DYUKSA_QUICK_TASKS';
-const NOTIF_KEY   = 'DYUKSA_NOTIFICATIONS';
-const FIRED_KEY   = 'DYUKSA_REMINDER_FIRED';
+const NOTIF_KEY    = 'DYUKSA_NOTIFICATIONS';
 const SETTINGS_KEY = 'DYUKSA_SETTINGS';
+const BASE_URL     = 'http://192.168.1.164:8000/api/v1';
 
 export const NotificationsContext = createContext({
-  notifications: [],
-  unreadCount: 0,
+  notifications:   [],
+  unreadCount:     0,
+  loading:         false,
+  fetchNotifications: async () => {},
+  markAllRead:     async () => {},
+  markOneRead:     async () => {},
+  clearAll:        () => {},
   addNotification: () => {},
-  markAllRead: () => {},
-  clearAll: () => {},
 });
+
+// ── Notification type → icon + colour ────────────────────────────────────────
+export const TYPE_META = {
+  task_assigned:      { icon: '📋', color: '#4ECDC4' },
+  task_completed:     { icon: '✅', color: '#4ADE80' },
+  task_status_updated:{ icon: '🔄', color: '#60A5FA' },
+  document_shared:    { icon: '📄', color: '#A78BFA' },
+  event_created:      { icon: '📅', color: '#FBBF24' },
+  new_message:        { icon: '💬', color: '#F472B6' },
+  system:             { icon: '🔔', color: '#9898A6' },
+  reminder:           { icon: '⏰', color: '#F59E0B' },
+};
+
+const metaFor = (type) => TYPE_META[type] || { icon: '🔔', color: '#9898A6' };
 
 export function NotificationsProvider({ children }) {
   const [notifications, setNotifications] = useState([]);
+  const [unreadCount,   setUnreadCount]   = useState(0);
+  const [loading,       setLoading]       = useState(false);
+  const tokenRef = useRef(null);
 
-  useEffect(() => {
-    AsyncStorage.getItem(NOTIF_KEY).then(data => {
-      if (data) setNotifications(JSON.parse(data));
+  // ── Get token helper ──────────────────────────────────────────────
+  const getToken = async () => {
+    try { return await AsyncStorage.getItem('DYUKSA_AUTH_TOKEN'); }
+    catch { return null; }
+  };
+
+  // ── Fetch from backend ────────────────────────────────────────────
+  const fetchNotifications = useCallback(async () => {
+    const token = await getToken();
+    if (!token) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`${BASE_URL}/notification/`, {
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const list = data.notifications || [];
+
+      // Normalise to app shape
+      const normalised = list.map(n => ({
+        id:        String(n.id),
+        title:     n.title || 'Notification',
+        body:      n.message?.replace(/<[^>]*>/g, '') || '',  // strip HTML tags
+        type:      n.notification_type || 'system',
+        icon:      metaFor(n.notification_type).icon,
+        color:     metaFor(n.notification_type).color,
+        read:      n.is_read,
+        time:      n.created_at,
+        time_since:n.time_since,
+        priority:  n.priority,
+        actor:     n.actor_name,
+        metadata:  n.metadata || {},
+      }));
+
+      setNotifications(normalised);
+      setUnreadCount(data.unread_count ?? normalised.filter(n => !n.read).length);
+      await AsyncStorage.setItem(NOTIF_KEY, JSON.stringify(normalised));
+    } catch (e) {
+      console.warn('fetchNotifications error:', e.message);
+      // Fall back to cached
+      const cached = await AsyncStorage.getItem(NOTIF_KEY);
+      if (cached) {
+        const list = JSON.parse(cached);
+        setNotifications(list);
+        setUnreadCount(list.filter(n => !n.read).length);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // ── Mark all read — calls individual mark-read for each unread ───
+  const markAllRead = useCallback(async () => {
+    const token = await getToken();
+    if (!token) return;
+    // Get unread ids before optimistic update
+    setNotifications(prev => {
+      const unreadIds = prev.filter(n => !n.read).map(n => n.id);
+      // Fire individual mark-read requests in background (no await)
+      if (token && unreadIds.length > 0) {
+        Promise.all(unreadIds.map(id =>
+          fetch(`${BASE_URL}/notification/${id}/mark-read/`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          }).catch(() => {})
+        ));
+      }
+      const next = prev.map(n => ({ ...n, read: true }));
+      setUnreadCount(0);
+      return next;
     });
   }, []);
 
-  const persist = (list) => AsyncStorage.setItem(NOTIF_KEY, JSON.stringify(list));
+  // ── Mark one read ─────────────────────────────────────────────────
+  const markOneRead = useCallback(async (id) => {
+    const token = await getToken();
+    setNotifications(prev => {
+      const next = prev.map(n => n.id === id ? { ...n, read: true } : n);
+      setUnreadCount(next.filter(n => !n.read).length);
+      return next;
+    });
+    if (!token) return;
+    try {
+      await fetch(`${BASE_URL}/notification/${id}/mark-read/`, {
+        method:  'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      });
+    } catch (e) {
+      console.warn('markOneRead error:', e.message);
+    }
+  }, []);
 
-  // Check if a notification type is enabled in settings
-  const isEnabled = async (type) => {
+  // ── Clear all (local only) ────────────────────────────────────────
+  // ── Clear all (local + backend) ───────────────────────────────────
+  const clearAll = useCallback(async () => {
+    const token = await getToken();
+    const current = await AsyncStorage.getItem(NOTIF_KEY);
+    const ids = current ? JSON.parse(current).map(n => n.id) : [];
+
+    // Clear local immediately
+    setNotifications([]);
+    setUnreadCount(0);
+    await AsyncStorage.removeItem(NOTIF_KEY);
+
+    // Delete each from backend in background
+    if (token && ids.length > 0) {
+      Promise.all(ids.map(id =>
+        fetch(`${BASE_URL}/notification/${id}/`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        }).catch(() => {})
+      ));
+    }
+  }, []);
+
+  // ── Add local notification (from in-app events) ───────────────────
+  const addNotification = useCallback(async (notif) => {
     try {
       const raw = await AsyncStorage.getItem(SETTINGS_KEY);
-      if (!raw) return true; // default on
-      const settings = JSON.parse(raw);
-      if (type === 'task')     return settings.taskAssign     !== false;
-      if (type === 'event')    return settings.desktopNotif   !== false;
-      if (type === 'reminder') return settings.desktopNotif   !== false;
-      if (type === 'project')  return settings.desktopNotif   !== false;
-      return true;
-    } catch { return true; }
-  };
-
-  const addNotification = useCallback(async (notif) => {
-    const enabled = await isEnabled(notif.type);
-    if (!enabled) return; // respect notification preferences
+      if (raw) {
+        const s = JSON.parse(raw);
+        if (notif.type === 'task'  && s.taskAssign   === false) return;
+        if (notif.type === 'event' && s.desktopNotif === false) return;
+      }
+    } catch {}
 
     setNotifications(prev => {
       const next = [
         { id: Date.now().toString(), read: false, time: new Date().toISOString(), ...notif },
         ...prev,
-      ].slice(0, 50);
-      persist(next);
+      ].slice(0, 100);
+      setUnreadCount(next.filter(n => !n.read).length);
       return next;
     });
   }, []);
 
-  const markAllRead = useCallback(() => {
-    setNotifications(prev => {
-      const next = prev.map(n => ({ ...n, read: true }));
-      persist(next);
-      return next;
-    });
-  }, []);
-
-  const clearAll = useCallback(() => {
-    setNotifications([]);
-    AsyncStorage.removeItem(NOTIF_KEY);
-  }, []);
-
-  // Hourly event reminder check
+  // ── Fetch on mount + poll every 60s ──────────────────────────────
   useEffect(() => {
-    const checkReminders = async () => {
-      try {
-        const enabled = await isEnabled('reminder');
-        if (!enabled) return;
-
-        const data = await AsyncStorage.getItem(STORAGE_KEY);
-        if (!data) return;
-        const items  = JSON.parse(data);
-        const events = items.filter(i => i.type === 'event' && i.eventDate);
-
-        const firedRaw = await AsyncStorage.getItem(FIRED_KEY);
-        const fired    = firedRaw ? JSON.parse(firedRaw) : [];
-        const newFired = [...fired];
-        const now      = new Date();
-
-        for (const ev of events) {
-          const parsed    = new Date(ev.eventDate.replace(' at ', ' '));
-          if (isNaN(parsed)) continue;
-          const hoursUntil = (parsed - now) / (1000 * 60 * 60);
-
-          const rid = `reminder_${ev.id}`;
-          if (hoursUntil > 0 && hoursUntil <= 25 && hoursUntil >= 23 && !fired.includes(rid)) {
-            addNotification({ type: 'reminder', icon: '⏰', title: 'Event Tomorrow', body: `"${ev.name}" is scheduled for tomorrow.` });
-            newFired.push(rid);
-          }
-
-          const sid = `sameday_${ev.id}`;
-          if (hoursUntil > 0 && hoursUntil <= 2 && !fired.includes(sid)) {
-            addNotification({ type: 'reminder', icon: '🔔', title: 'Event Soon', body: `"${ev.name}" starts in less than 2 hours!` });
-            newFired.push(sid);
-          }
-        }
-
-        if (newFired.length !== fired.length)
-          await AsyncStorage.setItem(FIRED_KEY, JSON.stringify(newFired));
-      } catch {}
-    };
-
-    checkReminders();
-    const interval = setInterval(checkReminders, 60 * 60 * 1000);
+    fetchNotifications();
+    const interval = setInterval(fetchNotifications, 60 * 1000);
     return () => clearInterval(interval);
-  }, [addNotification]);
+  }, [fetchNotifications]);
 
-  const unreadCount = notifications.filter(n => !n.read).length;
+  // ── WebSocket — real-time notifications ───────────────────────────
+  useEffect(() => {
+    const unsubscribe = WebSocketService.subscribe((message) => {
+      console.log('🔔 WS received in context:', message?.type, Object.keys(message || {}));
+
+      // Filter out WebSocket system/connection messages — not real notifications
+      const systemTypes = [
+        'gateway_connected', 'gateway.connected', 'GATEWAY CONNECTED',
+        'presence_sync',     'presence.sync',     'PRESENCE SYNC',
+        'ping', 'pong', 'heartbeat', 'connect', 'disconnect',
+        'welcome', 'connected', 'connection_established',
+      ];
+      const msgType = (message?.type || '').toLowerCase().replace(/[\s_]/g, '');
+      if (systemTypes.some(t => t.toLowerCase().replace(/[\s_]/g, '') === msgType)) {
+        console.log('🔕 Ignoring system WS message:', message?.type);
+        return;
+      }
+
+      // Unwrap nested data if present
+      const payload = message?.data || message?.notification || message?.payload || message;
+
+      // Must have meaningful content — not just a type
+      const hasTitle   = payload?.title || payload?.heading;
+      const hasMessage = payload?.message || payload?.body || payload?.content;
+
+      // Skip if no real content
+      if (!hasTitle && !hasMessage) return;
+
+      const cleanMessage = (str) => (str || '').replace(/<[^>]*>/g, '').trim();
+      const notifType    = payload?.notification_type || message?.type || payload?.type || 'system';
+      const cfg          = metaFor(notifType);
+
+      const n = {
+        id:         String(payload?.id || message?.id || Date.now()),
+        title:      payload?.title || payload?.heading || 'Notification',
+        body:       cleanMessage(payload?.message || payload?.body || payload?.content || ''),
+        type:       notifType,
+        icon:       cfg.icon,
+        color:      cfg.color,
+        read:       payload?.is_read || false,
+        time:       payload?.created_at || message?.timestamp || new Date().toISOString(),
+        time_since: 'just now',
+        priority:   payload?.priority || 'medium',
+        actor:      payload?.actor_name || payload?.sender || message?.sender || null,
+        metadata:   payload?.metadata || {},
+      };
+
+      setNotifications(prev => {
+        if (prev.some(p => p.id === n.id)) return prev;
+        const next = [n, ...prev].slice(0, 100);
+        setUnreadCount(next.filter(x => !x.read).length);
+        return next;
+      });
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   return (
-    <NotificationsContext.Provider value={{ notifications, unreadCount, addNotification, markAllRead, clearAll }}>
+    <NotificationsContext.Provider value={{
+      notifications,
+      unreadCount,
+      loading,
+      fetchNotifications,
+      markAllRead,
+      markOneRead,
+      clearAll,
+      addNotification,
+    }}>
       {children}
     </NotificationsContext.Provider>
   );

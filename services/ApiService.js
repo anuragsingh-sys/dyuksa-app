@@ -9,11 +9,27 @@ const REFRESH_KEY      = 'DYUKSA_REFRESH_TOKEN';
 const WORKSPACE_ID_KEY = 'DYUKSA_WORKSPACE_ID';
 
 // ─────────────────────────────────────────────────────────────────────────────
+// IN-MEMORY TOKEN CACHE
+// Prevents AsyncStorage reads AND redundant refresh calls on every screen switch
+// ─────────────────────────────────────────────────────────────────────────────
+let _cachedToken       = null;
+let _cachedWorkspaceId = null;
+let _refreshPromise    = null; // mutex — only one refresh at a time
+
+export const setCachedToken       = (t)  => { _cachedToken = t; };
+export const setCachedWorkspaceId = (id) => { _cachedWorkspaceId = id; };
+export const clearTokenCache      = ()   => { _cachedToken = null; _cachedWorkspaceId = null; };
+
+// ─────────────────────────────────────────────────────────────────────────────
 // TOKEN + WORKSPACE HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 export const getAccessToken = async () => {
-  try { return await AsyncStorage.getItem(AUTH_TOKEN_KEY); }
-  catch { return null; }
+  if (_cachedToken) return _cachedToken;
+  try {
+    const t = await AsyncStorage.getItem(AUTH_TOKEN_KEY);
+    if (t) _cachedToken = t;
+    return t;
+  } catch { return null; }
 };
 
 export const getRefreshToken = async () => {
@@ -23,12 +39,17 @@ export const getRefreshToken = async () => {
 
 /** Get the currently active workspace ID (null if not set) */
 export const getWorkspaceId = async () => {
-  try { return await AsyncStorage.getItem(WORKSPACE_ID_KEY); }
-  catch { return null; }
+  if (_cachedWorkspaceId) return _cachedWorkspaceId;
+  try {
+    const id = await AsyncStorage.getItem(WORKSPACE_ID_KEY);
+    if (id) _cachedWorkspaceId = id;
+    return id;
+  } catch { return null; }
 };
 
 /** Persist the active workspace ID after a successful switch */
 export const setWorkspaceId = async (id) => {
+  _cachedWorkspaceId = id ? String(id) : null;
   try {
     if (id == null) await AsyncStorage.removeItem(WORKSPACE_ID_KEY);
     else            await AsyncStorage.setItem(WORKSPACE_ID_KEY, String(id));
@@ -58,6 +79,55 @@ const authHeadersMultipart = async () => {
   const headers = { 'Authorization': `Bearer ${token}` };
   if (workspaceId) headers['X-Workspace-ID'] = workspaceId;
   return headers;
+};
+
+/**
+ * fetch wrapper that:
+ * 1. Uses cached token (no AsyncStorage read if already cached)
+ * 2. On 401 — fires ONE token refresh (mutex prevents duplicate refreshes)
+ * 3. Retries the original request once with the new token
+ * 4. If refresh fails → returns the 401 response unchanged
+ */
+export const fetchWithAuth = async (url, options = {}) => {
+  const makeHeaders = async () => {
+    const token = await getAccessToken();
+    const wsId  = await getWorkspaceId();
+    const h = { 'Content-Type': 'application/json', ...(options.headers || {}), 'Authorization': `Bearer ${token}` };
+    if (wsId) h['X-Workspace-ID'] = wsId;
+    return h;
+  };
+
+  let res = await fetch(url, { ...options, headers: await makeHeaders() });
+
+  if (res.status === 401) {
+    // Only one refresh at a time — mutex
+    if (!_refreshPromise) {
+      _refreshPromise = (async () => {
+        try {
+          const refreshTok = await AsyncStorage.getItem(REFRESH_KEY);
+          if (!refreshTok) return false;
+          const r = await fetch(`${BASE_URL}/auth/token/refresh/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refresh: refreshTok }),
+          });
+          if (!r.ok) return false;
+          const data = await r.json();
+          const newToken = data.access;
+          _cachedToken = newToken;
+          await AsyncStorage.setItem(AUTH_TOKEN_KEY, newToken);
+          return true;
+        } catch { return false; }
+        finally { _refreshPromise = null; }
+      })();
+    }
+    const refreshed = await _refreshPromise;
+    if (refreshed) {
+      res = await fetch(url, { ...options, headers: await makeHeaders() });
+    }
+  }
+
+  return res;
 };
 
 /** Parse response — throw on non-2xx */

@@ -538,7 +538,7 @@ export default function DashboardScreen() {
       <ScrollView
         ref={scrollRef}
         style={[styles.scroll, { backgroundColor: bg }]}
-        contentContainerStyle={{ paddingBottom: 110 }}
+        contentContainerStyle={{ paddingBottom: 40 }}
         showsVerticalScrollIndicator={false}
       >
 
@@ -777,39 +777,78 @@ export default function DashboardScreen() {
         </View>
 
         {/* ── Section 4 — Quick Actions (with inline Quick Notes expansion) ── */}
-        <View ref={quickActionsRef} style={[styles.card, { marginBottom: 24, backgroundColor: card, borderColor: bdr }]}>
+        <View ref={quickActionsRef} style={[styles.card, { marginBottom: 10, backgroundColor: card, borderColor: bdr }]}>
           <Text style={[styles.cardTitle, { color: txt }]}>Quick Actions</Text>
           <View style={styles.quickGrid}>
+
+            {/* Events — Exam Form icon (purple clipboard with checklist) */}
             <TouchableOpacity
-              style={[styles.quickBtn, { borderColor: bdr }]}
-              onPress={() => (() => { try { navigation.jumpTo('Calendar'); } catch { navigation.navigate('Main', { screen: 'Calendar' }); } })()}
+              style={styles.quickItem}
+              onPress={() => { try { navigation.jumpTo('Calendar'); } catch { navigation.navigate('Main', { screen: 'Calendar' }); } }}
             >
-              <Text style={styles.quickIcon}>📅</Text>
+              <View style={[styles.quickCircle, { backgroundColor: '#F3F0FF', borderColor: '#C4B5FD' }]}>
+                <View style={styles.examFormIcon}>
+                  <View style={[styles.efClip, { backgroundColor: '#7C3AED' }]} />
+                  <View style={[styles.efBody, { backgroundColor: '#fff', borderColor: '#C4B5FD' }]}>
+                    <View style={[styles.efLine, { backgroundColor: '#7C3AED', width: '80%' }]} />
+                    <View style={[styles.efLine, { backgroundColor: '#7C3AED', width: '60%' }]} />
+                    <View style={[styles.efLine, { backgroundColor: '#7C3AED', width: '70%' }]} />
+                    <View style={[styles.efDot, { backgroundColor: '#7C3AED' }]} />
+                  </View>
+                </View>
+              </View>
               <Text style={[styles.quickLabel, { color: sub }]}>Events</Text>
             </TouchableOpacity>
+
+            {/* My Tasks — Checkboard / Seating Plan style (people grid, blue) */}
             <TouchableOpacity
-              style={[styles.quickBtn, { borderColor: bdr }]}
-              onPress={() => (() => { try { navigation.jumpTo('Tasks', { presetFilter: 'mine' }); } catch { navigation.navigate('Main', { screen: 'Tasks', params: { presetFilter: 'mine' } }); } })()}
+              style={styles.quickItem}
+              onPress={() => { try { navigation.jumpTo('Tasks'); } catch { navigation.navigate('Main', { screen: 'Tasks' }); } }}
             >
-              <Text style={styles.quickIcon}>📋</Text>
+              <View style={[styles.quickCircle, { backgroundColor: '#EFF6FF', borderColor: '#93C5FD' }]}>
+                <View style={styles.seatingIcon}>
+                  {[0,1,2,3,4,5].map(i => (
+                    <View key={i} style={[styles.seatDot, { backgroundColor: i < 3 ? '#2563EB' : '#93C5FD' }]} />
+                  ))}
+                </View>
+              </View>
               <Text style={[styles.quickLabel, { color: sub }]}>My Tasks</Text>
             </TouchableOpacity>
+
+            {/* Documents — Report Card icon (teal, document with lines) */}
             <TouchableOpacity
-              style={[styles.quickBtn, { borderColor: bdr }]}
-              onPress={() => navigation.navigate('Docs')}
+              style={styles.quickItem}
+              onPress={() => { try { navigation.jumpTo('Docs'); } catch { navigation.navigate('Main', { screen: 'Docs' }); } }}
             >
-              <Text style={styles.quickIcon}>📄</Text>
+              <View style={[styles.quickCircle, { backgroundColor: '#F0FDFA', borderColor: '#5EEAD4' }]}>
+                <View style={styles.reportCardIcon}>
+                  <View style={[styles.rcDoc, { backgroundColor: '#fff', borderColor: '#5EEAD4' }]}>
+                    <View style={[styles.rcLine, { backgroundColor: '#0D9488', width: '90%' }]} />
+                    <View style={[styles.rcLine, { backgroundColor: '#0D9488', width: '70%' }]} />
+                    <View style={[styles.rcBar, { backgroundColor: '#5EEAD4' }]} />
+                    <View style={[styles.rcBar, { backgroundColor: '#5EEAD4' }]} />
+                  </View>
+                </View>
+              </View>
               <Text style={[styles.quickLabel, { color: sub }]}>Documents</Text>
             </TouchableOpacity>
+
+            {/* Quick Notes — Admit Card style (pink card with lightning) */}
             <TouchableOpacity
-              style={[styles.quickBtn, { borderColor: bdr }, notesExpanded && styles.quickBtnActive]}
+              style={styles.quickItem}
               onPress={handleQuickNotesPress}
             >
-              <Text style={styles.quickIcon}>⚡</Text>
-              <Text style={[styles.quickLabel, { color: sub }, notesExpanded && styles.quickLabelActive]}>
-                Quick{'\n'}Notes
-              </Text>
+              <View style={[styles.quickCircle, { backgroundColor: notesExpanded ? 'rgba(78,205,196,0.1)' : '#FFF1F2', borderColor: notesExpanded ? '#4ECDC4' : '#FDA4AF' }]}>
+                <View style={styles.admitCardIcon}>
+                  <View style={[styles.acCard, { backgroundColor: notesExpanded ? '#4ECDC4' : '#FB7185' }]}>
+                    <View style={[styles.acStripe, { backgroundColor: notesExpanded ? '#0D9488' : '#E11D48' }]} />
+                    <Text style={styles.acBolt}>⚡</Text>
+                  </View>
+                </View>
+              </View>
+              <Text style={[styles.quickLabel, { color: notesExpanded ? '#4ECDC4' : sub }]}>Quick Notes</Text>
             </TouchableOpacity>
+
           </View>
 
           {/* Inline Quick Notes panel — shown when expanded */}
@@ -1140,7 +1179,7 @@ const styles = StyleSheet.create({
   },
   projectAvatar: {
     width: 38, height: 38, borderRadius: 19,
-    backgroundColor: '#7C3AED',
+    backgroundColor: '#4ECDC4',
     justifyContent: 'center', alignItems: 'center',
   },
   projectAvatarText: { color: '#fff', fontSize: 16, fontWeight: '700' },
@@ -1149,12 +1188,37 @@ const styles = StyleSheet.create({
 
   // Quick Actions
   quickRow: { flexDirection: 'row', gap: 10 },
-  quickGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  quickGrid: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4, paddingHorizontal: 4 },
+  quickItem: { alignItems: 'center', gap: 8, width: '25%' },
+  quickCircle: { width: 60, height: 60, borderRadius: 30, borderWidth: 2, justifyContent: 'center', alignItems: 'center' },
   quickBtn: { width: '48%', alignItems: 'center', paddingVertical: 18, borderRadius: 10, borderWidth: 1, borderColor: '#EBEBF0', gap: 8 },
   quickBtnActive: { borderColor: '#4ECDC4', backgroundColor: 'rgba(78,205,196,0.06)' },
   quickIcon: { fontSize: 26 },
-  quickLabel: { fontSize: 10, color: '#888899', textAlign: 'center', fontWeight: '500', lineHeight: 14 },
+  quickLabel: { fontSize: 11, textAlign: 'center', fontWeight: '600', lineHeight: 14 },
   quickLabelActive: { color: '#4ECDC4', fontWeight: '700' },
+
+  // ── Exam Form icon (Events) ──
+  examFormIcon: { alignItems: 'center', width: 36, height: 40 },
+  efClip: { width: 14, height: 5, borderRadius: 3, marginBottom: -2, zIndex: 1 },
+  efBody: { width: 30, height: 36, borderRadius: 4, borderWidth: 1.5, padding: 5, gap: 3, justifyContent: 'center' },
+  efLine: { height: 2.5, borderRadius: 2 },
+  efDot: { width: 6, height: 6, borderRadius: 3, alignSelf: 'flex-start', marginTop: 1 },
+
+  // ── Seating / People grid icon (My Tasks) ──
+  seatingIcon: { flexDirection: 'row', flexWrap: 'wrap', width: 36, height: 28, gap: 4, justifyContent: 'center', alignContent: 'center' },
+  seatDot: { width: 9, height: 9, borderRadius: 5 },
+
+  // ── Report Card icon (Documents) ──
+  reportCardIcon: { alignItems: 'center' },
+  rcDoc: { width: 32, height: 38, borderRadius: 4, borderWidth: 1.5, padding: 5, gap: 4, justifyContent: 'center' },
+  rcLine: { height: 2.5, borderRadius: 2 },
+  rcBar: { height: 5, borderRadius: 2, width: '100%' },
+
+  // ── Admit Card icon (Quick Notes) ──
+  admitCardIcon: { alignItems: 'center' },
+  acCard: { width: 34, height: 26, borderRadius: 5, justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
+  acStripe: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 8 },
+  acBolt: { fontSize: 14, marginLeft: 6 },
 
   // Inline notes panel inside Quick Actions card
   notesPanel: { marginTop: 14, borderTopWidth: 1, borderTopColor: '#F0F0F5', paddingTop: 12 },
