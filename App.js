@@ -38,6 +38,10 @@ const Stack = createNativeStackNavigator();
 const Tab   = createBottomTabNavigator();
 
 function QuickTaskButton({ onPress, borderColor }) {
+  // Try to load logo — falls back to text if asset missing
+  let logoSource = null;
+  try { logoSource = require('./assets/lvlogo1_1.png'); } catch {}
+
   return (
     <View style={styles.fabWrapper}>
       <TouchableOpacity
@@ -45,11 +49,11 @@ function QuickTaskButton({ onPress, borderColor }) {
         onPress={onPress}
         activeOpacity={0.85}
       >
-        <Image
-          source={require('./assets/lvlogo1_1.png')}
-          style={styles.fabLogo}
-          resizeMode="cover"
-        />
+        {logoSource ? (
+          <Image source={logoSource} style={styles.fabLogo} resizeMode="cover" />
+        ) : (
+          <Text style={styles.fabIcon}>＋</Text>
+        )}
       </TouchableOpacity>
     </View>
   );
