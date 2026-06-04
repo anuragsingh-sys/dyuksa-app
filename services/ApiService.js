@@ -1,9 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import { API_BASE, BASE_URL, WS_BASE } from '../config';
 // ─────────────────────────────────────────────────────────────────────────────
 // BASE CONFIG
 // ─────────────────────────────────────────────────────────────────────────────
-const BASE_URL         = 'http://192.168.1.164:8000/api/v1';
+// const BASE_URL → imported from config
 const AUTH_TOKEN_KEY   = 'DYUKSA_AUTH_TOKEN';
 const REFRESH_KEY      = 'DYUKSA_REFRESH_TOKEN';
 const WORKSPACE_ID_KEY = 'DYUKSA_WORKSPACE_ID';

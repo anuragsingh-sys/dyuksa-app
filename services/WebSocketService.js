@@ -7,7 +7,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const WS_BASE = 'ws://192.168.1.164:8000/ws/gateway/';
+import { API_BASE, BASE_URL, WS_BASE } from '../config';
+// const WS_BASE → imported from config
 const AUTH_TOKEN_KEY = 'DYUKSA_AUTH_TOKEN';
 
 class WebSocketService {
@@ -93,10 +94,10 @@ class WebSocketService {
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          console.log('🔔 WS RAW:', JSON.stringify(data).slice(0, 200));
+          
           this._dispatch(data);
         } catch {
-          console.log('🔔 WS non-JSON:', String(event.data).slice(0, 100));
+          
         }
       };
 

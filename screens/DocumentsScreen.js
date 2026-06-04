@@ -13,11 +13,12 @@ import NotificationBell from '../components/NotificationBell';
 import { ThemeContext } from '../context/ThemeContext';
 import { getAccessToken, getWorkspaceId } from '../services/ApiService';
 
+import { API_BASE, BASE_URL, WS_BASE } from '../config';
 // DocumentPicker — loaded lazily so screen still works if package isn't installed
 let DocumentPicker = null;
 try { DocumentPicker = require('expo-document-picker'); } catch {}
 
-const API_BASE     = 'http://192.168.1.164:8000';
+// API_BASE → imported from config
 const DOCS_API     = `${API_BASE}/api/v1/documents/`;
 const PROJECTS_API = `${API_BASE}/api/v1/projects/`;
 

@@ -10,9 +10,10 @@ import { ThemeContext } from '../context/ThemeContext';
 import { AuthContext } from '../context/AuthContext';
 import SidebarMenu from '../components/SidebarMenu';
 import NotificationBell from '../components/NotificationBell';
-import { getAccessToken } from '../services/ApiService';
+import { getAccessToken, getWorkspaceId } from '../services/ApiService';
 
-const API_BASE = 'http://192.168.1.164:8000';
+import { API_BASE, BASE_URL, WS_BASE } from '../config';
+// const API_BASE → imported from config
 
 const fmtDate = (iso) => {
   if (!iso) return '';
@@ -125,10 +126,12 @@ export default function QuickNotesScreen() {
     setLoading(true);
     try {
       const token = await getAccessToken();
+      // quicknotes API does NOT use X-Workspace-ID
+      const headers = { Authorization: `Bearer ${token}` };
       const [fRes, nRes, pRes] = await Promise.all([
-        fetch(`${API_BASE}/api/v1/quicknotes/folders/`, { headers: { Authorization: `Bearer ${token}` } }),
-        fetch(`${API_BASE}/api/v1/quicknotes/notes/`,   { headers: { Authorization: `Bearer ${token}` } }),
-        fetch(`${API_BASE}/api/v1/projects/`,            { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(`${API_BASE}/api/v1/quicknotes/folders/`, { headers }),
+        fetch(`${API_BASE}/api/v1/quicknotes/notes/`,   { headers }),
+        fetch(`${API_BASE}/api/v1/projects/`,            { headers }),
       ]);
       if (fRes.ok) {
         const fd = await fRes.json();

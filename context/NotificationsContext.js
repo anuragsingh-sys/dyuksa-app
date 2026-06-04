@@ -2,9 +2,10 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import WebSocketService from '../services/WebSocketService';
 
+import { API_BASE, BASE_URL, WS_BASE } from '../config';
 const NOTIF_KEY    = 'DYUKSA_NOTIFICATIONS';
 const SETTINGS_KEY = 'DYUKSA_SETTINGS';
-const BASE_URL     = 'http://192.168.1.164:8000/api/v1';
+// BASE_URL → imported from config
 
 export const NotificationsContext = createContext({
   notifications:   [],
@@ -174,28 +175,26 @@ export function NotificationsProvider({ children }) {
     });
   }, []);
 
-  // ── Fetch on mount + poll every 60s ──────────────────────────────
+  // ── Fetch once on mount — WebSocket handles real-time updates ──────
   useEffect(() => {
     fetchNotifications();
-    const interval = setInterval(fetchNotifications, 60 * 1000);
-    return () => clearInterval(interval);
   }, [fetchNotifications]);
 
   // ── WebSocket — real-time notifications ───────────────────────────
   useEffect(() => {
     const unsubscribe = WebSocketService.subscribe((message) => {
-      console.log('🔔 WS received in context:', message?.type, Object.keys(message || {}));
+      
 
       // Filter out WebSocket system/connection messages — not real notifications
       const systemTypes = [
-        'gateway_connected', 'gateway.connected', 'GATEWAY CONNECTED',
-        'presence_sync',     'presence.sync',     'PRESENCE SYNC',
+        'gateway_connected', 'gateway.connected',
+        'presence_sync',     'presence.sync',     'presence',
         'ping', 'pong', 'heartbeat', 'connect', 'disconnect',
         'welcome', 'connected', 'connection_established',
       ];
       const msgType = (message?.type || '').toLowerCase().replace(/[\s_]/g, '');
       if (systemTypes.some(t => t.toLowerCase().replace(/[\s_]/g, '') === msgType)) {
-        console.log('🔕 Ignoring system WS message:', message?.type);
+        
         return;
       }
 

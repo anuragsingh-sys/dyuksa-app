@@ -18,7 +18,7 @@ import NotificationBell from '../components/NotificationBell';
 
 // Backend endpoints used to populate the project's Documents tab. Matches what
 // DocumentsScreen + TaskDetailModal use.
-const API_BASE     = 'http://192.168.1.164:8000';
+const API_BASE     = 'http://192.168.1.188:8000';
 const DOCS_API     = `${API_BASE}/api/v1/documents/`;
 const TASKSITE_API = `${API_BASE}/api/v1/tasksite/`;
 

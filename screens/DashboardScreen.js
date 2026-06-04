@@ -13,7 +13,8 @@ import { getProjects, getTasks, getAccessToken, getWorkspaceId } from '../servic
 import { canCreateProject, canManageMembers } from '../utils/permissions';
 import { useWorkspace } from '../context/WorkspaceContext';
 
-const API_BASE = 'http://192.168.1.164:8000';
+import { API_BASE, BASE_URL, WS_BASE } from '../config';
+// const API_BASE → imported from config
 
 // Always includes X-Workspace-ID so every request is workspace-aware
 const authHeaders = async () => {
@@ -227,8 +228,10 @@ export default function DashboardScreen() {
   // (title is auto-generated server-side, content is plain text)
   const fetchQuickNotes = useCallback(async () => {
     try {
+      const token = await getAccessToken();
+      // quicknotes API does NOT use X-Workspace-ID
       const res = await fetch(`${API_BASE}/api/v1/quicknotes/notes/`, {
-        headers: await authHeaders(),
+        headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error(`notes ${res.status}`);
       const data = await res.json();

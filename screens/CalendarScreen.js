@@ -17,11 +17,12 @@ import { NotificationsContext } from '../context/NotificationsContext';
 import { getUsers, getAccessToken, getWorkspaceId } from '../services/ApiService';
 import * as Notifications from 'expo-notifications';
 
+import { API_BASE, BASE_URL, WS_BASE } from '../config';
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const DAILY_UPDATE_STORAGE_KEY = 'DYUKSA_DAILY_UPDATES'; // local cache: { 'YYYY-MM-DD': { priorities, progress, blockers, upcoming } }
-const DAILY_UPDATE_API = 'http://192.168.1.164:8000/api/v1/daily-updates/';
-const EVENTS_API       = 'http://192.168.1.164:8000/api/v1/daily-updates/events/';
-const TASKS_API        = 'http://192.168.1.164:8000/api/v1/tasksite/';
+const DAILY_UPDATE_API = `${BASE_URL}/daily-updates/`;
+const EVENTS_API       = `${BASE_URL}/daily-updates/events/`;
+const TASKS_API        = `${BASE_URL}/tasksite/`;
 
 const STORAGE_KEY = 'DYUKSA_QUICK_TASKS';
 const HOURS = Array.from({ length: 16 }, (_, i) => i + 7); // 07:00 to 22:00
@@ -333,7 +334,7 @@ export default function CalendarScreen() {
       const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` };
       if (workspaceId) headers['X-Workspace-ID'] = workspaceId;
 
-      const res = await fetch('http://192.168.1.164:8000/api/v1/tasksite/', { headers });
+      const res = await fetch(`${BASE_URL}/tasksite/`, { headers });
       if (!res.ok) return;
       const data = await res.json();
       const tasks = Array.isArray(data) ? data : (data.results || []);
@@ -356,7 +357,7 @@ export default function CalendarScreen() {
     setAskDyuksaLoading(true);
     try {
       const token = await getAccessToken();
-      const res = await fetch('http://192.168.1.164:8000/api/v1/task-ai/chat/agent/', {
+      const res = await fetch(`${BASE_URL}/task-ai/chat/agent/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ message: askDyuksaText.trim() }),
@@ -511,7 +512,7 @@ export default function CalendarScreen() {
     setAiSlotsLoading(true);
     try {
       const token = await getAccessToken();
-      const res = await fetch('http://192.168.1.164:8000/api/v1/task-ai/chat/agent/', {
+      const res = await fetch(`${BASE_URL}/task-ai/chat/agent/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ message: prompt }),

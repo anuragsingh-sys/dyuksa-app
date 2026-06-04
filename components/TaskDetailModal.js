@@ -13,7 +13,7 @@ import { getAccessToken, getUsers } from '../services/ApiService';
 let DocumentPicker = null;
 try { DocumentPicker = require('expo-document-picker'); } catch {}
 
-const BASE_URL = 'http://192.168.1.164:8000/api/v1';
+const BASE_URL = 'http://192.168.1.188:8000/api/v1';
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
 const STATUS_LABELS = { pending: 'Pending', in_progress: 'In Progress', completed: 'Completed', backlog: 'Backlog', deployed: 'Deployed', deferred: 'Deferred', review: 'Review' };

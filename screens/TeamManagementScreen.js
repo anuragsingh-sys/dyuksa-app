@@ -11,7 +11,8 @@ import { getAccessToken, getWorkspaceId } from '../services/ApiService';
 import SidebarMenu from '../components/SidebarMenu';
 import NotificationBell from '../components/NotificationBell';
 
-const BASE_URL = 'http://192.168.1.164:8000/api/v1';
+import { API_BASE, BASE_URL, WS_BASE } from '../config';
+// const BASE_URL → imported from config
 
 const authHeaders = async () => {
   const token       = await getAccessToken();

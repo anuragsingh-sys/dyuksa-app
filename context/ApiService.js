@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const BASE_URL = 'http://192.168.1.164:8000/api/v1';
+const BASE_URL = 'http://192.168.1.188:8000/api/v1';
 const AUTH_TOKEN_KEY = 'DYUKSA_AUTH_TOKEN';
 
 export const getAccessToken = async () => {

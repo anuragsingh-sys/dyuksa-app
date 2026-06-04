@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { setCachedToken, clearTokenCache } from '../services/ApiService';
 import WebSocketService from '../services/WebSocketService';
 
+import { API_BASE, BASE_URL, WS_BASE } from '../config';
 const AUTH_TOKEN_KEY     = 'DYUKSA_AUTH_TOKEN';
 const AUTH_REFRESH_KEY   = 'DYUKSA_REFRESH_TOKEN';
 const AUTH_USER_KEY      = 'DYUKSA_AUTH_USER';
@@ -139,7 +140,7 @@ export function AuthProvider({ children }) {
       const refreshTok = await SecureStore.getItemAsync(AUTH_REFRESH_KEY);
       if (!refreshTok) return false;
 
-      const res = await fetch('http://192.168.1.164:8000/api/v1/auth/token/refresh/', {
+      const res = await fetch(`${BASE_URL}/auth/token/refresh/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refresh: refreshTok }),
@@ -166,7 +167,7 @@ export function AuthProvider({ children }) {
     if (!cleanUsername) return { success: false, errors: ['Username is required.'], errorField: 'username' };
     if (!password)      return { success: false, errors: ['Password is required.'], errorField: 'password' };
     try {
-      const res  = await fetch('http://192.168.1.164:8000/api/v1/auth/login/', {
+      const res  = await fetch(`${BASE_URL}/auth/login/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: cleanUsername, password }),
@@ -225,7 +226,7 @@ export function AuthProvider({ children }) {
       // ── Fetch real profile from /auth/me/ after login ──────────────
       let realUser = null;
       try {
-        const meRes = await fetch('http://192.168.1.164:8000/api/v1/auth/me/', {
+        const meRes = await fetch(`${BASE_URL}/auth/me/`, {
           headers: {
             'Content-Type':  'application/json',
             'Authorization': `Bearer ${data.access}`,

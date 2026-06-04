@@ -10,7 +10,8 @@ import { ThemeContext } from '../context/ThemeContext';
 import { AuthContext } from '../context/AuthContext';
 import { getAccessToken, getWorkspaceId } from '../services/ApiService';
 
-const BASE_URL = 'http://192.168.1.164:8000/api/v1';
+import { API_BASE, BASE_URL, WS_BASE } from '../config';
+// const BASE_URL → imported from config
 
 export default function ProfileScreen() {
   const navigation = useNavigation();
@@ -46,15 +47,18 @@ export default function ProfileScreen() {
 
       // GET /api/v1/auth/me/
       const meUrl = `${BASE_URL}/auth/me/`;
-      console.log("🔍 Fetching:", meUrl);
+      console.log('🔍 Fetching profile from:', meUrl);
+      console.log('🔑 Token:', token ? token.slice(0, 20) + '...' : 'NULL');
       const meRes = await fetch(meUrl, { method: 'GET', headers: baseHeaders });
-      console.log("📡 Status:", meRes.status);
+      console.log('📡 Response status:', meRes.status);
 
       if (meRes.ok) {
         const me = await meRes.json();
-        console.log("✅ ME DATA:", JSON.stringify(me).slice(0,300)); setProfileData(me);
+        console.log('✅ Profile data:', JSON.stringify(me).slice(0, 200));
+        setProfileData(me);
         if (me.avatar)                setAvatarUrl(me.avatar);
         if (Array.isArray(me.skills)) setSkills(me.skills);
+        console.log('🎯 Skills set:', me.skills);
         // Sync AuthContext so sidebar/other screens see updated data
         await updateUser({
           name:      [me.first_name, me.last_name].filter(Boolean).join(' ') || me.username || '',
@@ -66,7 +70,7 @@ export default function ProfileScreen() {
         });
       } else {
         const errBody = await meRes.text().catch(() => '');
-        console.log("❌ FAILED status:", meRes.status); console.warn(`GET ${meUrl} → ${meRes.status}:`, errBody);
+        console.warn(`GET ${meUrl} → ${meRes.status}:`, errBody);
       }
 
       // GET /projects/ — workspace-scoped
