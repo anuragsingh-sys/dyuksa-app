@@ -96,7 +96,7 @@ const dd = StyleSheet.create({
   itemText: { fontSize: 13 },
 });
 
-// ── Task Card ────────────────────────────────────────────────────────────────
+// ── Task Card (dev_1 UI + real API data) ─────────────────────────────────────
 function TaskCard({ item, card, txt, sub, bdr, isDark, onPress, onStatusPress, formatDate }) {
   const statusColor = STATUS_COLORS[item.status] || '#888';
   const statusBg    = STATUS_BG[item.status]    || '#F5F5F7';
@@ -118,7 +118,7 @@ function TaskCard({ item, card, txt, sub, bdr, isDark, onPress, onStatusPress, f
     return raw ? raw.trim().charAt(0).toUpperCase() : 'U';
   };
 
-  // Duration: start_date → end_date in days
+  // Duration
   const getDuration = () => {
     if (!item.start_date || !item.end_date) return null;
     try {
@@ -129,20 +129,23 @@ function TaskCard({ item, card, txt, sub, bdr, isDark, onPress, onStatusPress, f
     } catch { return null; }
   };
   const duration = getDuration();
+  const isDone = (item.status || '').toLowerCase() === 'completed';
 
   return (
     <TouchableOpacity
-      style={[styles.taskCard, { backgroundColor: card, borderColor: bdr }]}
+      style={[styles.taskCard, { backgroundColor: card, borderColor: bdr, borderLeftColor: statusColor }]}
       onPress={onPress}
       activeOpacity={0.75}
     >
-      {/* Row 1: Icon + Title + Status */}
+      {/* Row 1: Checkbox + Title + Status badge */}
       <View style={styles.cardRow1}>
-        <View style={[styles.typeIcon, { backgroundColor: statusColor + '18' }]}>
-          <Text style={{ fontSize: 17 }}>📋</Text>
+        <View style={[styles.checkbox, isDone && { backgroundColor: STATUS_COLORS.completed, borderColor: STATUS_COLORS.completed }]}>
+          {isDone && <Text style={{ color: '#fff', fontSize: 11, fontWeight: '800' }}>✓</Text>}
         </View>
-        <View style={{ flex: 1, marginRight: 8 }}>
-          <Text style={[styles.taskName, { color: txt }]} numberOfLines={1}>{item.heading}</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.taskName, { color: txt }]} numberOfLines={2}>
+            {item.heading}
+          </Text>
           {item.project_details?.name && (
             <Text style={[styles.taskProject, { color: sub }]} numberOfLines={1}>
               🗂 {item.project_details.name}
@@ -162,30 +165,22 @@ function TaskCard({ item, card, txt, sub, bdr, isDark, onPress, onStatusPress, f
         </TouchableOpacity>
       </View>
 
-      {/* Row 2: Created by + Due date */}
-      <View style={styles.cardRow2}>
-        {creatorName ? (
-          <Text style={[styles.createdBy, { color: sub }]} numberOfLines={1}>
-            Created by {creatorName}
-          </Text>
-        ) : (
-          <View />
-        )}
-        {item.end_date ? (
-          <Text style={[styles.dueDate, { color: sub }]}>{formatDate(item.end_date)}</Text>
-        ) : null}
-      </View>
-
-      {/* Row 3: Priority + Duration + Assignees */}
+      {/* Row 2: Meta — project chip + due date + priority + duration + assignees */}
       <View style={styles.cardRow3}>
         <View style={styles.cardRow3Left}>
-          {/* Priority */}
+          {/* Priority dot + label */}
           {item.priority && (
             <View style={styles.priorityPill}>
               <View style={[styles.priorityDot, { backgroundColor: PRIORITY_COLORS[item.priority] || '#888' }]} />
               <Text style={[styles.priorityText, { color: sub }]}>
-                {item.priority.toUpperCase()}
+                {item.priority.charAt(0).toUpperCase() + item.priority.slice(1)}
               </Text>
+            </View>
+          )}
+          {/* Due date */}
+          {item.end_date && (
+            <View style={styles.metaDatePill}>
+              <Text style={[styles.metaDateText, { color: sub }]}>📅 {formatDate(item.end_date)}</Text>
             </View>
           )}
           {/* Duration */}
@@ -196,16 +191,13 @@ function TaskCard({ item, card, txt, sub, bdr, isDark, onPress, onStatusPress, f
           )}
         </View>
 
-        {/* Assignee avatars */}
+        {/* Assignee avatar stack */}
         {assignees.length > 0 && (
           <View style={styles.avatarStack}>
             {visibleAssignees.map((u, idx) => (
               <View
                 key={u.id ?? idx}
-                style={[
-                  styles.miniAvatar,
-                  { borderColor: card, marginLeft: idx === 0 ? 0 : -7 },
-                ]}
+                style={[styles.miniAvatar, { borderColor: card, marginLeft: idx === 0 ? 0 : -7 }]}
               >
                 <Text style={styles.miniAvatarText}>{initialOf(u)}</Text>
               </View>
@@ -241,6 +233,7 @@ export default function TasksScreen() {
   const [users,    setUsers]    = useState([]);
   const [loading,  setLoading]  = useState(true);
   const [filter,   setFilter]   = useState('All');
+  const flatListRef = useRef(null);
   const [search,   setSearch]   = useState('');
 
   const [statusPickerTaskId, setStatusPickerTaskId] = useState(null);
@@ -757,9 +750,6 @@ export default function TasksScreen() {
           { key: 'in_progress', label: 'In Progress' },
           { key: 'completed',   label: 'Completed' },
           { key: 'backlog',     label: 'Backlog' },
-          { key: 'deployed',    label: 'Deployed' },
-          { key: 'deferred',    label: 'Deferred' },
-          { key: 'review',      label: 'Review' },
         ].map(({ key, label }) => {
           const isActive = filter === key;
           const showCount = key === 'All' && tasks.length > 0;
@@ -779,7 +769,7 @@ export default function TasksScreen() {
               {showCount && (
                 <View style={[styles.chipBadge, isActive ? { backgroundColor: isDark ? '#1A1A2E' : '#fff' } : { backgroundColor: '#4ECDC4' }]}>
                   <Text style={[styles.chipBadgeText, { color: isActive ? (isDark ? '#4ECDC4' : '#1A1A2E') : '#fff' }]}>
-                    {key === 'All' ? tasks.length : myTaskCount}
+                    {tasks.length}
                   </Text>
                 </View>
               )}
@@ -806,6 +796,7 @@ export default function TasksScreen() {
         </View>
       ) : (
         <FlatList
+          ref={flatListRef}
           data={filtered}
           keyExtractor={i => String(i.id)}
           contentContainerStyle={{ padding: 12, paddingBottom: 110 }}
@@ -1338,7 +1329,7 @@ const styles = StyleSheet.create({
 
   // ── Task Card ──
   taskCard: {
-    borderRadius: 14, padding: 14, marginBottom: 10, borderWidth: 1,
+    borderRadius: 14, padding: 14, marginBottom: 10, borderWidth: 1, borderLeftWidth: 4,
   },
   cardRow1: {
     flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 8,
@@ -1396,6 +1387,20 @@ const styles = StyleSheet.create({
   pickerOptionText: { flex: 1, fontSize: 13, fontWeight: '500' },
   pickerCheck: { fontSize: 14, fontWeight: '700' },
   pickerLoadingOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(255,255,255,0.55)', borderRadius: 14, justifyContent: 'center', alignItems: 'center' },
+
+  // Dev_1 tab bar
+  tabBar: { flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 8, gap: 8, borderBottomWidth: 1 },
+  tab: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999 },
+  tabText: { fontSize: 13, fontWeight: '600' },
+  tabBadge: { minWidth: 20, height: 20, borderRadius: 10, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
+  tabBadgeText: { fontSize: 11, fontWeight: '700' },
+
+  // Dev_1 task card — checkbox + left border
+  checkbox: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: '#DEDEE8', backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', marginTop: 1, flexShrink: 0 },
+
+  // Due date meta pill
+  metaDatePill: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  metaDateText: { fontSize: 11, fontWeight: '500' },
 
   // Toast
   toastOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },

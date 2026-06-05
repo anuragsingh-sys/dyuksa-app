@@ -1677,8 +1677,8 @@ export default function DocumentsScreen() {
           statusBarTranslucent
           onRequestClose={() => { setDetailDoc(null); setShowWebView(false); }}
         >
-          <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={card} translucent={false} />
-          <SafeAreaView style={[styles.detailSafe, { backgroundColor: bg }]} edges={['top', 'left', 'right', 'bottom']}>
+          <StatusBar barStyle="light-content" backgroundColor="#2A2D34" translucent={false} />
+          <SafeAreaView style={[styles.detailSafe, { backgroundColor: '#202329' }]} edges={['top', 'left', 'right', 'bottom']}>
             {/* Detail header */}
             <View style={[styles.detailHeader, { backgroundColor: card, borderBottomColor: bdr }]}>
               <TouchableOpacity onPress={() => { setDetailDoc(null); setShowWebView(false); }} style={styles.detailBackBtn}>
@@ -1705,27 +1705,62 @@ export default function DocumentsScreen() {
                 const ext = (detailDoc?.name || '').split('.').pop().toLowerCase();
                 const isImage = ['png','jpg','jpeg','gif','webp','heic','bmp','svg'].includes(ext);
                 const isPdf   = ext === 'pdf';
-                const viewUrl = isPdf
-                  ? `https://docs.google.com/viewer?url=${encodeURIComponent(url)}&embedded=true`
-                  : isImage ? null : `https://docs.google.com/viewer?url=${encodeURIComponent(url)}&embedded=true`;
+                const isOffice = ['doc','docx','ppt','pptx','xls','xlsx'].includes(ext);
+                const isText   = ['txt','csv','ts','js','json','md','html','css'].includes(ext);
 
-                return isImage ? (
-                  <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: isDark ? '#0D0D0F' : '#F5F5F7' }}>
-                    <Image source={{ uri: url }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
+                // Only PDFs and Office docs can use Google Docs viewer
+                const canPreview = isPdf || isOffice;
+                const viewUrl = canPreview && url
+                  ? `https://docs.google.com/viewer?url=${encodeURIComponent(url)}&embedded=true`
+                  : null;
+
+                if (isImage) {
+                  return (
+                    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#0D0D0F' }}>
+                      <Image source={{ uri: url }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
+                    </View>
+                  );
+                }
+
+                if (canPreview && viewUrl) {
+                  return (
+                    <WebView
+                      source={{ uri: viewUrl }}
+                      style={{ flex: 1 }}
+                      startInLoadingState
+                      renderLoading={() => (
+                        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#202329' }}>
+                          <ActivityIndicator size="large" color="#4ECDC4" />
+                          <Text style={{ color: '#9898A6', marginTop: 12 }}>Loading preview…</Text>
+                        </View>
+                      )}
+                      onError={() => setShowWebView(false)}
+                    />
+                  );
+                }
+
+                // Unsupported — show fallback with open in browser option
+                return (
+                  <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#202329', gap: 16, paddingHorizontal: 32 }}>
+                    <Text style={{ fontSize: 52, opacity: 0.4 }}>
+                      {isText ? '📝' : ext === 'xlsx' || ext === 'xls' ? '📊' : '📁'}
+                    </Text>
+                    <Text style={{ color: '#fff', fontSize: 17, fontWeight: '700', textAlign: 'center' }}>
+                      Preview not available
+                    </Text>
+                    <Text style={{ color: '#9898A6', fontSize: 13, textAlign: 'center', lineHeight: 20 }}>
+                      {`${ext.toUpperCase()} files cannot be previewed in-app. Open in browser to view or download.`}
+                    </Text>
+                    <TouchableOpacity
+                      style={{ backgroundColor: '#4ECDC4', borderRadius: 12, paddingHorizontal: 24, paddingVertical: 12, marginTop: 8 }}
+                      onPress={() => { if (url) Linking.openURL(url).catch(() => {}); }}
+                    >
+                      <Text style={{ color: '#1A1A2E', fontSize: 14, fontWeight: '700' }}>Open in Browser</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setShowWebView(false)}>
+                      <Text style={{ color: '#9898A6', fontSize: 13 }}>← Back to details</Text>
+                    </TouchableOpacity>
                   </View>
-                ) : (
-                  <WebView
-                    source={{ uri: viewUrl || url }}
-                    style={{ flex: 1 }}
-                    startInLoadingState
-                    renderLoading={() => (
-                      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-                        <ActivityIndicator size="large" color="#4ECDC4" />
-                        <Text style={{ color: sub, marginTop: 12 }}>Loading document…</Text>
-                      </View>
-                    )}
-                    onError={() => Alert.alert('Could not load', 'Try opening in browser instead.')}
-                  />
                 );
               })()
             ) : (

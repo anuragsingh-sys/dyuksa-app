@@ -2,7 +2,7 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   ActivityIndicator, RefreshControl, StatusBar, Alert,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useState, useContext, useCallback } from 'react';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { ThemeContext } from '../context/ThemeContext';
@@ -68,10 +68,11 @@ function AvatarStack({ members, max = 4, isDark }) {
 // ── Team Detail Modal ────────────────────────────────────────────────────────
 function TeamDetail({ team, onClose, isDark, card, txt, sub, bdr }) {
   const ts = typeStyle(team.team_type);
+  const insets = useSafeAreaInsets();
   return (
     <View style={[styles.detailPanel, { backgroundColor: card, borderLeftColor: bdr }]}>
       {/* Header */}
-      <View style={[styles.detailHeader, { borderBottomColor: bdr }]}>
+      <View style={[styles.detailHeader, { borderBottomColor: bdr, paddingTop: insets.top + 10 }]}>
         <TouchableOpacity onPress={onClose} style={styles.detailClose}>
           <Text style={{ color: '#4ECDC4', fontSize: 14, fontWeight: '600' }}>← Back</Text>
         </TouchableOpacity>

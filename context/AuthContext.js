@@ -140,7 +140,7 @@ export function AuthProvider({ children }) {
       const refreshTok = await SecureStore.getItemAsync(AUTH_REFRESH_KEY);
       if (!refreshTok) return false;
 
-      const res = await fetch(`${BASE_URL}/auth/token/refresh/`, {
+      const res = await fetch(`${BASE_URL}/auth/refresh/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refresh: refreshTok }),

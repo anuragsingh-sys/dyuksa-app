@@ -49,6 +49,8 @@ export function NotificationsProvider({ children }) {
     const token = await getToken();
     if (!token) return;
     setLoading(true);
+    // Clear stale cache that might have un-normalized object fields
+    try { await AsyncStorage.removeItem(NOTIF_KEY + '_v1_cleared') } catch {}
     try {
       const res = await fetch(`${BASE_URL}/notification/`, {
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -57,20 +59,28 @@ export function NotificationsProvider({ children }) {
       const data = await res.json();
       const list = data.notifications || [];
 
+      // Safely convert any value (including objects) to string
+      const toStr = (v) => {
+        if (!v) return '';
+        if (typeof v === 'string') return v.replace(/<[^>]*>/g, '').trim();
+        if (typeof v === 'object') return v.full_name || v.username || v.name || String(v.id || '');
+        return String(v);
+      };
+
       // Normalise to app shape
       const normalised = list.map(n => ({
         id:        String(n.id),
-        title:     n.title || 'Notification',
-        body:      n.message?.replace(/<[^>]*>/g, '') || '',  // strip HTML tags
-        type:      n.notification_type || 'system',
-        icon:      metaFor(n.notification_type).icon,
-        color:     metaFor(n.notification_type).color,
-        read:      n.is_read,
-        time:      n.created_at,
-        time_since:n.time_since,
-        priority:  n.priority,
-        actor:     n.actor_name,
-        metadata:  n.metadata || {},
+        title:     toStr(n.title || n.heading || 'Notification'),
+        body:      toStr(n.message || n.body || n.content || ''),
+        type:      toStr(n.notification_type || n.type || 'system'),
+        icon:      metaFor(n.notification_type || n.type).icon,
+        color:     metaFor(n.notification_type || n.type).color,
+        read:      n.is_read ?? n.read ?? false,
+        time:      n.created_at || n.timestamp || new Date().toISOString(),
+        time_since:toStr(n.time_since || ''),
+        priority:  toStr(n.priority || 'medium'),
+        actor:     toStr(n.actor_name || n.actor || n.sender || ''),
+        metadata:  n.metadata || n.data || {},
       }));
 
       setNotifications(normalised);
@@ -81,9 +91,25 @@ export function NotificationsProvider({ children }) {
       // Fall back to cached
       const cached = await AsyncStorage.getItem(NOTIF_KEY);
       if (cached) {
-        const list = JSON.parse(cached);
-        setNotifications(list);
-        setUnreadCount(list.filter(n => !n.read).length);
+        try {
+          const list = JSON.parse(cached);
+          // Re-normalize cached data in case it has old object fields
+          const safe = (v) => {
+            if (!v) return '';
+            if (typeof v === 'string') return v.replace(/<[^>]*>/g, '').trim();
+            if (typeof v === 'object') return v.full_name || v.username || v.name || String(v.id || '');
+            return String(v);
+          };
+          const normalized = list.map(n => ({
+            ...n,
+            title: safe(n.title),
+            body:  safe(n.body),
+            actor: safe(n.actor),
+            type:  safe(n.type),
+          }));
+          setNotifications(normalized);
+          setUnreadCount(normalized.filter(n => !n.read).length);
+        } catch { await AsyncStorage.removeItem(NOTIF_KEY); }
       }
     } finally {
       setLoading(false);
@@ -175,6 +201,11 @@ export function NotificationsProvider({ children }) {
     });
   }, []);
 
+  // ── Clear old corrupted cache once on mount ──────────────────────
+  useEffect(() => {
+    AsyncStorage.removeItem(NOTIF_KEY).catch(() => {});
+  }, []); // empty deps = runs once only
+
   // ── Fetch once on mount — WebSocket handles real-time updates ──────
   useEffect(() => {
     fetchNotifications();
@@ -212,18 +243,24 @@ export function NotificationsProvider({ children }) {
       const notifType    = payload?.notification_type || message?.type || payload?.type || 'system';
       const cfg          = metaFor(notifType);
 
+      const safeStr = (v) => {
+        if (!v) return '';
+        if (typeof v === 'string') return v;
+        if (typeof v === 'object') return v.full_name || v.username || v.name || String(v.id || '');
+        return String(v);
+      };
       const n = {
         id:         String(payload?.id || message?.id || Date.now()),
-        title:      payload?.title || payload?.heading || 'Notification',
-        body:       cleanMessage(payload?.message || payload?.body || payload?.content || ''),
-        type:       notifType,
+        title:      safeStr(payload?.title || payload?.heading || 'Notification'),
+        body:       cleanMessage(safeStr(payload?.message || payload?.body || payload?.content || '')),
+        type:       safeStr(notifType),
         icon:       cfg.icon,
         color:      cfg.color,
         read:       payload?.is_read || false,
         time:       payload?.created_at || message?.timestamp || new Date().toISOString(),
         time_since: 'just now',
-        priority:   payload?.priority || 'medium',
-        actor:      payload?.actor_name || payload?.sender || message?.sender || null,
+        priority:   safeStr(payload?.priority || 'medium'),
+        actor:      safeStr(payload?.actor_name || payload?.sender || message?.sender || ''),
         metadata:   payload?.metadata || {},
       };
 

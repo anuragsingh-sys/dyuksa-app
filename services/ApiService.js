@@ -107,7 +107,7 @@ export const fetchWithAuth = async (url, options = {}) => {
         try {
           const refreshTok = await AsyncStorage.getItem(REFRESH_KEY);
           if (!refreshTok) return false;
-          const r = await fetch(`${BASE_URL}/auth/token/refresh/`, {
+          const r = await fetch(`${BASE_URL}/auth/refresh/`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ refresh: refreshTok }),
@@ -216,7 +216,7 @@ export const login = async (username, password) => {
  * Returns: { access }
  */
 export const refreshAccessToken = async (refreshToken) => {
-  const res = await fetch(`${BASE_URL}/auth/token/refresh/`, {
+  const res = await fetch(`${BASE_URL}/auth/refresh/`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ refresh: refreshToken }),

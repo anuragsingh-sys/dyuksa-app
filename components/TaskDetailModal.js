@@ -767,7 +767,7 @@ export default function TaskDetailModal({ visible, task, onClose, onUpdated }) {
                   const isImage = (att.file_name || '').match(/\.(jpg|jpeg|png|gif|webp)$/i);
                   return (
                     <TouchableOpacity
-                      key={att.id || i}
+                      key={`att-${att.id || i}-${i}`}
                       style={s.attachThumb}
                       onPress={() => att.file_url && Linking.openURL(att.file_url).catch(() => {})}
                     >

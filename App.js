@@ -30,7 +30,15 @@ import DocumentsScreen from './screens/DocumentsScreen';
 import ChatScreen      from './screens/ChatScreen';
 import SettingsScreen  from './screens/SettingsScreen';
 import ProfileScreen   from './screens/ProfileScreen';
-import QuickNotesScreen from './screens/QuickNotesScreen';
+import QuickNotesScreen      from './screens/QuickNotesScreen';
+import ProjectDetailScreen      from './screens/ProjectDetailScreen';
+import TaskDetailScreen         from './screens/TaskDetailScreen';
+import NotificationsScreen      from './screens/NotificationsScreen';
+import SearchScreen             from './screens/SearchScreen';
+import TeamScreen               from './screens/TeamScreen';
+import MyWorkScreen             from './screens/MyWorkScreen';
+import ReportsScreen            from './screens/ReportsScreen';
+import DocumentViewerScreen     from './screens/DocumentViewerScreen';
 
 export const STORAGE_KEY = 'DYUKSA_QUICK_TASKS';
 
@@ -427,6 +435,14 @@ function RootNavigator() {
           <Stack.Screen name="TeamManagement"  component={TeamManagementScreen} />
           <Stack.Screen name="EditProfile"     component={EditProfileScreen} />
           <Stack.Screen name="ChangePassword"  component={ChangePasswordScreen} />
+          <Stack.Screen name="ProjectDetail"      component={ProjectDetailScreen} />
+          <Stack.Screen name="TaskDetail"         component={TaskDetailScreen} />
+          <Stack.Screen name="Notifications"      component={NotificationsScreen} />
+          <Stack.Screen name="Search"             component={SearchScreen} />
+          <Stack.Screen name="Team"               component={TeamScreen} />
+          <Stack.Screen name="MyWork"             component={MyWorkScreen} />
+          <Stack.Screen name="Reports"            component={ReportsScreen} />
+          <Stack.Screen name="DocumentViewer"     component={DocumentViewerScreen} />
         </>
       )}
     </Stack.Navigator>

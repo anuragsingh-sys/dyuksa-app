@@ -54,6 +54,25 @@ const getInitials = (name = '') => {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 };
 
+// Get clean display name — for private chats show other person's name only
+const getRoomDisplayName = (room, myUsername) => {
+  if (!room) return '';
+  const name = room.name || '';
+  // Private chat: "Chat: harshit & ravi" → show the other person
+  if (room.room_type === 'private' && name.toLowerCase().includes('chat:')) {
+    const parts = name.replace(/^Chat:\s*/i, '').split(/\s*&\s*/);
+    // Find the part that isn't the current user
+    const other = parts.find(p => p.trim().toLowerCase() !== (myUsername || '').toLowerCase());
+    if (other) return other.trim();
+  }
+  // Project/team chats: "ZanFlow Chat" → "ZanFlow"
+  if (room.room_type === 'project' || room.room_type === 'team') {
+    return name.replace(/\s+Chat$/i, '').trim();
+  }
+  // Thread: keep as-is
+  return name;
+};
+
 const ROOM_COLORS = {
   private: '#4ECDC4',
   project: '#6366F1',
@@ -73,11 +92,12 @@ const ROOM_ICONS = {
 };
 
 // ── Room List Item ────────────────────────────────────────────────────────────
-function RoomItem({ room, onPress, isDark, card, txt, sub, bdr }) {
-  const color   = ROOM_COLORS[room.room_type] || '#9898A6';
-  const icon    = ROOM_ICONS[room.room_type] || '💬';
-  const preview = stripHtml(room.last_message?.content_preview || '');
-  const initial = getInitials(room.name);
+function RoomItem({ room, onPress, isDark, card, txt, sub, bdr, myUsername }) {
+  const color       = ROOM_COLORS[room.room_type] || '#9898A6';
+  const icon        = ROOM_ICONS[room.room_type] || '💬';
+  const preview     = stripHtml(room.last_message?.content_preview || '');
+  const displayName = getRoomDisplayName(room, myUsername);
+  const initial     = getInitials(displayName || room.name);
 
   return (
     <TouchableOpacity
@@ -99,7 +119,7 @@ function RoomItem({ room, onPress, isDark, card, txt, sub, bdr }) {
       {/* Content */}
       <View style={{ flex: 1 }}>
         <View style={styles.roomNameRow}>
-          <Text style={[styles.roomName, { color: txt }]} numberOfLines={1}>{room.name}</Text>
+          <Text style={[styles.roomName, { color: txt }]} numberOfLines={1}>{displayName || room.name}</Text>
           {room.last_message?.created_at && (
             <Text style={[styles.roomTime, { color: sub }]}>
               {fmtTime(room.last_message.created_at)}
@@ -123,6 +143,22 @@ function RoomItem({ room, onPress, isDark, card, txt, sub, bdr }) {
 }
 
 // ── Message Bubble ────────────────────────────────────────────────────────────
+// sender can be string OR object {id, username, full_name}
+const getSenderName = (msg) => {
+  // Try all possible sender fields
+  const s = msg.sender_username || msg.sender || msg.sender_name || msg.created_by;
+  if (!s) return '?';
+  if (typeof s === 'object') return s.full_name || s.username || '?';
+  return String(s);
+};
+
+const getSenderUsername = (msg) => {
+  const s = msg.sender_username || msg.sender || msg.created_by;
+  if (!s) return '';
+  if (typeof s === 'object') return s.username || '';
+  return String(s);
+};
+
 function MessageBubble({ msg, isMine, isDark, sub }) {
   const bg       = isMine ? '#4ECDC4' : (isDark ? '#252530' : '#F3F4F6');
   const txtColor = isMine ? '#fff' : (isDark ? '#fff' : '#1A1A2E');
@@ -132,13 +168,13 @@ function MessageBubble({ msg, isMine, isDark, sub }) {
     <View style={[styles.bubbleWrap, isMine && styles.bubbleWrapMine]}>
       {!isMine && (
         <View style={[styles.bubbleAvatar, { backgroundColor: '#6366F1' }]}>
-          <Text style={styles.bubbleAvatarTxt}>{getInitials(msg.sender_name || msg.sender_username || '?')}</Text>
+          <Text style={styles.bubbleAvatarTxt}>{getInitials(getSenderName(msg))}</Text>
         </View>
       )}
       <View style={{ maxWidth: '75%' }}>
-        {!isMine && (
+        {!isMine && getSenderName(msg) !== '?' && (
           <Text style={[styles.bubbleSender, { color: sub }]}>
-            {msg.sender_name || msg.sender_username}
+            {getSenderName(msg)}
           </Text>
         )}
         <View style={[styles.bubble, { backgroundColor: bg }]}>
@@ -220,8 +256,19 @@ export default function ChatScreen({ route }) {
       const res = await fetch(`${BASE_URL}/chat/rooms/${roomId}/messages/`, { headers });
       if (!res.ok) return;
       const data = await res.json();
-      const list = Array.isArray(data) ? data : (data.results || data.messages || []);
-      // Oldest first
+      const raw = Array.isArray(data) ? data : (data.results || data.messages || []);
+      const myUser = user?.username || user?.name || '';
+      // Mark is_mine and reverse to oldest first
+      const list = raw.map(m => {
+        const senderUser = typeof m.sender_username === 'object'
+          ? m.sender_username?.username
+          : (m.sender_username || m.sender || '');
+        return {
+          ...m,
+          is_mine: senderUser === myUser || m.sender_id === user?.id ||
+            (typeof m.sender_username === 'object' && m.sender_username?.id === user?.id),
+        };
+      });
       setMessages(list.reverse ? list.reverse() : list);
       setTimeout(() => flatRef.current?.scrollToEnd({ animated: false }), 100);
     } catch (e) {
@@ -242,11 +289,18 @@ export default function ChatScreen({ route }) {
     setRooms(prev => prev.map(r => r.id === room.id ? { ...r, unread_count: 0 } : r));
   };
 
-  // ── Send message ───────────────────────────────────────────────────
-  const sendMessage = async () => {
+  // ── Send message via WebSocket ────────────────────────────────────
+  const sendMessage = () => {
     const text = input.trim();
     if (!text || !activeRoom || sending) return;
-    setSending(true);
+
+    // Check WebSocket is connected
+    if (!WebSocketService.isConnected) {
+      Alert.alert('Not connected', 'Reconnecting… please try again in a moment.');
+      return;
+    }
+
+    // Optimistic UI — show immediately
     const optimisticId = `opt_${Date.now()}`;
     const optimistic = {
       id: optimisticId,
@@ -261,75 +315,79 @@ export default function ChatScreen({ route }) {
     setInput('');
     setTimeout(() => flatRef.current?.scrollToEnd({ animated: true }), 50);
 
-    try {
-      const headers = await authHeaders();
-      const res = await fetch(`${BASE_URL}/chat/rooms/${activeRoom.id}/messages/`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ content: text }),
-      });
-      if (!res.ok) {
-        const e = await res.json().catch(() => ({}));
-        throw new Error(e.detail || e.message || `Send failed (${res.status})`);
-      }
-      const sent = await res.json();
-      // Replace optimistic with real message
-      setMessages(prev => prev.map(m => m.id === optimisticId ? { ...sent, is_mine: true } : m));
-      // Update room preview
-      setRooms(prev => prev.map(r => r.id === activeRoom.id
-        ? { ...r, last_message: { content_preview: text, created_at: sent.created_at } }
-        : r
-      ));
-    } catch (e) {
-      Alert.alert('Send failed', e.message || 'Try again.');
-      setMessages(prev => prev.filter(m => m.id !== optimisticId));
-      setInput(text);
-    } finally {
-      setSending(false);
-    }
+    // Send via WebSocket
+    WebSocketService.send({
+      command: 'send_message',
+      room_id: activeRoom.id,
+      content: text,
+    });
+
+    // Update room preview optimistically
+    setRooms(prev => prev.map(r => r.id === activeRoom.id
+      ? { ...r, last_message: { content_preview: text, created_at: new Date().toISOString() } }
+      : r
+    ));
   };
 
   // ── WebSocket — real-time chat messages ────────────────────────────
   useEffect(() => {
     const unsubscribe = WebSocketService.subscribe((message) => {
+      // Accept chat_message, new_message, or any payload with room_id
       const isChat = message?.type === 'chat_message' ||
                      message?.type === 'new_message' ||
                      message?.type === 'message' ||
-                     (message?.data?.room_id || message?.room_id);
+                     message?.data?.room_id || message?.room_id;
       if (!isChat) return;
 
       const d       = message?.data || message;
       const roomId  = d?.room_id || d?.room;
       const content = d?.content || d?.message || '';
       const sender  = d?.sender_username || d?.sender || '';
-      const msgId   = d?.id || d?.message_id;
+      const msgId   = String(d?.id || d?.message_id || `ws_${Date.now()}`);
+      const myUser  = user?.username || user?.name || '';
+      const getUserStr = (s) => typeof s === 'object' ? (s?.username || '') : String(s || '');
 
       if (!roomId || !content) return;
 
-      // Update room list preview
+      // Update room list preview + unread count
       setRooms(prev => prev.map(r => r.id === roomId
         ? {
             ...r,
-            last_message: { content_preview: content, created_at: d?.created_at || new Date().toISOString() },
+            last_message: {
+              content_preview: content,
+              created_at: d?.created_at || new Date().toISOString(),
+              sender_username: sender,
+            },
             unread_count: r.id !== activeRoom?.id ? (r.unread_count || 0) + 1 : 0,
           }
         : r
       ));
 
-      // Add to messages if in that room
-      if (activeRoom?.id === roomId && sender !== (user?.username || user?.name)) {
+      // Add to messages if viewing this room
+      if (activeRoom?.id === roomId) {
+        const isMine = getUserStr(sender) === myUser || sender?.id === user?.id;
         const newMsg = {
-          id: msgId || `ws_${Date.now()}`,
+          id: msgId,
           content,
           sender_username: sender,
-          sender_name: d?.sender_name || sender,
+          sender_name: d?.sender_name || d?.sender_full_name || sender,
           created_at: d?.created_at || new Date().toISOString(),
-          is_mine: false,
+          is_mine: isMine,
         };
+
         setMessages(prev => {
-          if (prev.some(m => m.id === newMsg.id)) return prev;
+          // Deduplicate — skip if id already exists
+          if (prev.some(m => m.id === msgId)) return prev;
+          // Replace matching optimistic message (same content + mine)
+          const optIdx = prev.findIndex(m => m._optimistic && m.content === content && isMine);
+          if (optIdx !== -1) {
+            const next = [...prev];
+            next[optIdx] = newMsg;
+            return next;
+          }
           return [...prev, newMsg];
         });
+
         setTimeout(() => flatRef.current?.scrollToEnd({ animated: true }), 50);
       }
     });
@@ -351,6 +409,7 @@ export default function ChatScreen({ route }) {
     }
   }, [rooms, search]);
 
+  const myUsername    = user?.username || user?.name || '';
   const favourites    = rooms.filter(r => r.is_favourite);
   const displayedRooms = tabRooms(activeTab);
   const totalUnread    = rooms.reduce((s, r) => s + (r.unread_count || 0), 0);
@@ -366,7 +425,6 @@ export default function ChatScreen({ route }) {
     return acc;
   }, []);
 
-  const myUsername = user?.username || user?.name || '';
 
   // ── MESSAGES VIEW ──────────────────────────────────────────────────
   if (view === 'messages' && activeRoom) {
@@ -384,7 +442,7 @@ export default function ChatScreen({ route }) {
             <Text style={styles.chatHeaderAvatarTxt}>{getInitials(activeRoom.name)}</Text>
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={[styles.chatHeaderName, { color: txt }]} numberOfLines={1}>{activeRoom.name}</Text>
+            <Text style={[styles.chatHeaderName, { color: txt }]} numberOfLines={1}>{getRoomDisplayName(activeRoom, myUsername) || activeRoom.name}</Text>
             <Text style={[styles.chatHeaderMeta, { color: sub }]}>
               {activeRoom.participant_count} participant{activeRoom.participant_count !== 1 ? 's' : ''}
             </Text>
@@ -430,9 +488,11 @@ export default function ChatScreen({ route }) {
                     <View style={[styles.dateSepLine, { backgroundColor: bdr }]} />
                   </View>
                   {group.messages.map(msg => {
-                    const isMine = msg.is_mine ||
-                      msg.sender_username === myUsername ||
-                      msg.sender_id === user?.id;
+                    const isMine = msg.is_mine === true ||
+                      getSenderUsername(msg) === myUsername ||
+                      msg.sender_id === user?.id ||
+                      (typeof msg.sender_username === 'object' && msg.sender_username?.id === user?.id) ||
+                      (typeof msg.sender === 'object' && msg.sender?.id === user?.id);
                     return (
                       <MessageBubble
                         key={msg.id}
@@ -555,15 +615,20 @@ export default function ChatScreen({ route }) {
         </View>
       ) : (
         <FlatList
-          data={[
-            // Favourites section (always shown if any, regardless of tab)
-            ...(favourites.length > 0 ? [{ _type: 'section', label: '⭐ Favourites' }, ...favourites.map(r => ({ ...r, _type: 'room' }))] : []),
-            // Tab section header
-            { _type: 'section', label: activeTab === 'chats' ? '💬 Direct Messages' : activeTab === 'projects' ? '📁 Projects & Threads' : activeTab === 'teams' ? '👥 Teams' : '🔴 Unread' },
-            // Tab rooms
-            ...displayedRooms.map(r => ({ ...r, _type: 'room' })),
-          ]}
-          keyExtractor={(item, i) => item._type === 'section' ? `s_${i}` : item.id}
+          data={(() => {
+            const favouriteIds = new Set(favourites.map(r => r.id));
+            // Exclude favourites from tab rooms to prevent duplicate keys
+            const nonFavTabRooms = displayedRooms.filter(r => !favouriteIds.has(r.id));
+            return [
+              // Favourites section
+              ...(favourites.length > 0 ? [{ _type: 'section', label: '⭐ Favourites', _key: 'sec_fav' }, ...favourites.map(r => ({ ...r, _type: 'room' }))] : []),
+              // Tab section header
+              { _type: 'section', label: activeTab === 'chats' ? '💬 Direct Messages' : activeTab === 'projects' ? '📁 Projects & Threads' : activeTab === 'teams' ? '👥 Teams' : '🔴 Unread', _key: `sec_${activeTab}` },
+              // Tab rooms (excluding favourites already shown above)
+              ...nonFavTabRooms.map(r => ({ ...r, _type: 'room' })),
+            ];
+          })()}
+          keyExtractor={(item) => item._type === 'section' ? item._key : item.id}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchRooms(); }} tintColor="#4ECDC4" />}
           ListEmptyComponent={
             <View style={styles.centerState}>
@@ -587,6 +652,7 @@ export default function ChatScreen({ route }) {
                 txt={txt}
                 sub={sub}
                 bdr={bdr}
+                myUsername={myUsername}
               />
             );
           }}
