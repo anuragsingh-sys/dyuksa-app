@@ -13,7 +13,14 @@ import NotificationBell from '../components/NotificationBell';
 import { getAccessToken, getWorkspaceId } from '../services/ApiService';
 
 import { API_BASE, BASE_URL, WS_BASE } from '../config';
-// const API_BASE → imported from config
+
+// ── Module-level cache — survives workspace switches (remounts) ───────────────
+// Notes and folders are global (no X-Workspace-ID), so they should never
+// change on workspace switch. Cache them to avoid blank flashes.
+let _cachedFolders = [];
+let _cachedNotes   = [];
+let _notesFetchedAt = 0;
+const NOTES_STALE_MS = 30_000;
 
 const fmtDate = (iso) => {
   if (!iso) return '';
@@ -96,9 +103,9 @@ export default function QuickNotesScreen() {
   const fs   = s => s * fontScale;
 
   // ── Data ──────────────────────────────────────────────────────────────
-  const [folders,  setFolders]  = useState([]);
-  const [notes,    setNotes]    = useState([]);
-  const [loading,  setLoading]  = useState(true);
+  const [folders,  setFolders]  = useState(_cachedFolders);
+  const [notes,    setNotes]    = useState(_cachedNotes);
+  const [loading,  setLoading]  = useState(_cachedNotes.length === 0);
 
   // ── Selection / detail ────────────────────────────────────────────────
   const [selectedFolder, setSelectedFolder] = useState(null); // null = All Notes
@@ -123,6 +130,8 @@ export default function QuickNotesScreen() {
 
   // ── Fetch ──────────────────────────────────────────────────────────────
   const fetchAll = useCallback(async () => {
+    // Skip if data is fresh — prevents blank flash on workspace switch remount
+    if (_cachedNotes.length > 0 && Date.now() - _notesFetchedAt < NOTES_STALE_MS) return;
     setLoading(true);
     try {
       const token = await getAccessToken();
@@ -137,6 +146,7 @@ export default function QuickNotesScreen() {
         const fd = await fRes.json();
         const fl = (Array.isArray(fd) ? fd : (fd.results || []));
         fl.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        _cachedFolders = fl;
         setFolders(fl);
         if (!draftFolder && fl[0]) setDraftFolder(fl[0].id);
       }
@@ -144,6 +154,8 @@ export default function QuickNotesScreen() {
         const nd = await nRes.json();
         const nl = (Array.isArray(nd) ? nd : (nd.results || []));
         nl.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+        _cachedNotes = nl;
+        _notesFetchedAt = Date.now();
         setNotes(nl);
       }
       if (pRes.ok) {
@@ -192,7 +204,10 @@ export default function QuickNotesScreen() {
         throw new Error(e.detail || JSON.stringify(e));
       }
       const created = await res.json();
-      setNotes(prev => [created, ...prev]);
+      const updated = [created, ...notes];
+      _cachedNotes = updated;
+      _notesFetchedAt = Date.now();
+      setNotes(updated);
       setNoteModal(false);
       setDraftContent('');
     } catch (e) {

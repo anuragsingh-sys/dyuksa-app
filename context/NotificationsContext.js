@@ -5,7 +5,13 @@ import WebSocketService from '../services/WebSocketService';
 import { API_BASE, BASE_URL, WS_BASE } from '../config';
 const NOTIF_KEY    = 'DYUKSA_NOTIFICATIONS';
 const SETTINGS_KEY = 'DYUKSA_SETTINGS';
-// BASE_URL → imported from config
+
+// ── Module-level singleton cache ─────────────────────────────────────────────
+// Survives workspace switches (component remounts) — notifications are global
+let _cachedNotifications = [];
+let _cachedUnread = 0;
+let _lastFetchedAt = 0;
+const STALE_MS = 30_000; // re-fetch only if > 30s old
 
 export const NotificationsContext = createContext({
   notifications:   [],
@@ -33,8 +39,8 @@ export const TYPE_META = {
 const metaFor = (type) => TYPE_META[type] || { icon: '🔔', color: '#9898A6' };
 
 export function NotificationsProvider({ children }) {
-  const [notifications, setNotifications] = useState([]);
-  const [unreadCount,   setUnreadCount]   = useState(0);
+  const [notifications, setNotifications] = useState(_cachedNotifications);
+  const [unreadCount,   setUnreadCount]   = useState(_cachedUnread);
   const [loading,       setLoading]       = useState(false);
   const tokenRef = useRef(null);
 
@@ -46,6 +52,8 @@ export function NotificationsProvider({ children }) {
 
   // ── Fetch from backend ────────────────────────────────────────────
   const fetchNotifications = useCallback(async () => {
+    // Skip if data is fresh — prevents unnecessary re-fetches on workspace switch
+    if (_cachedNotifications.length > 0 && Date.now() - _lastFetchedAt < STALE_MS) return;
     const token = await getToken();
     if (!token) return;
     setLoading(true);
@@ -85,6 +93,10 @@ export function NotificationsProvider({ children }) {
 
       setNotifications(normalised);
       setUnreadCount(data.unread_count ?? normalised.filter(n => !n.read).length);
+      // Update module cache so remounts show data instantly
+      _cachedNotifications = normalised;
+      _cachedUnread = data.unread_count ?? normalised.filter(n => !n.read).length;
+      _lastFetchedAt = Date.now();
       await AsyncStorage.setItem(NOTIF_KEY, JSON.stringify(normalised));
     } catch (e) {
       console.warn('fetchNotifications error:', e.message);
@@ -267,7 +279,9 @@ export function NotificationsProvider({ children }) {
       setNotifications(prev => {
         if (prev.some(p => p.id === n.id)) return prev;
         const next = [n, ...prev].slice(0, 100);
-        setUnreadCount(next.filter(x => !x.read).length);
+        _cachedNotifications = next;
+        _cachedUnread = next.filter(x => !x.read).length;
+        setUnreadCount(_cachedUnread);
         return next;
       });
     });
