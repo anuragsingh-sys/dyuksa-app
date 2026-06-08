@@ -9,18 +9,21 @@ import { ThemeContext } from '../context/ThemeContext';
 import { AuthContext } from '../context/AuthContext';
 import { useWorkspace } from '../context/WorkspaceContext';
 import { canCreateWorkspace, canManageMembers } from '../utils/permissions';
+import { Feather } from '@expo/vector-icons';
 
 const SIDEBAR_WIDTH  = 260;
 
-const SidebarItem = ({ icon, label, active, hasArrow, onPress }) => (
+const SidebarItem = ({ icon, label, active, hasArrow, onPress, isDarkMode }) => (
   <TouchableOpacity
     style={[styles.sidebarItem, active && styles.sidebarItemActive]}
     onPress={onPress}
     activeOpacity={0.7}
   >
-    <Text style={styles.sidebarItemIcon}>{icon}</Text>
-    <Text style={[styles.sidebarItemLabel, active && styles.sidebarItemLabelActive]}>{label}</Text>
-    {hasArrow && <Text style={styles.sidebarArrow}>›</Text>}
+    <View style={styles.sidebarItemIconWrap}>
+      <Feather name={icon} size={18} color={active ? '#2D6AE3' : (isDarkMode ? '#9898A6' : '#6B7588')} />
+    </View>
+    <Text style={[styles.sidebarItemLabel, { color: isDarkMode ? '#9898A6' : '#3B4658' }, active && styles.sidebarItemLabelActive]}>{label}</Text>
+    {hasArrow && <Feather name="chevron-right" size={14} color={isDarkMode ? '#5C5C6E' : '#9AA3B2'} style={{ marginLeft: 'auto' }} />}
   </TouchableOpacity>
 );
 
@@ -96,35 +99,57 @@ export default function SidebarMenu({ activeScreen }) {
             {
               paddingTop: Platform.OS === 'ios' ? 44 : (StatusBar.currentHeight || 24),
               transform: [{ translateX: slideAnim }],
+              backgroundColor: isDark ? '#1A1A2E' : '#FFFFFF',
             },
           ]}>
             <SafeAreaView style={{ flex: 1 }} edges={['bottom']}>
-              <StatusBar barStyle="light-content" backgroundColor="#1A1A2E" />
+              <StatusBar barStyle={isDark ? "light-content" : "dark-content"} backgroundColor={isDark ? "#1A1A2E" : "#FFFFFF"} />
 
               {/* Header */}
               <View style={styles.sidebarHeader}>
                 <View style={styles.logoBox}><Text style={styles.logoText}>D</Text></View>
-                <Text style={styles.sidebarBrand}>DYUKSA</Text>
+                <Text style={[styles.sidebarBrand, { color: isDark ? "#fff" : "#1A1A2E" }]}>DYUKSA</Text>
                 <TouchableOpacity onPress={() => closeSidebar()} style={styles.closeBtn}>
-                  <Text style={styles.closeBtnText}>✕</Text>
+                  <Text style={[styles.closeBtnText, { color: isDark ? "#5C5C6E" : "#9AA3B2" }]}>✕</Text>
                 </TouchableOpacity>
               </View>
 
+              {/* User card — at top below header */}
+              <TouchableOpacity
+                style={styles.sidebarFooter}
+                onPress={() => goToStack('Profile')}
+                activeOpacity={0.7}
+              >
+                {user?.avatarUrl ? (
+                  <Image source={{ uri: user.avatarUrl }} style={styles.userAvatarImage} />
+                ) : (
+                  <View style={styles.userAvatar}>
+                    <Text style={styles.userAvatarText}>{user?.avatar || user?.name?.[0]?.toUpperCase() || 'U'}</Text>
+                  </View>
+                )}
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.userName, { color: isDark ? "#fff" : "#1A1A2E" }]}>{user?.name || 'User'}</Text>
+                  <Text style={[styles.userRole, { color: isDark ? "#5C5C6E" : "#6B7588" }]}>{user?.role || 'Member'}</Text>
+                </View>
+                <Text style={{ color: '#5C5C6E', fontSize: 16, marginRight: 4 }}>›</Text>
+              </TouchableOpacity>
+
+
               {/* Nav items */}
               <ScrollView style={styles.sidebarNav} showsVerticalScrollIndicator={false}>
-                <SidebarItem icon="⊞"  label="Dashboard" active={activeScreen === 'Dashboard'} onPress={goToDashboard} />
-                <SidebarItem icon="🗂️" label="Projects"  active={activeScreen === 'Projects'}  hasArrow onPress={() => goToTab('Projects')} />
-                <SidebarItem icon="📅" label="Calendar"  active={activeScreen === 'Calendar'}  hasArrow onPress={() => goToTab('Calendar')} />
+                <SidebarItem icon="grid"          label="Dashboard" active={activeScreen === 'Dashboard'} onPress={goToDashboard} isDarkMode={isDark} />
+                <SidebarItem icon="folder"        label="Projects"  active={activeScreen === 'Projects'}  hasArrow onPress={() => goToTab('Projects')} isDarkMode={isDark} />
+                <SidebarItem icon="file-text"     label="Documents"  active={activeScreen === 'Docs'}      onPress={() => goToStack('Docs')} isDarkMode={isDark} />
 
-                {/* My Tasks expandable */}
+                {/* Tasks expandable */}
                 <TouchableOpacity
                   style={[styles.sidebarItem, activeScreen === 'Tasks' && styles.sidebarItemActive]}
                   onPress={() => setTasksExpanded(v => !v)}
                   activeOpacity={0.7}
                 >
-                  <Text style={styles.sidebarItemIcon}>📋</Text>
+                  <Text style={styles.sidebarItemIcon}>☑️</Text>
                   <Text style={[styles.sidebarItemLabel, activeScreen === 'Tasks' && styles.sidebarItemLabelActive]}>
-                    My Tasks
+                    Tasks
                   </Text>
                   <Text style={[styles.sidebarArrow, tasksExpanded && { transform: [{ rotate: '90deg' }] }]}>›</Text>
                 </TouchableOpacity>
@@ -139,35 +164,17 @@ export default function SidebarMenu({ activeScreen }) {
                   </View>
                 )}
 
-                <SidebarItem icon="📄" label="Documents"       active={activeScreen === 'Docs'}       onPress={() => goToStack('Docs')} />
-                <SidebarItem icon="⚡" label="Quick Notes"     active={activeScreen === 'QuickNotes'} onPress={() => goToStack('QuickNotes')} />
+                <SidebarItem icon="calendar"      label="Calendar"       active={activeScreen === 'Calendar'}   hasArrow onPress={() => goToTab('Calendar')} isDarkMode={isDark} />
+                <SidebarItem icon="briefcase"     label="My Work"        active={activeScreen === 'MyWork'}     onPress={() => goToStack('MyWork')} isDarkMode={isDark} />
+                <SidebarItem icon="bar-chart-2"   label="Reports"        active={activeScreen === 'Reports'}    onPress={() => goToStack('Reports')} isDarkMode={isDark} />
+                <SidebarItem icon="zap"           label="Quick Notes"    active={activeScreen === 'QuickNotes'} onPress={() => goToStack('QuickNotes')} isDarkMode={isDark} />
                 {canManageMembers(user?.role) && (
-                  <SidebarItem icon="👥" label="Team Management" hasArrow onPress={() => goToStack('TeamManagement')} />
+                  <SidebarItem icon="users"       label="Team Management" hasArrow onPress={() => goToStack('TeamManagement')} isDarkMode={isDark} />
                 )}
-                <SidebarItem icon="💬" label="Chats"           active={activeScreen === 'Chat'}       hasArrow onPress={() => goToStack('Chat')} />
+                <SidebarItem icon="message-square" label="Chats"          active={activeScreen === 'Chat'} hasArrow onPress={() => goToStack('Chat')} isDarkMode={isDark} />
+                <SidebarItem icon="settings"      label="Settings"      active={activeScreen === 'Settings'} onPress={() => goToStack('Settings')} isDarkMode={isDark} />
               </ScrollView>
 
-              <View style={styles.sidebarDivider} />
-
-              {/* User footer — tap to open Profile */}
-              <TouchableOpacity
-                style={styles.sidebarFooter}
-                onPress={() => goToStack('Profile')}
-                activeOpacity={0.7}
-              >
-                {user?.avatarUrl ? (
-                  <Image source={{ uri: user.avatarUrl }} style={styles.userAvatarImage} />
-                ) : (
-                  <View style={styles.userAvatar}>
-                    <Text style={styles.userAvatarText}>{user?.avatar || user?.name?.[0]?.toUpperCase() || 'U'}</Text>
-                  </View>
-                )}
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.userName}>{user?.name || 'User'}</Text>
-                  <Text style={styles.userRole}>{user?.role || 'Member'}</Text>
-                </View>
-                <Text style={{ color: '#5C5C6E', fontSize: 16, marginRight: 4 }}>›</Text>
-              </TouchableOpacity>
 
               {/* ── Workspace Switcher ── */}
               <TouchableOpacity
@@ -244,18 +251,14 @@ export default function SidebarMenu({ activeScreen }) {
                   </View>
                 )}
 
-              {/* Settings + Logout */}
+              {/* Logout only */}
               <View style={styles.sidebarBottom}>
-                <TouchableOpacity style={styles.sidebarBottomBtn} onPress={() => goToStack('Settings')}>
-                  <Text style={styles.sidebarBottomIcon}>⚙️</Text>
-                  <Text style={styles.sidebarBottomText}>Settings</Text>
-                </TouchableOpacity>
                 <TouchableOpacity
-                  style={styles.sidebarBottomBtn}
+                  style={[styles.sidebarBottomBtn, { flex: 1 }]}
                   onPress={() => closeSidebar(async () => { await logout(); })}
                 >
-                  <Text style={styles.sidebarBottomIcon}>🚪</Text>
-                  <Text style={[styles.sidebarBottomText, { color: '#F87171' }]}>Logout</Text>
+                  <Feather name="log-out" size={16} color="#F87171" />
+                  <Text style={[styles.sidebarBottomText, { color: '#F87171' }]}>Log out</Text>
                 </TouchableOpacity>
               </View>
             </SafeAreaView>
@@ -271,36 +274,38 @@ const styles = StyleSheet.create({
   hamLine: { width: 20, height: 2, backgroundColor: '#1A1A2E', borderRadius: 2 },
   hamLineDark: { backgroundColor: '#FFFFFF' },
   overlay: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.45)' },
-  sidebar: { position: 'absolute', top: 0, left: 0, width: SIDEBAR_WIDTH, height: '100%', backgroundColor: '#1A1A2E', elevation: 20, shadowColor: '#000', shadowOffset: { width: 4, height: 0 }, shadowOpacity: 0.3, shadowRadius: 12 },
+  sidebar: { position: 'absolute', top: 0, left: 0, width: SIDEBAR_WIDTH, height: '100%', elevation: 20, shadowColor: '#000', shadowOffset: { width: 4, height: 0 }, shadowOpacity: 0.3, shadowRadius: 12 },
 
-  sidebarHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#252535', gap: 10 },
-  sidebarBrand: { flex: 1, color: '#fff', fontSize: 16, fontWeight: '700', letterSpacing: 1 },
+  sidebarHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.1)', gap: 10 },
+  sidebarBrand: { flex: 1, fontSize: 16, fontWeight: '700', letterSpacing: 1 },
   logoBox: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#4ECDC4', justifyContent: 'center', alignItems: 'center' },
   logoText: { color: '#1A1A2E', fontSize: 15, fontWeight: '800' },
   closeBtn: { padding: 4 },
-  closeBtnText: { color: '#5C5C6E', fontSize: 16 },
+  closeBtnText: { fontSize: 16 },
 
   sidebarNav: { flex: 1, paddingTop: 8, paddingHorizontal: 8 },
   sidebarItem: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 12, paddingVertical: 11, borderRadius: 8, marginBottom: 2 },
-  sidebarItemActive: { backgroundColor: 'rgba(78,205,196,0.12)' },
+  sidebarItemActive: { backgroundColor: 'rgba(45,106,227,0.08)' },
   sidebarItemIcon: { fontSize: 16, width: 22, textAlign: 'center' },
-  sidebarItemLabel: { flex: 1, fontSize: 14, color: '#9898A6', fontWeight: '500' },
-  sidebarItemLabelActive: { color: '#4ECDC4', fontWeight: '600' },
+  sidebarItemIconWrap: { width: 22, alignItems: 'center', justifyContent: 'center' },
+  sidebarItemLabel: { flex: 1, fontSize: 14, fontWeight: '500' },
+  sidebarItemLabelActive: { color: '#2D6AE3', fontWeight: '600' },
   sidebarArrow: { color: '#5C5C6E', fontSize: 18 },
 
   submenu: { paddingLeft: 14, marginLeft: 18, borderLeftWidth: 1, borderLeftColor: '#252535', marginBottom: 4 },
   submenuItem: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6 },
   submenuIcon: { fontSize: 13, color: '#9898A6', width: 16, textAlign: 'center' },
   submenuLabel: { flex: 1, fontSize: 13, color: '#9898A6', fontWeight: '500' },
+  myViewsLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 1, paddingHorizontal: 12, paddingVertical: 6, marginTop: 4 },
 
-  sidebarDivider: { height: 1, backgroundColor: '#252535', marginHorizontal: 16, marginVertical: 6 },
+  sidebarDivider: { height: 1, backgroundColor: 'rgba(0,0,0,0.08)', marginHorizontal: 16, marginVertical: 6 },
 
   sidebarFooter: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 10 },
   userAvatar: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#4ECDC4', justifyContent: 'center', alignItems: 'center' },
   userAvatarImage: { width: 34, height: 34, borderRadius: 17 },
   userAvatarText: { color: '#1A1A2E', fontWeight: '700', fontSize: 14 },
-  userName: { color: '#fff', fontSize: 13, fontWeight: '600' },
-  userRole: { color: '#5C5C6E', fontSize: 11, marginTop: 1 },
+  userName: { fontSize: 13, fontWeight: '600' },
+  userRole: { fontSize: 11, marginTop: 1 },
 
   // ── Workspace switcher ──
   wsCurrentRow: {
@@ -313,8 +318,8 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#252535',
-    backgroundColor: '#1E1E2A',
+    borderColor: '#2D4070',
+    backgroundColor: '#1A2744',
   },
   wsName: {
     color: '#FFFFFF',
@@ -370,8 +375,8 @@ const styles = StyleSheet.create({
   },
   wsFooterNoteText: { color: '#5C5C6E', fontSize: 10, textAlign: 'center' },
 
-  sidebarBottom: { flexDirection: 'row', paddingHorizontal: 12, paddingBottom: 16, gap: 8 },
-  sidebarBottomBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: '#252535' },
+  sidebarBottom: { flexDirection: 'row', paddingHorizontal: 12, paddingBottom: 16, gap: 8, borderTopWidth: 1, borderTopColor: 'rgba(0,0,0,0.06)' },
+  sidebarBottomBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(0,0,0,0.08)' },
   sidebarBottomIcon: { fontSize: 14 },
   sidebarBottomText: { color: '#9898A6', fontSize: 12, fontWeight: '500' },
 });

@@ -2,7 +2,7 @@ import { NavigationContainer, useNavigation, useNavigationState } from '@react-n
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import {
-  Text, View, TouchableOpacity, StyleSheet, Platform, Modal, Animated, ScrollView, Image,
+  Text, View, TouchableOpacity, StyleSheet, Platform, Modal, Animated, ScrollView, Image, PanResponder, Dimensions,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useState, useEffect, useContext, useRef } from 'react';
@@ -39,6 +39,8 @@ import TeamScreen               from './screens/TeamScreen';
 import MyWorkScreen             from './screens/MyWorkScreen';
 import ReportsScreen            from './screens/ReportsScreen';
 import DocumentViewerScreen     from './screens/DocumentViewerScreen';
+import QuickCreateScreen        from './screens/QuickCreateScreen';
+import CreateProjectScreen      from './screens/CreateProjectScreen';
 
 export const STORAGE_KEY = 'DYUKSA_QUICK_TASKS';
 
@@ -67,167 +69,171 @@ function QuickTaskButton({ onPress, borderColor }) {
   );
 }
 
+// ── Draggable Floating FAB ────────────────────────────────────────────────────
+function DraggableFAB({ onPress }) {
+  const { width, height } = Dimensions.get('window');
+  const pan = useRef(new Animated.ValueXY({ x: width / 2 - 30, y: height - 120 })).current;
+  const lastPos = useRef({ x: width / 2 - 30, y: height - 120 });
+  const isDragging = useRef(false);
+
+  let logoSource = null;
+  try { logoSource = require('./assets/lvlogo1_1.png'); } catch {}
+
+  const panResponder = useRef(PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: (_, gs) => Math.abs(gs.dx) > 5 || Math.abs(gs.dy) > 5,
+    onPanResponderGrant: () => {
+      pan.setOffset({ x: lastPos.current.x, y: lastPos.current.y });
+      pan.setValue({ x: 0, y: 0 });
+      isDragging.current = false;
+    },
+    onPanResponderMove: (_, gs) => {
+      if (Math.abs(gs.dx) > 5 || Math.abs(gs.dy) > 5) isDragging.current = true;
+      Animated.event([null, { dx: pan.x, dy: pan.y }], { useNativeDriver: false })(_, gs);
+    },
+    onPanResponderRelease: (_, gs) => {
+      pan.flattenOffset();
+      const newX = Math.max(0, Math.min(width - 60, lastPos.current.x + gs.dx));
+      const newY = Math.max(60, Math.min(height - 120, lastPos.current.y + gs.dy));
+      lastPos.current = { x: newX, y: newY };
+      pan.setValue({ x: newX, y: newY });
+      if (!isDragging.current) onPress();
+    },
+  })).current;
+
+  return (
+    <Animated.View
+      style={[styles.draggableFab, { transform: pan.getTranslateTransform() }]}
+      {...panResponder.panHandlers}
+    >
+      <TouchableOpacity
+        style={styles.fab}
+        onPress={onPress}
+        activeOpacity={0.85}
+      >
+        {logoSource ? (
+          <Image source={logoSource} style={styles.fabLogo} resizeMode="cover" />
+        ) : (
+          <Text style={styles.fabIcon}>＋</Text>
+        )}
+      </TouchableOpacity>
+    </Animated.View>
+  );
+}
+
 // ─── Quick Add Modal: Task / Event toggle ──────────────────────────────────
 // Task  → opens the AI-enhanced Create Task screen (TasksScreen)
 // Event → opens the New Event screen (CalendarScreen)
 // AI    → opens the "Generate by AI" modal on the relevant screen
-function QuickAddModal({ visible, onClose, onPickTask, onPickEvent, onPickAI }) {
-  const [activeTab, setActiveTab] = useState('task');
-  const slideAnim = useRef(new Animated.Value(-700)).current;
+function QuickAddModal({ visible, onClose, navigation }) {
+  const slideAnim = useRef(new Animated.Value(400)).current;
+  const { theme } = useContext(ThemeContext);
+  const isDark = theme === 'Dark';
+  const modalBg  = isDark ? '#1A1A20' : '#FFFFFF';
+  const modalTxt = isDark ? '#FFFFFF' : '#1A1A2E';
+  const modalSub = isDark ? '#9898A6' : '#6B7588';
+  const modalBdr = isDark ? '#2A2A38' : '#F0F0F5';
 
   useEffect(() => {
     if (visible) {
-      setActiveTab('task');
-      Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, tension: 80, friction: 12 }).start();
+      Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, tension: 70, friction: 12 }).start();
     } else {
-      slideAnim.setValue(-700);
+      slideAnim.setValue(400);
     }
   }, [visible]);
 
   const handleClose = () => {
-    Animated.timing(slideAnim, { toValue: -700, duration: 240, useNativeDriver: true })
+    Animated.timing(slideAnim, { toValue: 400, duration: 220, useNativeDriver: true })
       .start(() => onClose());
   };
 
-  const handleContinue = () => {
-    Animated.timing(slideAnim, { toValue: -700, duration: 220, useNativeDriver: true })
-      .start(() => {
-        onClose();
-        setTimeout(() => {
-          if (activeTab === 'task') onPickTask();
-          else onPickEvent();
-        }, 120);
-      });
+  const handleOption = (action) => {
+    handleClose();
+    setTimeout(() => action(), 250);
   };
 
-  // Tap on the "✨ Nova AI" pill → close Quick Add, then open AI modal
-  const handleNovaAI = () => {
-    Animated.timing(slideAnim, { toValue: -700, duration: 220, useNativeDriver: true })
-      .start(() => {
-        onClose();
-        setTimeout(() => onPickAI(activeTab), 120);
-      });
-  };
+  const OPTIONS = [
+    {
+      icon: '☑️',
+      iconBg: '#EEF2FF',
+      iconColor: '#4F46E5',
+      label: 'New Task',
+      desc: 'Add to any project',
+      action: () => navigation.navigate('CreateTask'),
+    },
+    {
+      icon: '📁',
+      iconBg: '#F0FDF4',
+      iconColor: '#16A34A',
+      label: 'New Project',
+      desc: 'Start a workspace',
+      action: () => navigation.navigate('CreateProject'),
+    },
+    {
+      icon: '⬆️',
+      iconBg: '#FFF7ED',
+      iconColor: '#EA580C',
+      label: 'Upload Doc',
+      desc: 'PDF, Word, Sheet, Slide',
+      action: () => navigation.navigate('Docs'),
+    },
+    {
+      icon: '📅',
+      iconBg: '#FFF1F2',
+      iconColor: '#E11D48',
+      label: 'New Event',
+      desc: 'Meeting or focus block',
+      action: () => navigation.navigate('Calendar'),
+    },
+    {
+      icon: '👥',
+      iconBg: '#F5F3FF',
+      iconColor: '#7C3AED',
+      label: 'Invite Member',
+      desc: 'By email or link',
+      action: () => navigation.navigate('TeamManagement'),
+    },
+  ];
 
   if (!visible) return null;
 
   return (
     <Modal transparent visible animationType="none" onRequestClose={handleClose}>
       <TouchableOpacity style={styles.qaOverlay} activeOpacity={1} onPress={handleClose} />
-      <Animated.View style={[styles.qaPanel, { transform: [{ translateY: slideAnim }] }]}>
-        <SafeAreaView>
-          <View style={styles.qaHandle} />
-          <ScrollView style={styles.qaScroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+      <Animated.View style={[styles.qaPanel, { backgroundColor: modalBg, transform: [{ translateY: slideAnim }] }]}>
+        <View style={styles.qaHandle} />
+        {/* Header */}
+        <View style={[styles.qaHeader, { borderBottomColor: modalBdr }]}>
+          <Text style={[styles.qaTitle, { color: modalTxt }]}>Create</Text>
+          <TouchableOpacity onPress={handleClose} style={[styles.qaCloseCircle, { backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}>
+            <Text style={[styles.qaCloseText, { color: modalSub }]}>✕</Text>
+          </TouchableOpacity>
+        </View>
 
-            {/* Header */}
-            <View style={styles.qaHeader}>
-              <Text style={styles.qaTitle}>Quick Add</Text>
-              <TouchableOpacity style={styles.qaCloseCircle} onPress={handleClose}>
-                <Text style={styles.qaCloseText}>✕</Text>
-              </TouchableOpacity>
+        {/* Options */}
+        {OPTIONS.map((opt, i) => (
+          <TouchableOpacity
+            key={i}
+            onPress={() => handleOption(opt.action)}
+            activeOpacity={0.7}
+            style={[styles.qaOption, { borderBottomColor: modalBdr, borderBottomWidth: i < OPTIONS.length - 1 ? 1 : 0 }]}
+          >
+            <View style={[styles.qaOptionIcon, { backgroundColor: isDark ? '#252530' : opt.iconBg }]}>
+              <Text style={{ fontSize: 20 }}>{opt.icon}</Text>
             </View>
-
-            {/* Task / Event Toggle */}
-            <View style={styles.qaToggle}>
-              {['task', 'event'].map(t => (
-                <TouchableOpacity
-                  key={t}
-                  style={[styles.qaToggleBtn, activeTab === t && styles.qaToggleBtnOn]}
-                  onPress={() => setActiveTab(t)}
-                  activeOpacity={0.85}
-                >
-                  <Text style={[styles.qaToggleText, activeTab === t && styles.qaToggleTextOn]}>
-                    {t === 'task' ? '📋  Task' : '📅  Event'}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.qaOptionLabel, { color: modalTxt }]}>{opt.label}</Text>
+              <Text style={[styles.qaOptionDesc, { color: modalSub }]}>{opt.desc}</Text>
             </View>
-
-            {/* Preview / Description card — mirrors your old design */}
-            <View style={styles.qaPreviewCard}>
-              {activeTab === 'task' ? (
-                <>
-                  <Text style={styles.qaPreviewTitle}>Create a new task</Text>
-                  <Text style={styles.qaPreviewText}>
-                    Continue to the Create Task screen with AI-assisted fields: Project,
-                    Nova AI title/description refinement, Status, Priority, Start/Due dates,
-                    Assignees, Links, and Attachments.
-                  </Text>
-                  <View style={styles.qaFeatureRow}>
-                    <TouchableOpacity
-                      style={[styles.qaFeatureChip, styles.qaFeatureChipAI]}
-                      onPress={handleNovaAI}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={[styles.qaFeatureChipText, styles.qaFeatureChipTextAI]}>✨ Nova AI</Text>
-                    </TouchableOpacity>
-                    <View style={styles.qaFeatureChip}>
-                      <Text style={styles.qaFeatureChipText}>⚡ Auto-generate</Text>
-                    </View>
-                    <View style={styles.qaFeatureChip}>
-                      <Text style={styles.qaFeatureChipText}>👥 Assignees</Text>
-                    </View>
-                  </View>
-                </>
-              ) : (
-                <>
-                  <Text style={styles.qaPreviewTitle}>Schedule a new event</Text>
-                  <Text style={styles.qaPreviewText}>
-                    Continue to the New Event screen to pick date and time. You'll receive
-                    an alert 1 hour before the event fires.
-                  </Text>
-                  <View style={styles.qaFeatureRow}>
-                    <TouchableOpacity
-                      style={[styles.qaFeatureChip, styles.qaFeatureChipAI]}
-                      onPress={handleNovaAI}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={[styles.qaFeatureChipText, styles.qaFeatureChipTextAI]}>✨ Nova AI</Text>
-                    </TouchableOpacity>
-                    <View style={[styles.qaFeatureChip, { backgroundColor: 'rgba(167,139,250,0.12)' }]}>
-                      <Text style={[styles.qaFeatureChipText, { color: '#A78BFA' }]}>📅 Date picker</Text>
-                    </View>
-                    <View style={[styles.qaFeatureChip, { backgroundColor: 'rgba(167,139,250,0.12)' }]}>
-                      <Text style={[styles.qaFeatureChipText, { color: '#A78BFA' }]}>🕐 Time picker</Text>
-                    </View>
-                    <View style={[styles.qaFeatureChip, { backgroundColor: 'rgba(167,139,250,0.12)' }]}>
-                      <Text style={[styles.qaFeatureChipText, { color: '#A78BFA' }]}>🔔 Alert</Text>
-                    </View>
-                  </View>
-                </>
-              )}
-            </View>
-
-            {/* Info strip */}
-            <View style={styles.qaInfoBox}>
-              <Text style={styles.qaInfoText}>
-                💾  Saves to DYUKSA{'\n'}
-                {activeTab === 'task'
-                  ? 'Task appears in the Tasks tab instantly.'
-                  : 'Event appears in the Calendar tab instantly.'}
-              </Text>
-            </View>
-
-            {/* Buttons */}
-            <View style={styles.qaActionRow}>
-              <TouchableOpacity style={styles.qaCancelBtn} onPress={handleClose}>
-                <Text style={styles.qaCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.qaSaveBtn} onPress={handleContinue}>
-                <Text style={styles.qaSaveText}>
-                  {activeTab === 'task' ? 'Continue →' : 'Continue →'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-          </ScrollView>
-        </SafeAreaView>
+            <Text style={{ color: isDark ? '#3A3A4A' : '#D0D0DA', fontSize: 18 }}>›</Text>
+          </TouchableOpacity>
+        ))}
+        <View style={{ height: 24 }} />
       </Animated.View>
     </Modal>
   );
 }
 
-// Bottom bar: Dashboard | Projects | FAB (Quick Add) | Calendar | Tasks
 function MainTabs() {
   const navigation = useNavigation();
   const [qaVisible, setQaVisible] = useState(false);
@@ -261,13 +267,9 @@ function MainTabs() {
 
   const openQuickAdd = () => setQaVisible(true);
 
-  // Center + FAB: open AI Task modal directly (skip Quick Add)
-  // The modal itself has Task/Event tabs so user can switch inside it.
+  // FAB → navigate to the full QuickCreate screen
   const openAIModalDirect = () => {
-    navigation.navigate('Main', {
-      screen: 'Tasks',
-      params: { openCreateModalAI: true, returnTo: currentTabName },
-    });
+    navigation.navigate('QuickCreate');
   };
 
   const handlePickTask = () => {
@@ -308,15 +310,7 @@ function MainTabs() {
         safeAreaInsets={{ bottom: 0 }}
         screenOptions={({ route }) => ({
           headerShown: false,
-          tabBarStyle: [
-            styles.tabBar,
-            {
-              backgroundColor: tabBg,
-              height: tabBarHeight,
-              paddingBottom: insets.bottom,
-              borderTopColor: tabBorder,
-            },
-          ],
+          tabBarStyle: { display: 'none' },
           tabBarActiveTintColor: tabActive,
           tabBarInactiveTintColor: tabInactive,
           tabBarLabel: ({ color, focused }) => (
@@ -345,7 +339,7 @@ function MainTabs() {
           listeners={{
             tabPress: (e) => {
               e.preventDefault();
-              openAIModalDirect();
+              navigation.navigate('QuickCreate');
             },
           }}
         />
@@ -354,12 +348,13 @@ function MainTabs() {
         <Tab.Screen name="Tasks"    component={TasksScreen} />
       </Tab.Navigator>
 
+      {/* Draggable floating FAB */}
+      <DraggableFAB onPress={openAIModalDirect} />
+
       <QuickAddModal
         visible={qaVisible}
         onClose={() => setQaVisible(false)}
-        onPickTask={handlePickTask}
-        onPickEvent={handlePickEvent}
-        onPickAI={handlePickAI}
+        navigation={navigation}
       />
     </>
   );
@@ -443,6 +438,8 @@ function RootNavigator() {
           <Stack.Screen name="MyWork"             component={MyWorkScreen} />
           <Stack.Screen name="Reports"            component={ReportsScreen} />
           <Stack.Screen name="DocumentViewer"     component={DocumentViewerScreen} />
+          <Stack.Screen name="QuickCreate"         component={QuickCreateScreen} options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />
+          <Stack.Screen name="CreateProject"       component={CreateProjectScreen} options={{ animation: 'slide_from_right' }} />
         </>
       )}
     </Stack.Navigator>
@@ -482,6 +479,11 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
   },
   fabWrapper: { flex: 1, alignItems: 'center', justifyContent: 'flex-start' },
+  draggableFab: {
+    position: 'absolute',
+    zIndex: 9999,
+    elevation: 20,
+  },
   fab: {
     width: 58, height: 58, borderRadius: 29,
     backgroundColor: '#000',
@@ -506,7 +508,7 @@ const styles = StyleSheet.create({
   },
   qaPanel: {
     position: 'absolute', top: 0, left: 0, right: 0,
-    backgroundColor: '#fff',
+    backgroundColor: '#FFFFFF',
     borderBottomLeftRadius: 24, borderBottomRightRadius: 24,
     maxHeight: '92%',
     shadowColor: '#000', shadowOffset: { width: 0, height: 8 },

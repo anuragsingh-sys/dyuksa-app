@@ -7,7 +7,7 @@ import {
 import { WebView } from 'react-native-webview';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useState, useContext, useEffect, useCallback, useMemo } from 'react';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useNavigation, useFocusEffect, useRoute } from '@react-navigation/native';
 import SidebarMenu from '../components/SidebarMenu';
 import NotificationBell from '../components/NotificationBell';
 import { ThemeContext } from '../context/ThemeContext';
@@ -248,6 +248,7 @@ const fileIconStyles = StyleSheet.create({
 
 export default function DocumentsScreen() {
   const navigation = useNavigation();
+  const route = useRoute();
   const { theme, fontScale } = useContext(ThemeContext);
   const isDark = theme === 'Dark';
   const bg   = isDark ? '#0D0D0F' : '#F5F5F7';
@@ -477,6 +478,15 @@ export default function DocumentsScreen() {
   );
 
   useFocusEffect(useCallback(() => { loadAll(); }, [loadAll]));
+
+  // Open upload modal directly when navigated from FAB / QuickCreate
+  useFocusEffect(useCallback(() => {
+    if (route.params?.openUpload) {
+      navigation.setParams({ openUpload: false });
+      // Small delay so the screen finishes mounting first
+      setTimeout(() => openUploadModal(), 350);
+    }
+  }, [route.params?.openUpload]));
 
   // ── Fetch users for share modal ──────────────────────────────────
   useEffect(() => {
@@ -893,15 +903,17 @@ export default function DocumentsScreen() {
             {!!status && (
               <View style={[styles.statusPill, {
                 backgroundColor:
-                  status === 'approved'  ? '#D1FAE5' :
-                  status === 'in_review' ? '#FEF3C7' :
-                  status === 'archived'  ? '#F3F4F6' : '#F5F5F7',
+                  status === 'approved'  ? (isDark ? 'rgba(34,160,107,0.15)' : '#D1FAE5') :
+                  status === 'in_review' ? (isDark ? 'rgba(229,166,14,0.15)' : '#FEF3C7') :
+                  status === 'archived'  ? (isDark ? '#252530' : '#F3F4F6') :
+                                           (isDark ? '#252530' : '#F5F5F7'),
               }]}>
                 <Text style={[styles.statusPillTxt, {
                   color:
-                    status === 'approved'  ? '#065F46' :
-                    status === 'in_review' ? '#92400E' :
-                    status === 'archived'  ? '#6B7280' : '#374151',
+                    status === 'approved'  ? (isDark ? '#4ADE80' : '#065F46') :
+                    status === 'in_review' ? (isDark ? '#FCD34D' : '#92400E') :
+                    status === 'archived'  ? (isDark ? '#9898A6' : '#6B7280') :
+                                             (isDark ? '#9898A6' : '#374151'),
                   fontSize: fs(9),
                 }]}>
                   {status === 'in_review' ? 'IN REVIEW' : status.toUpperCase()}

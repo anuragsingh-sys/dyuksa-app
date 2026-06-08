@@ -12,6 +12,8 @@ import { getAccessToken, getWorkspaceId } from '../services/ApiService';
 import SidebarMenu from '../components/SidebarMenu';
 import NotificationBell from '../components/NotificationBell';
 import { BASE_URL } from '../config';
+import { Feather } from '@expo/vector-icons';
+import { useTasksCache } from '../hooks/useTasksCache';
 
 // ── Token colours (inline — no dep on dev_1 constants folder) ────────────────
 const T = {
@@ -113,10 +115,10 @@ function TextLink({ children, onPress }) {
   );
 }
 
-function Progress({ value = 0, color = T.brand, h = 6 }) {
+function Progress({ value = 0, color = T.brand, h = 6, trackColor }) {
   const pct = Math.min(100, Math.max(0, value));
   return (
-    <View style={{ height: h, backgroundColor: T.hairlineSoft, borderRadius: h }}>
+    <View style={{ height: h, backgroundColor: trackColor || T.hairlineSoft, borderRadius: h }}>
       <View style={{ height: h, width: `${pct}%`, backgroundColor: color, borderRadius: h }} />
     </View>
   );
@@ -167,7 +169,8 @@ export default function DashboardScreen() {
   const isDark     = theme === 'Dark';
 
   // ── State ──────────────────────────────────────────────────────────────────
-  const [tasks,         setTasks]         = useState([]);
+  // Tasks come from the shared cache — no duplicate fetches across screens
+  const { tasks } = useTasksCache();
   const [projects,      setProjects]      = useState([]);
   const [recentDocs,    setRecentDocs]    = useState([]);
   const [totalDocs,     setTotalDocs]     = useState(0);
@@ -175,21 +178,16 @@ export default function DashboardScreen() {
   const [refreshing,    setRefreshing]    = useState(false);
   const [activeTaskTab, setActiveTaskTab] = useState('upcoming');
 
-  // ── Fetch all data ─────────────────────────────────────────────────────────
+  // ── Fetch projects + docs only (tasks come from shared cache) ─────────────
   const fetchAll = useCallback(async () => {
     try {
       const headers = await authHeaders();
 
-      const [tasksRes, projectsRes, docsRes] = await Promise.all([
-        fetch(`${BASE_URL}/tasks/?page_size=50`, { headers }),
+      const [projectsRes, docsRes] = await Promise.all([
         fetch(`${BASE_URL}/projects/?page_size=20`, { headers }),
         fetch(`${BASE_URL}/documents/?page_size=10`, { headers }),
       ]);
 
-      if (tasksRes.ok) {
-        const d = await tasksRes.json();
-        setTasks(Array.isArray(d) ? d : (d.results || []));
-      }
       if (projectsRes.ok) {
         const d = await projectsRes.json();
         setProjects(Array.isArray(d) ? d : (d.results || []));
@@ -211,9 +209,18 @@ export default function DashboardScreen() {
 
   // ── Derived counts ─────────────────────────────────────────────────────────
   const totalTasks     = tasks.length;
-  const completedTasks = tasks.filter(t => (t.status || '').toLowerCase() === 'completed').length;
-  const overdueTasks   = tasks.filter(t => (t.status || '').toLowerCase() === 'overdue').length;
+  const completedTasks = tasks.filter(t => ['completed', 'done'].includes((t.status || '').toLowerCase())).length;
+  const overdueTasks   = tasks.filter(t => {
+    const s = (t.status || '').toLowerCase();
+    const due = t.end_date || t.due_date;
+    const today = new Date().toISOString().slice(0,10);
+    return (s !== 'completed' && s !== 'deployed' && due && due < today);
+  }).length;
   const inProgressTasks= tasks.filter(t => (t.status || '').toLowerCase() === 'in_progress').length;
+  const pendingTasks   = tasks.filter(t => (t.status || '').toLowerCase() === 'pending').length;
+  const backlogTasks   = tasks.filter(t => (t.status || '').toLowerCase() === 'backlog').length;
+  const reviewTasks    = tasks.filter(t => (t.status || '').toLowerCase() === 'review').length;
+  const deployedTasks  = tasks.filter(t => (t.status || '').toLowerCase() === 'deployed').length;
 
   const upcomingTasks  = tasks.filter(t => {
     const s = (t.status || '').toLowerCase();
@@ -221,7 +228,7 @@ export default function DashboardScreen() {
   }).slice(0, 5);
 
   const overdueTasksList = tasks.filter(t => (t.status || '').toLowerCase() === 'overdue').slice(0, 5);
-  const completedTasksList = tasks.filter(t => (t.status || '').toLowerCase() === 'completed').slice(0, 5);
+  const completedTasksList = tasks.filter(t => ['completed', 'done'].includes((t.status || '').toLowerCase())).slice(0, 5);
 
   const tasksByTab = (tab) => {
     if (tab === 'upcoming')  return upcomingTasks;
@@ -238,27 +245,32 @@ export default function DashboardScreen() {
 
   // ── Overview stat cards ────────────────────────────────────────────────────
   const OVERVIEW = [
-    { label: 'Total Projects',  value: projects.length, color: T.cBlue,   soft: T.cBlueSoft,   icon: '📁' },
-    { label: 'Total Documents', value: totalDocs, color: T.cGreen,  soft: T.cGreenSoft,  icon: '📄' },
-    { label: 'Total Tasks',     value: totalTasks,      color: T.cYellow, soft: T.cYellowSoft, icon: '✅' },
-    { label: 'Completed',       value: completedTasks,  color: T.cPurple, soft: T.cPurpleSoft, icon: '🏁' },
-    { label: 'Overdue Tasks',   value: overdueTasks,    color: T.cRed,    soft: T.cRedSoft,    icon: '🚨' },
+    { label: 'Total Projects',  value: projects.length, color: T.cBlue,   soft: T.cBlueSoft,   icon: '📁',
+      onPress: () => { try { navigation.jumpTo('Projects'); } catch { navigation.navigate('Projects'); } } },
+    { label: 'Total Documents', value: totalDocs,       color: T.cGreen,  soft: T.cGreenSoft,  icon: '📄',
+      onPress: () => navigation.navigate('Docs') },
+    { label: 'Total Tasks',     value: totalTasks,      color: T.cYellow, soft: T.cYellowSoft, icon: '✅',
+      onPress: () => { try { navigation.jumpTo('Tasks'); } catch { navigation.navigate('Tasks'); } } },
+    { label: 'Completed',       value: completedTasks,  color: T.cPurple, soft: T.cPurpleSoft, icon: '🏁',
+      onPress: () => { try { navigation.jumpTo('Tasks'); } catch { navigation.navigate('Tasks'); } } },
+    { label: 'Overdue Tasks',   value: overdueTasks,    color: T.cRed,    soft: T.cRedSoft,    icon: '🚨',
+      onPress: () => { try { navigation.jumpTo('Tasks'); } catch { navigation.navigate('Tasks'); } } },
   ];
 
   // ── Quick Actions ──────────────────────────────────────────────────────────
   // Tab screens use jumpTo; Stack screens use navigate
   const QUICK_ACTIONS = [
-    { label: 'Tasks',     icon: '✅', color: T.cBlue,   soft: T.cBlueSoft,
+    { label: 'Tasks',     icon: 'check-square', color: T.cBlue,   soft: T.cBlueSoft,
       onPress: () => { try { navigation.jumpTo('Tasks'); } catch { navigation.navigate('Tasks'); } } },
-    { label: 'Documents', icon: '📄', color: T.cGreen,  soft: T.cGreenSoft,
-      onPress: () => navigation.navigate('Docs') },
-    { label: 'Calendar',  icon: '📅', color: T.cYellow, soft: T.cYellowSoft,
+    { label: 'Projects',  icon: 'folder',       color: T.cGreen,  soft: T.cGreenSoft,
+      onPress: () => { try { navigation.jumpTo('Projects'); } catch { navigation.navigate('Projects'); } } },
+    { label: 'Calendar',  icon: 'calendar',     color: T.cYellow, soft: T.cYellowSoft,
       onPress: () => { try { navigation.jumpTo('Calendar'); } catch { navigation.navigate('Calendar'); } } },
-    { label: 'Chat',      icon: '💬', color: T.cPurple, soft: T.cPurpleSoft,
-      onPress: () => navigation.navigate('Chat') },
-    { label: 'Team',      icon: '👥', color: T.cRed,    soft: T.cRedSoft,
+    { label: 'Documents', icon: 'file-text',    color: T.cPurple, soft: T.cPurpleSoft,
+      onPress: () => navigation.navigate('Docs') },
+    { label: 'Team',      icon: 'users',        color: T.cRed,    soft: T.cRedSoft,
       onPress: () => navigation.navigate('TeamManagement') },
-    { label: 'Notes',     icon: '⚡', color: T.cBlue,   soft: T.cBlueSoft,
+    { label: 'Notes',     icon: 'zap',          color: T.cBlue,   soft: T.cBlueSoft,
       onPress: () => navigation.navigate('QuickNotes') },
   ];
 
@@ -343,19 +355,122 @@ export default function DashboardScreen() {
             </SectionHeader>
             <View style={s.overviewGrid}>
               {OVERVIEW.map((item, idx) => (
-                <Card key={idx} isDark={isDark} style={[s.statCard, idx === OVERVIEW.length - 1 && OVERVIEW.length % 2 !== 0 && { flex: 0, width: '48%' }]} padding={12}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                    <View style={[s.statIcon, { backgroundColor: isDark ? '#252530' : item.soft }]}>
-                      <Text style={{ fontSize: 14 }}>{item.icon}</Text>
+                <TouchableOpacity
+                  key={idx}
+                  onPress={item.onPress}
+                  activeOpacity={0.75}
+                  style={[s.statCard, idx === OVERVIEW.length - 1 && OVERVIEW.length % 2 !== 0 && { flex: 0, width: '48%' }]}
+                >
+                  <Card isDark={isDark} padding={12}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                      <View style={[s.statIcon, { backgroundColor: isDark ? '#252530' : item.soft }]}>
+                        <Text style={{ fontSize: 14 }}>{item.icon}</Text>
+                      </View>
+                      <Text style={[s.statLabel, { color: isDark ? '#9AA3B2' : T.ink3 }]}>{item.label}</Text>
                     </View>
-                    <Text style={[s.statLabel, { color: isDark ? '#9AA3B2' : T.ink3 }]}>{item.label}</Text>
-                  </View>
-                  <Text style={[s.statValue, { color: isDark ? '#fff' : T.ink }]}>{item.value}</Text>
-                </Card>
+                    <Text style={[s.statValue, { color: isDark ? '#fff' : T.ink }]}>{item.value}</Text>
+                  </Card>
+                </TouchableOpacity>
               ))}
             </View>
 
-            {/* 3. My Tasks with tabs */}
+            {/* 3. Tasks by Status */}
+            <SectionHeader isDark={isDark} style={{ marginTop: 4 }}>
+              Tasks by Status
+            </SectionHeader>
+            <Card isDark={isDark} style={{ marginBottom: 22 }} padding={16}>
+              {/* Tasks by Status — stacked bar chart (pure RN) */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+                {/* Left: circle with total */}
+                {(() => {
+                    const SIZE = 88;
+                    const RING = 13;
+                    // Order matches legend exactly — clockwise from top
+                    const segs = [
+                      { count: pendingTasks,    color: '#F59E0B' },  // yellow - largest
+                      { count: backlogTasks,    color: '#EF4444' },  // red
+                      { count: inProgressTasks, color: '#3B82F6' },  // blue
+                      { count: completedTasks,  color: '#22C55E' },  // green
+                      { count: reviewTasks,     color: '#A78BFA' },  // purple
+                    ].filter(s => s.count > 0);
+                    const total = segs.reduce((a, s) => a + s.count, 0) || 1;
+                    // Build stacked half-rings rotated to show proportional segments
+                    let cumDeg = -90; // start from top
+                    return (
+                      <View style={{ width: SIZE, height: SIZE, alignItems: 'center', justifyContent: 'center' }}>
+                        {/* Track */}
+                        <View style={{ position: 'absolute', width: SIZE, height: SIZE, borderRadius: SIZE/2,
+                          borderWidth: RING, borderColor: isDark ? '#252530' : '#EBEBF0' }} />
+                        {/* Segments using double-half approach for full arc coverage */}
+                        {segs.map((seg, i) => {
+                          const deg = (seg.count / total) * 360;
+                          const startDeg = cumDeg;
+                          cumDeg += deg;
+                          // For segments > 180deg, render two halves
+                          if (deg > 180) {
+                            return [
+                              <View key={i+'a'} style={{ position: 'absolute', width: SIZE, height: SIZE, borderRadius: SIZE/2,
+                                borderWidth: RING, borderColor: 'transparent',
+                                borderTopColor: seg.color, borderRightColor: seg.color,
+                                transform: [{ rotate: `${startDeg}deg` }]
+                              }} />,
+                              <View key={i+'b'} style={{ position: 'absolute', width: SIZE, height: SIZE, borderRadius: SIZE/2,
+                                borderWidth: RING, borderColor: 'transparent',
+                                borderTopColor: seg.color, borderRightColor: deg > 270 ? seg.color : 'transparent',
+                                borderBottomColor: deg > 270 ? seg.color : 'transparent',
+                                transform: [{ rotate: `${startDeg + 90}deg` }]
+                              }} />
+                            ];
+                          }
+                          return (
+                            <View key={i} style={{ position: 'absolute', width: SIZE, height: SIZE, borderRadius: SIZE/2,
+                              borderWidth: RING, borderColor: 'transparent',
+                              borderTopColor: seg.color,
+                              borderRightColor: deg > 90 ? seg.color : 'transparent',
+                              transform: [{ rotate: `${startDeg}deg` }]
+                            }} />
+                          );
+                        })}
+                        {/* Center */}
+                        <View style={{ width: SIZE - RING*2 - 4, height: SIZE - RING*2 - 4,
+                          borderRadius: (SIZE - RING*2 - 4)/2,
+                          backgroundColor: isDark ? '#1A1A20' : '#fff',
+                          alignItems: 'center', justifyContent: 'center', zIndex: 10 }}>
+                          <Text style={{ fontSize: 15, fontWeight: '800', color: isDark ? '#fff' : T.ink }}>{totalTasks}</Text>
+                          <Text style={{ fontSize: 8, color: T.ink3 }}>Total</Text>
+                        </View>
+                      </View>
+                    );
+                  })()}
+
+                {/* Legend */}
+                <View style={{ flex: 1, gap: 8 }}>
+                  {[
+                    { label: 'Pending',     count: pendingTasks,    color: '#F59E0B' },
+                    { label: 'Backlog',     count: backlogTasks,    color: '#EF4444' },
+                    { label: 'In Progress', count: inProgressTasks, color: '#3B82F6' },
+                    { label: 'Completed',   count: completedTasks,  color: '#22C55E' },
+                    { label: 'Review',      count: reviewTasks,     color: '#A78BFA' },
+                  ].map((item, i) => (
+                    <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: item.color, flexShrink: 0 }} />
+                      <Text style={{ width: 78, fontSize: 11, color: isDark ? '#9AA3B2' : T.ink2, fontWeight: '500' }} numberOfLines={1}>
+                        {item.label}
+                      </Text>
+                      {/* Progress bar */}
+                      <View style={{ flex: 1, height: 6, backgroundColor: isDark ? '#2A2A38' : '#EBEBF0', borderRadius: 3, overflow: 'hidden' }}>
+                        <View style={{ width: `${totalTasks > 0 ? Math.round((item.count / totalTasks) * 100) : 0}%`, height: '100%', backgroundColor: item.color, borderRadius: 3 }} />
+                      </View>
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: isDark ? '#fff' : T.ink, width: 26, textAlign: 'right' }}>
+                        {item.count}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            </Card>
+
+            {/* 4. My Tasks with tabs */}
             <SectionHeader
               isDark={isDark}
               right={<TextLink onPress={() => { try { navigation.jumpTo('Tasks'); } catch { navigation.navigate('Tasks'); } }}>View all</TextLink>}
@@ -447,7 +562,7 @@ export default function DashboardScreen() {
                         </Text>
                       </View>
                       <View style={{ width: 80, marginRight: 10 }}>
-                        <Progress value={progress} color={color} h={5} />
+                        <Progress value={progress} color={color} h={5} trackColor={isDark ? '#2A2A38' : T.hairlineSoft} />
                       </View>
                       <Text style={{ fontSize: 12, fontWeight: '650', color: isDark ? '#9AA3B2' : T.ink2, minWidth: 34, textAlign: 'right' }}>
                         {progress}%
@@ -459,7 +574,7 @@ export default function DashboardScreen() {
             </Card>
 
             {/* 5. Recent Documents (as Activity feed) */}
-            <SectionHeader isDark={isDark} right={<TextLink onPress={() => { try { navigation.jumpTo('Docs'); } catch { navigation.navigate('Docs'); } }}>See all</TextLink>}>
+            <SectionHeader isDark={isDark} right={<TextLink onPress={() => navigation.navigate('Docs')}>See all</TextLink>}>
               Recent Documents
             </SectionHeader>
             <Card isDark={isDark} style={{ marginBottom: 22, padding: 0 }}>
@@ -501,8 +616,8 @@ export default function DashboardScreen() {
             <View style={s.quickGrid}>
               {QUICK_ACTIONS.map((action, idx) => (
                 <TouchableOpacity key={idx} style={[s.quickBtn, { backgroundColor: isDark ? '#1A1A20' : T.surface, borderColor: isDark ? '#252530' : T.hairline }]} onPress={action.onPress} activeOpacity={0.7}>
-                  <View style={[s.quickIcon, { backgroundColor: isDark ? '#252530' : action.soft }]}>
-                    <Text style={{ fontSize: 20 }}>{action.icon}</Text>
+                  <View style={[s.quickIcon, { backgroundColor: isDark ? action.color + '22' : action.soft }]}>
+                    <Feather name={action.icon} size={20} color={action.color} />
                   </View>
                   <Text style={[s.quickLabel, { color: isDark ? '#ccc' : T.ink2 }]}>{action.label}</Text>
                 </TouchableOpacity>

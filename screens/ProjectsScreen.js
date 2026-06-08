@@ -102,13 +102,18 @@ function Progress({ value = 0, color = T.brand, h = 5 }) {
 }
 
 function SummaryTile({ label, count, dotColor }) {
+  const { theme } = useContext(ThemeContext);
+  const isDark = theme === 'Dark';
   return (
-    <View style={s.summaryTile}>
+    <View style={[s.summaryTile, { 
+      backgroundColor: isDark ? '#1A1A20' : T.surface,
+      borderColor: isDark ? '#252530' : T.hairline,
+    }]}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 }}>
         <View style={[s.dot, { backgroundColor: dotColor }]} />
-        <Text style={s.summaryLabel}>{label}</Text>
+        <Text style={[s.summaryLabel, { color: isDark ? '#9898A6' : T.ink3 }]}>{label}</Text>
       </View>
-      <Text style={s.summaryCount}>{count}</Text>
+      <Text style={[s.summaryCount, { color: isDark ? '#FFFFFF' : T.ink }]}>{count}</Text>
     </View>
   );
 }
@@ -1285,7 +1290,7 @@ const s = StyleSheet.create({
 // Modal styles
 const ms = StyleSheet.create({
   overlay: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.45)' },
-  topModal: { position: 'absolute', top: 0, left: 0, right: 0, backgroundColor: '#fff', borderBottomLeftRadius: 24, borderBottomRightRadius: 24, maxHeight: '94%', shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 16, elevation: 20 },
+  topModal: { position: 'absolute', top: 0, left: 0, right: 0, borderBottomLeftRadius: 24, borderBottomRightRadius: 24, maxHeight: '94%', shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 16, elevation: 20 },
   handle: { width: 40, height: 4, backgroundColor: '#DEDEE8', borderRadius: 2, alignSelf: 'center', marginTop: 8, marginBottom: 4 },
   modalScroll: { paddingHorizontal: 20 },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, marginTop: 4 },
@@ -1341,7 +1346,7 @@ const ds = StyleSheet.create({
   taskActionsRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
   createTaskBtn: { backgroundColor: '#1A1A2E', borderRadius: 10, paddingHorizontal: 14, height: 40, justifyContent: 'center', alignItems: 'center' },
   createTaskBtnText: { color: '#fff', fontSize: 13, fontWeight: '700' },
-  importBtn: { backgroundColor: '#fff', borderWidth: 1.5, borderColor: '#1A1A2E', borderRadius: 10, height: 40, justifyContent: 'center', alignItems: 'center' },
+  importBtn: { borderWidth: 1.5, borderColor: '#1A1A2E', borderRadius: 10, height: 40, justifyContent: 'center', alignItems: 'center' },
   importBtnText: { color: '#1A1A2E', fontSize: 13, fontWeight: '700' },
   taskCard: { borderRadius: 10, borderWidth: 1, padding: 12, marginBottom: 8 },
   taskStatusChip: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },

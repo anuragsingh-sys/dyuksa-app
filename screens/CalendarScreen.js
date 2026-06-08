@@ -31,10 +31,12 @@ const MONTHS = ['January','February','March','April','May','June','July','August
 const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const STATUS_COLORS = { pending: '#FBBF24', in_progress: '#4ECDC4', completed: '#4ADE80', deployed: '#3B82F6', deferred: '#888899', review: '#A78BFA' };
 const EVENT_TYPES = [
-  { id: 'Meeting',   icon: '👥', label: 'Meeting' },
-  { id: 'Review',    icon: '📋', label: 'Review' },
-  { id: 'Interview', icon: '🎯', label: 'Interview' },
-  { id: 'Training',  icon: '📚', label: 'Training' },
+  { id: 'Meeting',   label: 'Meeting',   color: '#2D6AE3', soft: '#E6EEFC' },
+  { id: 'Review',    label: 'Review',    color: '#A78BFA', soft: '#EEEAFE' },
+  { id: 'Interview', label: 'Interview', color: '#F59E0B', soft: '#FEF3CE' },
+  { id: 'Training',  label: 'Training',  color: '#22A06B', soft: '#E2F5EC' },
+  { id: 'Webinar',   label: 'Webinar',   color: '#E5484D', soft: '#FBE3E3' },
+  { id: 'Other',     label: 'Other',     color: '#6B7588', soft: '#F0F2F6' },
 ];
 
 // ── Custom 3-column wheel time picker ──────────────────────────────────────
@@ -213,7 +215,7 @@ export default function CalendarScreen() {
   const today = new Date();
 
   // ── View state ──
-  const [viewMode,    setViewMode]    = useState('twoDay'); // day | twoDay | workWeek | week | month
+  const [viewMode,    setViewMode]    = useState('workWeek'); // day | twoDay | workWeek | week | month
   const [showViewMenu, setShowViewMenu] = useState(false);
   // Where to place the dropdown — measured from the Today button's position
   // in window coordinates. We render the menu inside a Modal (so taps don't
@@ -238,6 +240,7 @@ export default function CalendarScreen() {
 
   // ── Events ──
   const [events, setEvents] = useState([]);
+  const [selectedMonthDate, setSelectedMonthDate] = useState(new Date()); // tapped date in month view
   const [eventsLoading, setEventsLoading] = useState(false);
   const [eventsError,   setEventsError]   = useState(null);
 
@@ -1624,35 +1627,100 @@ export default function CalendarScreen() {
     const fd  = new Date(y, m, 1).getDay();
     return (
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 110 }}>
-        <View style={[styles.monthGrid, { backgroundColor: card, borderColor: bdr }]}>
+        <View style={[styles.monthGrid, { backgroundColor: isDark ? '#0D0D0F' : '#FFFFFF', borderColor: bdr }]}>
           <View style={styles.monthDayRow}>
             {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d => (
               <Text key={d} style={[styles.monthDayLabel, { color: sub }]}>{d}</Text>
             ))}
           </View>
           <View style={styles.monthDates}>
-            {Array.from({ length: fd }).map((_, i) => <View key={`e${i}`} style={styles.monthCell} />)}
+            {Array.from({ length: fd }).map((_, i) => <View key={`e${i}`} style={[styles.monthCell, { backgroundColor: isDark ? '#0D0D0F' : '#FFFFFF', borderColor: bdr }]} />)}
             {Array.from({ length: dim }, (_, i) => {
               const d = i + 1;
               const date = new Date(y, m, d);
               const isToday = d === today.getDate() && m === today.getMonth() && y === today.getFullYear();
               const dayEvs = eventsForDay(date);
               return (
-                <TouchableOpacity key={d} style={[styles.monthCell, { borderColor: bdr }]} onPress={() => { setCurrentDate(date); setViewMode('day'); }}>
-                  <View style={[styles.monthDateCircle, isToday && styles.miniDateToday]}>
+                <TouchableOpacity key={d} style={[styles.monthCell, { borderColor: bdr, backgroundColor: isDark ? '#0D0D0F' : '#FFFFFF' }]} onPress={() => setSelectedMonthDate(date)}>
+                  <View style={[styles.monthDateCircle, isToday && styles.miniDateToday,
+                    selectedMonthDate && date.toDateString() === selectedMonthDate.toDateString() && !isToday && { backgroundColor: isDark ? '#252530' : '#E8EEFF' }
+                  ]}>
                     <Text style={[styles.monthDateText, { color: txt }, isToday && { color: '#fff' }]}>{d}</Text>
                   </View>
-                  {dayEvs.slice(0, 2).map((ev, i) => (
-                    <View key={i} style={styles.monthEventChip}>
-                      <Text style={styles.monthEventChipText} numberOfLines={1}>{ev.name}</Text>
+                  {/* Colored dots for events */}
+                  {dayEvs.length > 0 && (
+                    <View style={{ flexDirection: 'row', gap: 2, marginTop: 3, justifyContent: 'center' }}>
+                      {dayEvs.slice(0, 3).map((ev, i) => (
+                        <View key={i} style={{
+                          width: 5, height: 5, borderRadius: 3,
+                          backgroundColor: ev.color || (ev.type === 'task' ? '#4ECDC4' : '#2D6AE3'),
+                        }} />
+                      ))}
                     </View>
-                  ))}
-                  {dayEvs.length > 2 && <Text style={styles.monthMoreText}>+{dayEvs.length - 2} more</Text>}
+                  )}
                 </TouchableOpacity>
               );
             })}
+            {/* Trailing empty cells to complete the last row */}
+            {Array.from({ length: (7 - ((fd + dim) % 7)) % 7 }).map((_, i) => (
+              <View key={`t${i}`} style={[styles.monthCell, { backgroundColor: isDark ? '#0D0D0F' : '#FFFFFF', borderColor: bdr }]} />
+            ))}
           </View>
         </View>
+
+        {/* Events list for selected date */}
+        {selectedMonthDate && (() => {
+          const selEvs = eventsForDay(selectedMonthDate);
+          const label  = selectedMonthDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
+          return (
+            <View style={{ marginTop: 8, paddingHorizontal: 0 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10 }}>
+                <Text style={{ fontSize: 14, fontWeight: '700', color: txt }}>{label} Events</Text>
+                <TouchableOpacity onPress={() => { setCurrentDate(selectedMonthDate); setViewMode('day'); }}>
+                  <Text style={{ fontSize: 12, color: '#4ECDC4', fontWeight: '600' }}>Open day →</Text>
+                </TouchableOpacity>
+              </View>
+              {selEvs.length === 0 ? (
+                <View style={{ padding: 20, alignItems: 'center' }}>
+                  <Text style={{ color: sub, fontSize: 13 }}>No events on this day</Text>
+                </View>
+              ) : selEvs.map((ev, i) => {
+                const startTime = ev.eventTimestamp ? new Date(ev.eventTimestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) : '';
+                const endTime   = ev.eventEndTimestamp ? new Date(ev.eventEndTimestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) : '';
+                const color     = ev.color || (ev.type === 'task' ? '#4ECDC4' : '#2D6AE3');
+                return (
+                  <TouchableOpacity
+                    key={ev.id || i}
+                    style={{ flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 14, paddingVertical: 12,
+                      borderTopWidth: i === 0 ? 1 : 0, borderBottomWidth: 1, borderColor: isDark ? '#252530' : '#E6E9EF',
+                      backgroundColor: card,
+                    }}
+                    onPress={() => ev.type === 'task' ? null : openEditModal(ev)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={{ width: 4, borderRadius: 2, backgroundColor: color, marginRight: 12, alignSelf: 'stretch', minHeight: 36 }} />
+                    <View style={{ flex: 1 }}>
+                      {startTime ? <Text style={{ fontSize: 11, color: sub, marginBottom: 2 }}>{startTime}{endTime ? ` - ${endTime}` : ''}</Text> : null}
+                      <Text style={{ fontSize: 14, fontWeight: '600', color: txt }}>{ev.name}</Text>
+                      {ev.assignees?.length > 0 && (
+                        <View style={{ flexDirection: 'row', marginTop: 6, gap: -6 }}>
+                          {ev.assignees.slice(0, 3).map((a, j) => (
+                            <View key={j} style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: color, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: card }}>
+                              <Text style={{ fontSize: 9, fontWeight: '700', color: '#fff' }}>{(a.name || a.username || '?')[0].toUpperCase()}</Text>
+                            </View>
+                          ))}
+                        </View>
+                      )}
+                    </View>
+                    <View style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, backgroundColor: color + '20' }}>
+                      <Text style={{ fontSize: 11, fontWeight: '600', color }}>{ev.type === 'task' ? 'Task' : (ev.eventType || 'Meeting')}</Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          );
+        })()}
       </ScrollView>
     );
   };
@@ -1826,86 +1894,63 @@ export default function CalendarScreen() {
         ))}
       </View>
 
-      {/* Toolbar wrapper — relative position so the dropdown anchors here */}
+      {/* Web-style Month/Week/Day segmented control + nav */}
       <View style={{ position: 'relative', zIndex: 50 }}>
-        <View style={[styles.toolbar, { backgroundColor: card, borderBottomColor: bdr }]}>
-          {/* Today button → opens view-mode dropdown */}
+        {/* Segmented control row */}
+        <View style={[styles.segRow, { backgroundColor: isDark ? '#0D0D0F' : '#F5F5F7', borderBottomColor: bdr }]}>
+          {/* Month */}
           <TouchableOpacity
-            ref={todayBtnRef}
-            style={styles.todayBtn}
-            onPress={() => (showViewMenu ? setShowViewMenu(false) : openViewMenu())}
-            activeOpacity={0.8}
+            style={[styles.segBtn, viewMode === 'month' && [styles.segBtnActive, { backgroundColor: card }]]}
+            onPress={() => setViewMode('month')}
+            activeOpacity={0.7}
           >
-            <Text style={styles.todayBtnText}>Day</Text>
-            <Text style={[styles.todayBtnChevron, showViewMenu && { transform: [{ rotate: '180deg' }] }]}>▾</Text>
+            <Text style={[styles.segBtnText, { color: viewMode === 'month' ? (isDark ? '#fff' : '#1A1A2E') : sub }, viewMode === 'month' && { fontWeight: '700' }]}>
+              Month
+            </Text>
           </TouchableOpacity>
 
-          {/* Center group: prev arrow · date range (tap to open mini-cal) · next arrow */}
-          <View style={styles.toolbarCenter}>
-            <TouchableOpacity style={styles.arrowBtn} onPress={goPrev}>
-              <Text style={[styles.arrowText, { color: txt }]}>‹</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => setShowMiniCal(s => !s)} style={styles.dateRangeBtn}>
-              <Text style={[styles.dateRange, { color: txt }]} numberOfLines={1}>{getHeaderLabel()}</Text>
-              <Text style={{ fontSize: 10, color: sub, marginLeft: 4 }}>{showMiniCal ? '▲' : '▾'}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.arrowBtn} onPress={goNext}>
-              <Text style={[styles.arrowText, { color: txt }]}>›</Text>
-            </TouchableOpacity>
-          </View>
+          {/* Week — tap to toggle between Week and Work Week */}
+          <TouchableOpacity
+            style={[styles.segBtn, (viewMode === 'week' || viewMode === 'workWeek') && [styles.segBtnActive, { backgroundColor: card }]]}
+            onPress={() => {
+              if (viewMode === 'week') setViewMode('workWeek');
+              else if (viewMode === 'workWeek') setViewMode('week');
+              else setViewMode('week');
+            }}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.segBtnText, { color: (viewMode === 'week' || viewMode === 'workWeek') ? (isDark ? '#fff' : '#1A1A2E') : sub }, (viewMode === 'week' || viewMode === 'workWeek') && { fontWeight: '700' }]}>
+              {viewMode === 'workWeek' ? 'Work Week' : 'Week'}
+            </Text>
+          </TouchableOpacity>
 
-          <TouchableOpacity style={styles.newEventBtn} onPress={() => openModal()}>
-            <Text style={styles.newEventBtnText}>+ New event</Text>
+          {/* Day */}
+          <TouchableOpacity
+            style={[styles.segBtn, viewMode === 'day' && [styles.segBtnActive, { backgroundColor: card }]]}
+            onPress={() => setViewMode('day')}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.segBtnText, { color: viewMode === 'day' ? (isDark ? '#fff' : '#1A1A2E') : sub }, viewMode === 'day' && { fontWeight: '700' }]}>
+              Day
+            </Text>
           </TouchableOpacity>
         </View>
 
-        {/* View-mode dropdown — anchored under the Today button.
-            Everything is rendered inside a Modal so the menu items sit on
-            top of the backdrop (otherwise the Modal's overlay swallows taps). */}
-        {showViewMenu && (
-          <Modal transparent visible animationType="none" onRequestClose={() => setShowViewMenu(false)}>
-            {/* Tap-anywhere-to-close backdrop */}
-            <TouchableOpacity
-              style={{ flex: 1 }}
-              activeOpacity={1}
-              onPress={() => setShowViewMenu(false)}
-            >
-              {/* Menu — absolute-positioned over the backdrop, anchored under Today.
-                  Toolbar y-position is roughly 8px padding + ~28px content + a bit of
-                  safe-area; we use a top offset that lands the menu under the button.
-                  The exact value of `top` here is in screen coordinates because Modal
-                  renders in a separate overlay. */}
-              <View
-                onStartShouldSetResponder={() => true}
-                style={[styles.viewMenu, { backgroundColor: card, borderColor: bdr, top: viewMenuPos.top, left: viewMenuPos.left }]}
-              >
-                {[
-                  { id: 'day',      label: 'Today' },
-                  { id: 'twoDay',   label: '2 Days' },
-                  { id: 'workWeek', label: 'Work Week' },
-                  { id: 'week',     label: 'Week' },
-                  { id: 'month',    label: 'Month' },
-                ].map(v => (
-                  <TouchableOpacity
-                    key={v.id}
-                    style={[styles.viewMenuItem, viewMode === v.id && { backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
-                    onPress={() => {
-                      // 2-day view is anchored to today, so snap the date back when picking it
-                      if (v.id === 'twoDay') setCurrentDate(new Date());
-                      setViewMode(v.id);
-                      setShowViewMenu(false);
-                    }}
-                  >
-                    <Text style={[styles.viewMenuItemText, { color: viewMode === v.id ? '#4ECDC4' : txt, fontWeight: viewMode === v.id ? '700' : '500' }]}>
-                      {v.label}
-                    </Text>
-                    {viewMode === v.id && <Text style={styles.viewMenuCheck}>✓</Text>}
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </TouchableOpacity>
-          </Modal>
-        )}
+        {/* Nav row: prev · date label · next */}
+        <View style={[styles.toolbar, { backgroundColor: card, borderBottomColor: bdr }]}>
+          <TouchableOpacity style={styles.arrowBtn} onPress={goPrev}>
+            <Text style={[styles.arrowText, { color: txt }]}>‹</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setShowMiniCal(s => !s)} style={styles.dateRangeBtn}>
+            <Text style={[styles.dateRange, { color: txt }]} numberOfLines={1}>{getHeaderLabel()}</Text>
+            <Text style={{ fontSize: 10, color: sub, marginLeft: 4 }}>{showMiniCal ? '▲' : '▾'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.arrowBtn} onPress={goNext}>
+            <Text style={[styles.arrowText, { color: txt }]}>›</Text>
+          </TouchableOpacity>
+        </View>
+
+
       </View>
 
       {/* ── Ask Dyuksa AI input bar ── */}
@@ -2405,51 +2450,43 @@ export default function CalendarScreen() {
                   onChangeText={setEventName}
                 />
 
-                {/* Event Type Dropdown */}
+                {/* Event Type — color pill chips */}
                 <Text style={[styles.fieldLabel, { color: sub }]}>EVENT TYPE</Text>
-                <TouchableOpacity
-                  style={[styles.typeTrigger, showTypeDropdown && styles.typeTriggerOpen]}
-                  onPress={() => setShowTypeDropdown(s => !s)}
-                >
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <Text style={{ fontSize: 16 }}>
-                      {(EVENT_TYPES.find(t => t.id === eventType)?.icon) || '✏️'}
-                    </Text>
-                    <Text style={styles.typeTriggerText}>
-                      {eventType === 'Other' ? (customType.trim() || 'Other') : eventType}
-                    </Text>
-                  </View>
-                  <Text style={styles.typeTriggerChevron}>{showTypeDropdown ? '▲' : '▾'}</Text>
-                </TouchableOpacity>
-
-                {showTypeDropdown && (
-                  <View style={[styles.typeDropdown, { backgroundColor: card, borderColor: bdr }]}>
-                    {EVENT_TYPES.map((t, i) => (
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+                  {EVENT_TYPES.map(t => {
+                    const active = eventType === t.id;
+                    return (
                       <TouchableOpacity
                         key={t.id}
-                        style={[styles.typeOption, eventType === t.id && styles.typeOptionActive]}
-                        onPress={() => { setEventType(t.id); setShowTypeDropdown(false); }}
+                        onPress={() => { setEventType(t.id); if (t.id !== 'Other') setCustomType(''); }}
+                        activeOpacity={0.7}
+                        style={{
+                          paddingHorizontal: 14, paddingVertical: 8,
+                          borderRadius: 999,
+                          backgroundColor: active ? t.color : (isDark ? '#252530' : t.soft),
+                          borderWidth: active ? 0 : 1,
+                          borderColor: isDark ? '#3A3A48' : t.color + '40',
+                        }}
                       >
-                        <Text style={{ fontSize: 16, marginRight: 10 }}>{t.icon}</Text>
-                        <Text style={[styles.typeOptionText, { color: txt }, eventType === t.id && styles.typeOptionTextActive]}>
+                        <Text style={{
+                          fontSize: 13, fontWeight: active ? '700' : '500',
+                          color: active ? '#fff' : (isDark ? '#fff' : t.color),
+                        }}>
                           {t.label}
                         </Text>
-                        {eventType === t.id && <Text style={styles.typeCheck}>✓</Text>}
                       </TouchableOpacity>
-                    ))}
-                    {/* Custom 'Other' input */}
-                    <View style={[styles.typeCustomRow, { borderTopColor: bdr }]}>
-                      <Text style={{ fontSize: 16, marginRight: 8 }}>✏️</Text>
-                      <TextInput
-                        style={[styles.typeCustomInput, { color: txt }]}
-                        placeholder="Other (type custom name)"
-                        placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
-                        value={customType}
-                        onChangeText={t => { setCustomType(t); setEventType('Other'); }}
-                        onFocus={() => setEventType('Other')}
-                      />
-                    </View>
-                  </View>
+                    );
+                  })}
+                </View>
+                {/* Custom name input if Other selected */}
+                {eventType === 'Other' && (
+                  <TextInput
+                    style={[styles.input, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr, color: txt, marginBottom: 8 }]}
+                    placeholder="Type custom event name"
+                    placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
+                    value={customType}
+                    onChangeText={setCustomType}
+                  />
                 )}
 
                 {/* Teams meeting toggle */}
@@ -3826,6 +3863,30 @@ const styles = StyleSheet.create({
   statLabel: { fontSize: 10, fontWeight: '700', marginTop: 3, letterSpacing: 0.8 },
 
   // Toolbar
+  segRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    gap: 0,
+  },
+  segBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    alignItems: 'center',
+    borderRadius: 8,
+  },
+  segBtnActive: {
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  segBtnText: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
   toolbar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingVertical: 8, borderBottomWidth: 1, gap: 8 },
   toolbarLeft: { flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 },
   toolbarCenter: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 2 },

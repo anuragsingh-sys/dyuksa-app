@@ -19,6 +19,7 @@ import { ThemeContext } from '../context/ThemeContext';
 import NotificationBell from '../components/NotificationBell';
 
 import { API_BASE, BASE_URL, WS_BASE } from '../config';
+import { useTasksCache, invalidateTasksCache } from '../hooks/useTasksCache';
 // const BASE_URL → imported from config
 
 // Always includes X-Workspace-ID so every request is workspace-aware
@@ -228,10 +229,25 @@ export default function TasksScreen() {
   const sub  = isDark ? '#9898A6' : '#888899';
   const bdr  = isDark ? '#252530' : '#EBEBF0';
 
-  const [tasks,    setTasks]    = useState([]);
+  // Tasks from shared cache — no duplicate fetches
+  const { tasks: cachedTasks, loading: tasksLoading, refresh: refreshTasks } = useTasksCache();
+  // Local override for optimistic status updates (resets when cache refreshes)
+  const [localTaskOverrides, setLocalTaskOverrides] = useState({});
+  const tasks = cachedTasks.map(t => localTaskOverrides[t.id] ? { ...t, ...localTaskOverrides[t.id] } : t);
+  const setTasks = useCallback((updater) => {
+    // Support functional update form: setTasks(prev => ...)
+    setLocalTaskOverrides(prev => {
+      const current = cachedTasks.map(t => prev[t.id] ? { ...t, ...prev[t.id] } : t);
+      const updated = typeof updater === 'function' ? updater(current) : updater;
+      // Build override map from the diff
+      const overrides = {};
+      updated.forEach(t => { overrides[t.id] = t; });
+      return overrides;
+    });
+  }, [cachedTasks]);
   const [projects, setProjects] = useState([]);
   const [users,    setUsers]    = useState([]);
-  const [loading,  setLoading]  = useState(true);
+  const [loading,  setLoading]  = useState(false);
   const [filter,   setFilter]   = useState('All');
   const flatListRef = useRef(null);
   const [search,   setSearch]   = useState('');
@@ -299,8 +315,6 @@ export default function TasksScreen() {
   const [images,        setImages]        = useState([]);
   const [projectSearch, setProjectSearch] = useState('');
 
-  useFocusEffect(useCallback(() => { fetchTasks(); }, []));
-
   useEffect(() => {
     getProjects().then(setProjects).catch(() => {});
     getUsers().then(setUsers).catch(() => {});
@@ -339,22 +353,11 @@ export default function TasksScreen() {
     }, [route.params?.openCreateModal, route.params?.openCreateModalAI, route.params?.presetProjectId, route.params?.presetFilter, projects])
   );
 
-  const fetchTasks = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(`${BASE_URL}/tasksite/`, {
-        headers: await authHeaders(),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setTasks(data.results || (Array.isArray(data) ? data : []));
-      }
-    } catch (e) {
-      console.error('fetchTasks error:', e.message);
-    } finally {
-      setLoading(false);
-    }
-  };
+  // fetchTasks now just triggers a cache refresh (used after task creation)
+  const fetchTasks = useCallback(() => {
+    invalidateTasksCache();
+    refreshTasks();
+  }, [refreshTasks]);
 
   const openModal = () => {
     setModalVisible(true);
@@ -416,7 +419,7 @@ export default function TasksScreen() {
       images.forEach((uri, i) => {
         formData.append('uploaded_files', { uri, name: `image_${i}.jpg`, type: 'image/jpeg' });
       });
-      const res  = await fetch(`${BASE_URL}/tasksite/`, {
+      const res  = await fetch(`${BASE_URL}/tasksite/?page=1`, {
         method: 'POST',
         headers: await authHeadersMultipart(),
         body: formData,
@@ -634,7 +637,8 @@ export default function TasksScreen() {
   const myTaskCount = tasks.filter(isTaskMine).length;
   const baseFiltered =
     filter === 'All' ? tasks :
-                       tasks.filter(t => t.status === filter);
+      filter === 'completed' ? tasks.filter(t => ['completed','done','deployed'].includes(t.status)) :
+                               tasks.filter(t => t.status === filter);
 
   const q = search.trim().toLowerCase();
   const filtered = q
@@ -745,14 +749,14 @@ export default function TasksScreen() {
       {/* Filter chips */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={[styles.filtersWrap, { backgroundColor: card, borderBottomColor: bdr }]} contentContainerStyle={[styles.filters, { paddingRight: 12 }]}>
         {[
-          { key: 'All',         label: 'All' },
-          { key: 'pending',     label: 'Pending' },
-          { key: 'in_progress', label: 'In Progress' },
-          { key: 'completed',   label: 'Completed' },
-          { key: 'backlog',     label: 'Backlog' },
-        ].map(({ key, label }) => {
+          { key: 'All',         label: 'All',         count: tasks.length },
+          { key: 'pending',     label: 'Pending',     count: tasks.filter(t => t.status === 'pending').length },
+          { key: 'in_progress', label: 'In Progress', count: tasks.filter(t => t.status === 'in_progress').length },
+          { key: 'completed',   label: 'Completed',   count: tasks.filter(t => ['completed','done','deployed'].includes(t.status)).length },
+          { key: 'backlog',     label: 'Backlog',     count: tasks.filter(t => t.status === 'backlog').length },
+          { key: 'review',      label: 'Review',      count: tasks.filter(t => t.status === 'review').length },
+        ].filter(f => f.key === 'All' || f.count > 0).map(({ key, label, count }) => {
           const isActive = filter === key;
-          const showCount = key === 'All' && tasks.length > 0;
           return (
             <TouchableOpacity
               key={key}
@@ -766,10 +770,10 @@ export default function TasksScreen() {
               <Text style={[styles.chipText, { color: sub }, isActive && { color: isDark ? '#0D0D0F' : '#fff', fontWeight: '700' }]}>
                 {label}
               </Text>
-              {showCount && (
+              {count > 0 && (
                 <View style={[styles.chipBadge, isActive ? { backgroundColor: isDark ? '#1A1A2E' : '#fff' } : { backgroundColor: '#4ECDC4' }]}>
                   <Text style={[styles.chipBadgeText, { color: isActive ? (isDark ? '#4ECDC4' : '#1A1A2E') : '#fff' }]}>
-                    {tasks.length}
+                    {count}
                   </Text>
                 </View>
               )}
