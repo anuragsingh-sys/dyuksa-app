@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { setCachedToken, clearTokenCache } from '../services/ApiService';
+import { invalidateTasksCache } from '../hooks/useTasksCache';
 import WebSocketService from '../services/WebSocketService';
 
 import { API_BASE, BASE_URL, WS_BASE } from '../config';
@@ -132,6 +133,7 @@ export function AuthProvider({ children }) {
       AsyncStorage.removeItem('TASKS_CACHE_V1'),
     ]).catch(() => {});
     clearTokenCache();
+    invalidateTasksCache();     // wipe in-memory task cache
     setToken(null);
     setUser(null);
     // Disconnect WebSocket on logout

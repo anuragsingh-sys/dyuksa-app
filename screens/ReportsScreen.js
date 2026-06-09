@@ -1,7 +1,7 @@
-import React, { useState, useCallback, useContext } from 'react';
+import React, { useState, useCallback, useContext, useRef } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity,
-  StyleSheet, ActivityIndicator, StatusBar,
+  StyleSheet, ActivityIndicator, StatusBar, RefreshControl,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -10,6 +10,7 @@ import { getAccessToken, getWorkspaceId } from '../services/ApiService';
 import { BASE_URL } from '../config';
 import SidebarMenu from '../components/SidebarMenu';
 import NotificationBell from '../components/NotificationBell';
+import { useTasksCache } from '../hooks/useTasksCache';
 
 const authHeaders = async () => {
   const token = await getAccessToken();
@@ -84,33 +85,54 @@ export default function ReportsScreen() {
   const sub  = isDark ? '#9898A6' : '#6B7588';
   const bdr  = isDark ? '#252530' : '#E6E9EF';
 
-  const [period,   setPeriod]   = useState('30 days');
-  const [tasks,    setTasks]    = useState([]);
-  const [projects, setProjects] = useState([]);
-  const [loading,  setLoading]  = useState(true);
+  const [period,    setPeriod]   = useState('30 days');
+  const [projects,  setProjects] = useState([]);
+  const [refreshing, setRefreshing] = useState(false);
+  const lastProjFetch = useRef(0);
 
-  const fetchData = useCallback(async () => {
+  // Tasks from shared cache
+  const { tasks: allTasks, loading: tasksLoading, refresh: refreshTasks } = useTasksCache();
+
+  // Fetch projects with stale check
+  const fetchProjects = useCallback(async (force = false) => {
+    if (!force && Date.now() - lastProjFetch.current < 30_000) return;
     try {
       const headers = await authHeaders();
-      const [tasksRes, projectsRes] = await Promise.all([
-        fetch(`${BASE_URL}/tasksite/`, { headers }),
-        fetch(`${BASE_URL}/projects/`, { headers }),
-      ]);
-      if (tasksRes.ok) {
-        const data = await tasksRes.json();
-        setTasks(Array.isArray(data) ? data : (data.results || []));
-      }
-      if (projectsRes.ok) {
-        const data = await projectsRes.json();
+      const res = await fetch(`${BASE_URL}/projects/`, { headers });
+      if (res.ok) {
+        const data = await res.json();
         setProjects(Array.isArray(data) ? data : (data.results || []));
+        lastProjFetch.current = Date.now();
       }
-    } catch (e) { console.warn('ReportsScreen fetch:', e.message); }
-    finally { setLoading(false); }
+    } catch (e) { console.warn('ReportsScreen projects:', e.message); }
   }, []);
 
-  useFocusEffect(useCallback(() => { fetchData(); }, [fetchData]));
+  useFocusEffect(useCallback(() => { fetchProjects(); }, [fetchProjects]));
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    refreshTasks();
+    await fetchProjects(true);
+    setRefreshing(false);
+  }, [fetchProjects, refreshTasks]);
+
+  const loading = tasksLoading && allTasks.length === 0;
+
+  // ── Period filter ──────────────────────────────────────────────────
+  const filteredTasks = (() => {
+    if (period === 'All') return allTasks;
+    const days = period === '7 days' ? 7 : period === '30 days' ? 30 : 90;
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    const cutoffStr = cutoff.toISOString().slice(0, 10);
+    return allTasks.filter(t => {
+      const date = (t.created_at || t.updated_at || '').slice(0, 10);
+      return date >= cutoffStr;
+    });
+  })();
 
   // ── Derived stats ──
+  const tasks = filteredTasks;
   const total     = tasks.length;
   const completed = tasks.filter(t => ['completed', 'deployed'].includes(t.status)).length;
   const inProg    = tasks.filter(t => t.status === 'in_progress').length;
@@ -148,10 +170,10 @@ export default function ReportsScreen() {
   }));
 
   const kpis = [
-    { label: 'Total Tasks',   value: total,           color: '#4ECDC4', bg: isDark ? 'rgba(78,205,196,0.1)' : '#F0FDFA',  icon: '📋' },
-    { label: 'Completed',     value: completed,        color: '#22C55E', bg: isDark ? 'rgba(34,197,94,0.1)'  : '#F0FDF4',  icon: '✅' },
-    { label: 'In Progress',   value: inProg,           color: '#3B82F6', bg: isDark ? 'rgba(59,130,246,0.1)' : '#EFF6FF',  icon: '⚡' },
-    { label: 'Overdue',       value: overdue,          color: '#EF4444', bg: isDark ? 'rgba(239,68,68,0.1)'  : '#FEF2F2',  icon: '⏰' },
+    { label: 'Total Tasks', value: total,     color: '#4ECDC4', bg: isDark ? 'rgba(78,205,196,0.1)' : '#F0FDFA', icon: '🗂️' },
+    { label: 'Completed',   value: completed,  color: '#22C55E', bg: isDark ? 'rgba(34,197,94,0.1)'  : '#F0FDF4', icon: '✅' },
+    { label: 'In Progress', value: inProg,     color: '#3B82F6', bg: isDark ? 'rgba(59,130,246,0.1)' : '#EFF6FF', icon: '⚡' },
+    { label: 'Overdue',     value: overdue,    color: '#EF4444', bg: isDark ? 'rgba(239,68,68,0.1)'  : '#FEF2F2', icon: '⏰' },
   ];
 
   return (
@@ -178,6 +200,7 @@ export default function ReportsScreen() {
         <ScrollView
           contentContainerStyle={{ padding: 12, paddingBottom: insets.bottom + 24 }}
           showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#4ECDC4" colors={['#4ECDC4']} />}
         >
           {/* Period selector */}
           <View style={[s.periodWrap, { backgroundColor: isDark ? '#252530' : '#F0F2F6' }]}>
@@ -241,22 +264,27 @@ export default function ReportsScreen() {
                 <Text style={[s.cardTitle, { color: txt }]}>By Project</Text>
               </View>
               {projectStats.map((proj, i) => (
-                <View
+                <TouchableOpacity
                   key={i}
+                  onPress={() => navigation.navigate('ProjectDetail', { project: projects[i] })}
+                  activeOpacity={0.7}
                   style={[s.projectRow, i < projectStats.length - 1 && { borderBottomWidth: 1, borderBottomColor: bdr }]}
                 >
                   <View style={[s.projectBar, { backgroundColor: proj.color }]} />
                   <View style={{ flex: 1 }}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                       <Text style={[s.projectName, { color: txt }]} numberOfLines={1}>{proj.name}</Text>
-                      <Text style={[{ fontSize: 12, fontWeight: '700', color: proj.color }]}>{proj.progress}%</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Text style={[{ fontSize: 12, fontWeight: '700', color: proj.color }]}>{proj.progress}%</Text>
+                        <Text style={{ color: sub, fontSize: 14 }}>›</Text>
+                      </View>
                     </View>
                     <View style={{ height: 5, backgroundColor: isDark ? '#252530' : '#F0F2F6', borderRadius: 3, overflow: 'hidden' }}>
                       <View style={{ width: `${proj.progress}%`, height: '100%', backgroundColor: proj.color, borderRadius: 3 }} />
                     </View>
-                    <Text style={[{ fontSize: 11, color: sub, marginTop: 4 }]}>{proj.tasks} tasks</Text>
+                    <Text style={[{ fontSize: 11, color: sub, marginTop: 4 }]}>{proj.tasks} task{proj.tasks !== 1 ? 's' : ''}</Text>
                   </View>
-                </View>
+                </TouchableOpacity>
               ))}
             </View>
           )}

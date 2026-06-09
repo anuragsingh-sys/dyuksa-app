@@ -3,6 +3,7 @@ import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   ActivityIndicator, RefreshControl, StatusBar, Alert,
 } from 'react-native';
+import { Svg, Circle, G } from 'react-native-svg';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -210,7 +211,15 @@ export default function DashboardScreen() {
     }
   }, []);
 
-  useFocusEffect(useCallback(() => { fetchAll(); }, [fetchAll]));
+  useFocusEffect(useCallback(() => {
+    // Small delay on first mount ensures token/workspace are fully saved to
+    // AsyncStorage after login before we start fetching
+    if (lastFetchRef.current === 0) {
+      const t = setTimeout(() => fetchAll(), 100);
+      return () => clearTimeout(t);
+    }
+    fetchAll();
+  }, [fetchAll]));
 
   // ── Derived counts ─────────────────────────────────────────────────────────
   const totalTasks     = tasks.length;
@@ -384,69 +393,70 @@ export default function DashboardScreen() {
               Tasks by Status
             </SectionHeader>
             <Card isDark={isDark} style={{ marginBottom: 22 }} padding={16}>
-              {/* Tasks by Status — stacked bar chart (pure RN) */}
+              {/* Tasks by Status — SVG donut chart */}
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
-                {/* Left: circle with total */}
+                {/* SVG Donut */}
                 {(() => {
-                    const SIZE = 88;
-                    const RING = 13;
-                    // Order matches legend exactly — clockwise from top
-                    const segs = [
-                      { count: pendingTasks,    color: '#F59E0B' },  // yellow - largest
-                      { count: backlogTasks,    color: '#EF4444' },  // red
-                      { count: inProgressTasks, color: '#3B82F6' },  // blue
-                      { count: completedTasks,  color: '#22C55E' },  // green
-                      { count: reviewTasks,     color: '#A78BFA' },  // purple
-                    ].filter(s => s.count > 0);
-                    const total = segs.reduce((a, s) => a + s.count, 0) || 1;
-                    // Build stacked half-rings rotated to show proportional segments
-                    let cumDeg = -90; // start from top
-                    return (
-                      <View style={{ width: SIZE, height: SIZE, alignItems: 'center', justifyContent: 'center' }}>
+                  const SIZE   = 88;
+                  const RADIUS = 32;
+                  const STROKE = 13;
+                  const CIRCUM = 2 * Math.PI * RADIUS;
+                  const cx     = SIZE / 2;
+                  const cy     = SIZE / 2;
+
+                  const segs = [
+                    { count: pendingTasks,    color: '#F59E0B' },
+                    { count: backlogTasks,    color: '#EF4444' },
+                    { count: inProgressTasks, color: '#3B82F6' },
+                    { count: completedTasks,  color: '#22C55E' },
+                    { count: reviewTasks,     color: '#A78BFA' },
+                  ].filter(s => s.count > 0);
+
+                  const total = segs.reduce((a, s) => a + s.count, 0) || 1;
+                  let offset  = CIRCUM * 0.25; // start from top (rotate -90°)
+
+                  return (
+                    <View style={{ width: SIZE, height: SIZE }}>
+                      <Svg width={SIZE} height={SIZE}>
                         {/* Track */}
-                        <View style={{ position: 'absolute', width: SIZE, height: SIZE, borderRadius: SIZE/2,
-                          borderWidth: RING, borderColor: isDark ? '#252530' : '#EBEBF0' }} />
-                        {/* Segments using double-half approach for full arc coverage */}
+                        <Circle
+                          cx={cx} cy={cy} r={RADIUS}
+                          fill="none"
+                          stroke={isDark ? '#252530' : '#EBEBF0'}
+                          strokeWidth={STROKE}
+                        />
+                        {/* Segments */}
                         {segs.map((seg, i) => {
-                          const deg = (seg.count / total) * 360;
-                          const startDeg = cumDeg;
-                          cumDeg += deg;
-                          // For segments > 180deg, render two halves
-                          if (deg > 180) {
-                            return [
-                              <View key={i+'a'} style={{ position: 'absolute', width: SIZE, height: SIZE, borderRadius: SIZE/2,
-                                borderWidth: RING, borderColor: 'transparent',
-                                borderTopColor: seg.color, borderRightColor: seg.color,
-                                transform: [{ rotate: `${startDeg}deg` }]
-                              }} />,
-                              <View key={i+'b'} style={{ position: 'absolute', width: SIZE, height: SIZE, borderRadius: SIZE/2,
-                                borderWidth: RING, borderColor: 'transparent',
-                                borderTopColor: seg.color, borderRightColor: deg > 270 ? seg.color : 'transparent',
-                                borderBottomColor: deg > 270 ? seg.color : 'transparent',
-                                transform: [{ rotate: `${startDeg + 90}deg` }]
-                              }} />
-                            ];
-                          }
+                          const dash   = (seg.count / total) * CIRCUM;
+                          const gap    = CIRCUM - dash;
+                          const co     = offset;
+                          offset      -= dash;
                           return (
-                            <View key={i} style={{ position: 'absolute', width: SIZE, height: SIZE, borderRadius: SIZE/2,
-                              borderWidth: RING, borderColor: 'transparent',
-                              borderTopColor: seg.color,
-                              borderRightColor: deg > 90 ? seg.color : 'transparent',
-                              transform: [{ rotate: `${startDeg}deg` }]
-                            }} />
+                            <Circle
+                              key={i}
+                              cx={cx} cy={cy} r={RADIUS}
+                              fill="none"
+                              stroke={seg.color}
+                              strokeWidth={STROKE}
+                              strokeDasharray={`${dash} ${gap}`}
+                              strokeDashoffset={co}
+                              strokeLinecap="butt"
+                            />
                           );
                         })}
-                        {/* Center */}
-                        <View style={{ width: SIZE - RING*2 - 4, height: SIZE - RING*2 - 4,
-                          borderRadius: (SIZE - RING*2 - 4)/2,
-                          backgroundColor: isDark ? '#1A1A20' : '#fff',
-                          alignItems: 'center', justifyContent: 'center', zIndex: 10 }}>
-                          <Text style={{ fontSize: 15, fontWeight: '800', color: isDark ? '#fff' : T.ink }}>{totalTasks}</Text>
-                          <Text style={{ fontSize: 8, color: T.ink3 }}>Total</Text>
-                        </View>
+                      </Svg>
+                      {/* Center label */}
+                      <View style={{
+                        position: 'absolute', top: 0, left: 0,
+                        width: SIZE, height: SIZE,
+                        alignItems: 'center', justifyContent: 'center',
+                      }}>
+                        <Text style={{ fontSize: 15, fontWeight: '800', color: isDark ? '#fff' : T.ink }}>{totalTasks}</Text>
+                        <Text style={{ fontSize: 8, color: T.ink3 }}>Total</Text>
                       </View>
-                    );
-                  })()}
+                    </View>
+                  );
+                })()}
 
                 {/* Legend */}
                 <View style={{ flex: 1, gap: 8 }}>

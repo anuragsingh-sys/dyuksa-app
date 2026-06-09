@@ -22,6 +22,11 @@ const isFresh = (wsId) => {
   return c && Date.now() - c.fetchedAt < STALE_MS;
 };
 
+// Called by AuthContext on logout to wipe all cached notifications
+export const clearNotificationsCache = () => {
+  Object.keys(_cache).forEach(k => delete _cache[k]);
+};
+
 export const NotificationsContext = createContext({
   notifications:   [],
   unreadCount:     0,   // current workspace only
@@ -73,7 +78,16 @@ export function NotificationsProvider({ children }) {
   const fetchNotifications = useCallback(async (force = false) => {
     const token = await getToken();
     const wsId  = await getWsId();
-    if (!token) return;
+
+    // No token = user logged out — clear everything
+    if (!token) {
+      clearNotificationsCache();
+      setNotifications([]);
+      setUnreadCount(0);
+      setTotalUnread(0);
+      setOtherWorkspaces([]);
+      return;
+    }
 
     // Show cached data instantly for this workspace
     const cached = getCached(wsId);
@@ -282,7 +296,6 @@ export function NotificationsProvider({ children }) {
         const notifWsId   = String(data.workspace_id || '');
         const currentWsId = String(currentWsIdRef.current || '');
         const isSameWs    = notifWsId === currentWsId;
-        console.log('[Notif] WS signal:', { notifWsId, currentWsId, isSameWs, title: data.title });
 
         if (isSameWs) {
           // ── Same workspace: add full notification ──────────────────

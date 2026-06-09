@@ -50,10 +50,6 @@ const Stack = createNativeStackNavigator();
 const Tab   = createBottomTabNavigator();
 
 function QuickTaskButton({ onPress, borderColor }) {
-  // Try to load logo — falls back to text if asset missing
-  let logoSource = null;
-  try { logoSource = require('./assets/lvlogo1_1.png'); } catch {}
-
   return (
     <View style={styles.fabWrapper}>
       <TouchableOpacity
@@ -61,11 +57,7 @@ function QuickTaskButton({ onPress, borderColor }) {
         onPress={onPress}
         activeOpacity={0.85}
       >
-        {logoSource ? (
-          <Image source={logoSource} style={styles.fabLogo} resizeMode="cover" />
-        ) : (
-          <Text style={styles.fabIcon}>＋</Text>
-        )}
+        <Text style={styles.fabIcon}>+</Text>
       </TouchableOpacity>
     </View>
   );
@@ -77,9 +69,6 @@ function DraggableFAB({ onPress }) {
   const pan = useRef(new Animated.ValueXY({ x: width / 2 - 30, y: height - 120 })).current;
   const lastPos = useRef({ x: width / 2 - 30, y: height - 120 });
   const isDragging = useRef(false);
-
-  let logoSource = null;
-  try { logoSource = require('./assets/lvlogo1_1.png'); } catch {}
 
   const panResponder = useRef(PanResponder.create({
     onStartShouldSetPanResponder: () => true,
@@ -113,11 +102,7 @@ function DraggableFAB({ onPress }) {
         onPress={onPress}
         activeOpacity={0.85}
       >
-        {logoSource ? (
-          <Image source={logoSource} style={styles.fabLogo} resizeMode="cover" />
-        ) : (
-          <Text style={styles.fabIcon}>＋</Text>
-        )}
+        <Text style={styles.fabIcon}>+</Text>
       </TouchableOpacity>
     </Animated.View>
   );
@@ -439,7 +424,7 @@ function RootNavigator() {
           <Stack.Screen name="Team"               component={TeamScreen} />
           <Stack.Screen name="MyWork"             component={MyWorkScreen} />
           <Stack.Screen name="Reports"            component={ReportsScreen} />
-          <Stack.Screen name="DocumentViewer"     component={DocumentViewerScreen} />
+          <Stack.Screen name="DocumentViewer" component={DocumentViewerScreen} options={{ statusBarTranslucent: false, statusBarColor: '#2A2D34' }} />
           <Stack.Screen name="QuickCreate"         component={QuickCreateScreen} options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />
           <Stack.Screen name="CreateProject"       component={CreateProjectScreen} options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="CreateTask"          component={CreateTaskScreen} options={{ animation: 'slide_from_right' }} />
@@ -490,19 +475,17 @@ const styles = StyleSheet.create({
   },
   fab: {
     width: 58, height: 58, borderRadius: 29,
-    backgroundColor: '#000',
+    backgroundColor: '#2D6AE3',
     justifyContent: 'center', alignItems: 'center',
-    marginTop: -22,
     borderWidth: 2.5, borderColor: '#fff',
-    shadowColor: '#7B61FF',
+    shadowColor: '#2D6AE3',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.5,
+    shadowOpacity: 0.45,
     shadowRadius: 12,
     elevation: 14,
-    overflow: 'hidden',
   },
   fabLogo: { width: 58, height: 58, borderRadius: 29 },
-  fabIcon: { color: '#4ECDC4', fontSize: 26, lineHeight: 30 },
+  fabIcon: { color: '#fff', fontSize: 30, fontWeight: '300', lineHeight: 34, marginTop: -1 },
 
   // ── Quick Add modal ──
   qaOverlay: {

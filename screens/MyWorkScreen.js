@@ -1,7 +1,7 @@
-import React, { useState, useCallback, useContext } from 'react';
+import React, { useState, useCallback, useContext, useRef } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity,
-  StyleSheet, ActivityIndicator, StatusBar,
+  StyleSheet, ActivityIndicator, StatusBar, RefreshControl,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -11,6 +11,7 @@ import { getAccessToken, getWorkspaceId } from '../services/ApiService';
 import { BASE_URL } from '../config';
 import SidebarMenu from '../components/SidebarMenu';
 import NotificationBell from '../components/NotificationBell';
+import { useTasksCache } from '../hooks/useTasksCache';
 
 const authHeaders = async () => {
   const token = await getAccessToken();
@@ -55,83 +56,129 @@ export default function MyWorkScreen() {
   const sub  = isDark ? '#9898A6' : '#6B7588';
   const bdr  = isDark ? '#252530' : '#E6E9EF';
 
-  const [tasks,    setTasks]    = useState([]);
-  const [events,   setEvents]   = useState([]);
-  const [loading,  setLoading]  = useState(true);
-  const [period,   setPeriod]   = useState('Today');
+  // ── Tasks from shared cache — no duplicate fetches ───────────────
+  const { tasks: allTasks, loading: tasksLoading, refresh: refreshTasks } = useTasksCache();
+  const [events,    setEvents]    = useState([]);
+  const [evLoading, setEvLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [period,    setPeriod]    = useState('Today');
+  const lastEvFetchRef = useRef(0);
+  const EV_STALE_MS = 30_000;
 
   const today = todayStr();
   const userName = user
-    ? (user.first_name || user.username || 'there')
+    ? (user.first_name || user.name?.split(' ')[0] || user.username || 'there')
     : 'there';
 
-  const fetchData = useCallback(async () => {
+  // ── Week boundaries (Mon–Sun of current week) ─────────────────────
+  const getWeekBounds = () => {
+    const now  = new Date();
+    const day  = now.getDay(); // 0=Sun
+    const mon  = new Date(now); mon.setDate(now.getDate() - (day === 0 ? 6 : day - 1)); mon.setHours(0,0,0,0);
+    const sun  = new Date(mon); sun.setDate(mon.getDate() + 6); sun.setHours(23,59,59,999);
+    return { mon, sun };
+  };
+
+  // ── My tasks — client-side filter ────────────────────────────────
+  const myId = String(user?.id || '');
+  const myTasks = allTasks.filter(t => {
+    if (!myId) return true;
+    const ids     = Array.isArray(t.assigned_to) ? t.assigned_to.map(String) : [];
+    const details = Array.isArray(t.assigned_to_user_details) ? t.assigned_to_user_details : [];
+    return ids.includes(myId) || details.some(u => String(u.id) === myId);
+  });
+
+  // ── Fetch all event pages (81 events, 5 pages) ────────────────────
+  const fetchEvents = useCallback(async (force = false) => {
+    if (!force && Date.now() - lastEvFetchRef.current < EV_STALE_MS) return;
+    setEvLoading(true);
     try {
-      const headers = await authHeaders();
-      const [tasksRes, eventsRes] = await Promise.all([
-        fetch(`${BASE_URL}/tasksite/`, { headers }),
-        fetch(`${BASE_URL}/daily-updates/events/`, { headers }),
-      ]);
+      const token = await getAccessToken();
+      const wsId  = await getWorkspaceId();
+      const h = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+      if (wsId) h['X-Workspace-ID'] = wsId;
 
-      if (tasksRes.ok) {
-        const data = await tasksRes.json();
-        const all = Array.isArray(data) ? data : (data.results || []);
-        // Filter to my tasks
-        const myId = user?.id;
-        const mine = myId
-          ? all.filter(t => {
-              const ids = Array.isArray(t.assigned_to) ? t.assigned_to : [];
-              const details = Array.isArray(t.assigned_to_user_details) ? t.assigned_to_user_details : [];
-              return ids.includes(myId) || details.some(u => String(u.id) === String(myId));
-            })
-          : all;
-        setTasks(mine);
+      let all = [];
+      let page = 1;
+      let hasNext = true;
+      while (hasNext && page <= 10) { // safety cap
+        const res = await fetch(`${BASE_URL}/daily-updates/events/?page=${page}`, { headers: h });
+        if (!res.ok) break;
+        const data = await res.json();
+        const results = Array.isArray(data) ? data : (data.results || []);
+        all = [...all, ...results];
+        hasNext = !!data.next;
+        page++;
       }
+      setEvents(all);
+      lastEvFetchRef.current = Date.now();
+    } catch (e) { console.warn('MyWork events:', e.message); }
+    finally { setEvLoading(false); }
+  }, []);
 
-      if (eventsRes.ok) {
-        const data = await eventsRes.json();
-        const all = Array.isArray(data) ? data : (data.results || []);
-        // Only today's events
-        const todayEvents = all.filter(e => {
-          try {
-            const start = e.start_time || e.eventTimestamp;
-            return start && start.startsWith(today);
-          } catch { return false; }
-        });
-        setEvents(todayEvents);
-      }
-    } catch (e) { console.warn('MyWork fetch:', e.message); }
-    finally { setLoading(false); }
-  }, [user, today]);
+  useFocusEffect(useCallback(() => { fetchEvents(); }, [fetchEvents]));
 
-  useFocusEffect(useCallback(() => { fetchData(); }, [fetchData]));
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    refreshTasks();
+    await fetchEvents(true);
+    setRefreshing(false);
+  }, [fetchEvents, refreshTasks]);
 
-  // Filter tasks by period
+  const loading = tasksLoading && allTasks.length === 0;
+
+  // ── Filter tasks by period ────────────────────────────────────────
   const filteredTasks = (() => {
-    if (period === 'Backlog') return tasks.filter(t => t.status === 'backlog');
+    if (period === 'Backlog') return myTasks.filter(t => t.status === 'backlog');
     if (period === 'This week') {
-      const now = new Date();
-      const weekEnd = new Date(now);
-      weekEnd.setDate(now.getDate() + 7);
-      return tasks.filter(t => {
+      const { mon, sun } = getWeekBounds();
+      return myTasks.filter(t => {
         const due = t.end_date || t.due_date;
         if (!due) return false;
         const d = new Date(due);
-        return d >= now && d <= weekEnd;
+        return d >= mon && d <= sun && !['completed', 'deployed'].includes(t.status);
       });
     }
-    // Today
-    return tasks.filter(t => {
+    // Today — due today OR overdue and not done
+    return myTasks.filter(t => {
       const due = t.end_date || t.due_date;
-      return due && due.startsWith(today);
+      if (!due) return false;
+      const dueDate = due.substring(0, 10);
+      return dueDate === today && !['completed', 'deployed'].includes(t.status);
     });
   })();
 
-  const pendingTasks  = tasks.filter(t => ['pending', 'in_progress', 'backlog', 'review'].includes(t.status)).length;
-  const completedToday = tasks.filter(t => t.status === 'completed' && (t.updated_at || '').startsWith(today)).length;
-  const overdueCount  = tasks.filter(t => {
+  // ── Filter events: today + next 5 days always ─────────────────────
+  const filteredEvents = (() => {
+    if (period === 'Backlog') return [];
+
+    const now     = new Date(); now.setHours(0, 0, 0, 0);
+    const cutoff  = new Date(now); cutoff.setDate(now.getDate() + 5); cutoff.setHours(23, 59, 59, 999);
+
+    // Only my events (organizer or attendee)
+    return events
+      .filter(e => {
+        if (!myId) return true;
+        if (String(e.organizer) === myId) return true;
+        if (Array.isArray(e.attendees) && e.attendees.some(a =>
+          String(a.id || a.user_id || a) === myId
+        )) return true;
+        return false;
+      })
+      .filter(e => {
+        const start = e.start_time || e.eventTimestamp || e.start_date;
+        if (!start) return false;
+        const d = new Date(start);
+        return d >= now && d <= cutoff;
+      })
+      .sort((a, b) => new Date(a.start_time) - new Date(b.start_time));
+  })();
+
+  const pendingTasks   = myTasks.filter(t => ['pending', 'in_progress', 'review'].includes(t.status)).length;
+  const completedToday = myTasks.filter(t => t.status === 'completed' && (t.updated_at || '').startsWith(today)).length;
+  const overdueCount   = myTasks.filter(t => {
     const due = t.end_date || t.due_date;
-    return due && due < today && !['completed', 'deployed'].includes(t.status);
+    return due && due.substring(0, 10) < today && !['completed', 'deployed'].includes(t.status);
   }).length;
 
   const nowHour = new Date().getHours();
@@ -161,6 +208,7 @@ export default function MyWorkScreen() {
         <ScrollView
           contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}
           showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#4ECDC4" colors={['#4ECDC4']} />}
         >
           {/* Hero greeting card */}
           <View style={[s.heroCard, { backgroundColor: '#1A1A2E' }]}>
@@ -202,40 +250,10 @@ export default function MyWorkScreen() {
               })}
             </View>
 
-            {/* Today's events */}
-            {events.length > 0 && (
-              <>
-                <Text style={[s.sectionTitle, { color: txt }]}>Today's Schedule</Text>
-                <View style={[s.groupCard, { backgroundColor: card, borderColor: bdr }]}>
-                  {events.slice(0, 5).map((ev, i) => {
-                    const title = ev.title || ev.name || 'Event';
-                    const startTime = ev.start_time || ev.eventTimestamp;
-                    const timeStr = startTime
-                      ? new Date(startTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
-                      : '';
-                    const type = ev.event_type || 'Meeting';
-                    return (
-                      <View
-                        key={ev.id || i}
-                        style={[s.schedRow, i < Math.min(events.length, 5) - 1 && { borderBottomWidth: 1, borderBottomColor: bdr }]}
-                      >
-                        <Text style={[s.schedTime, { color: sub }]}>{timeStr}</Text>
-                        <View style={[s.schedBar, { backgroundColor: '#A78BFA' }]} />
-                        <View style={{ flex: 1 }}>
-                          <Text style={[s.schedTitle, { color: txt }]} numberOfLines={1}>{title}</Text>
-                          <Text style={[s.schedType, { color: sub }]}>{type}</Text>
-                        </View>
-                      </View>
-                    );
-                  })}
-                </View>
-              </>
-            )}
-
             {/* Tasks */}
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 16, marginBottom: 10 }}>
               <Text style={[s.sectionTitle, { color: txt, marginTop: 0, marginBottom: 0 }]}>
-                {period === 'Backlog' ? 'Backlog Tasks' : period === 'This week' ? 'Due This Week' : "Due Today"}
+                {period === 'Backlog' ? 'Backlog Tasks' : period === 'This week' ? 'Due This Week' : 'Due Today'}
                 {' '}({filteredTasks.length})
               </Text>
               <TouchableOpacity onPress={() => { try { navigation.jumpTo('Tasks'); } catch { navigation.navigate('Main', { screen: 'Tasks' }); } }}>
@@ -245,12 +263,16 @@ export default function MyWorkScreen() {
 
             {filteredTasks.length === 0 ? (
               <View style={[s.groupCard, { backgroundColor: card, borderColor: bdr, padding: 32, alignItems: 'center' }]}>
-                <Text style={{ fontSize: 36, opacity: 0.3, marginBottom: 8 }}>🎉</Text>
-                <Text style={[{ fontSize: 15, fontWeight: '600', color: txt }]}>
-                  {period === 'Today' ? 'Nothing due today!' : 'No tasks here'}
+                <Text style={{ fontSize: 36, opacity: 0.3, marginBottom: 8 }}>
+                  {period === 'Backlog' ? '📦' : '🎉'}
                 </Text>
-                <Text style={[{ fontSize: 12, color: sub, marginTop: 4 }]}>
-                  {period === 'Today' ? 'Enjoy your free time or check "This week"' : 'Switch periods to see other tasks'}
+                <Text style={[{ fontSize: 15, fontWeight: '600', color: txt }]}>
+                  {period === 'Today' ? 'Nothing due today!' : period === 'This week' ? 'Clear for the week!' : 'No backlog tasks'}
+                </Text>
+                <Text style={[{ fontSize: 12, color: sub, marginTop: 4, textAlign: 'center' }]}>
+                  {period === 'Today' ? 'Enjoy your free time or check "This week"'
+                    : period === 'This week' ? 'All tasks are on track'
+                    : 'No tasks in backlog status'}
                 </Text>
               </View>
             ) : filteredTasks.map((t, i) => {
@@ -293,6 +315,60 @@ export default function MyWorkScreen() {
                 </TouchableOpacity>
               );
             })}
+
+            {/* Events section — always visible when not Backlog */}
+            {period !== 'Backlog' && (
+              <>
+                <Text style={[s.sectionTitle, { color: txt }]}>
+                  Upcoming Events
+                  {filteredEvents.length > 0 ? ` (${filteredEvents.length})` : ''}
+                </Text>
+                {filteredEvents.length === 0 ? (
+                  <View style={[s.groupCard, { backgroundColor: card, borderColor: bdr, padding: 20, alignItems: 'center' }]}>
+                    <Text style={{ fontSize: 24, opacity: 0.3, marginBottom: 6 }}>📅</Text>
+                    <Text style={[{ fontSize: 13, color: sub }]}>No events in the next 5 days</Text>
+                  </View>
+                ) : (
+                  <View style={[s.groupCard, { backgroundColor: card, borderColor: bdr }]}>
+                    {filteredEvents.slice(0, 8).map((ev, i) => {
+                      const title = ev.title || ev.name || 'Event';
+                      const startTime = ev.start_time || ev.eventTimestamp || ev.start_date;
+                      const timeStr = startTime
+                        ? new Date(startTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
+                        : '';
+                      const dateStr = startTime
+                        ? new Date(startTime).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })
+                        : '';
+                      const type = ev.event_type || ev.type || 'Meeting';
+                      const isOnline = ev.is_online_meeting;
+                      return (
+                        <View
+                          key={ev.id || i}
+                          style={[s.schedRow, i < Math.min(filteredEvents.length, 8) - 1 && { borderBottomWidth: 1, borderBottomColor: bdr }]}
+                        >
+                          <View style={{ width: 60 }}>
+                            <Text style={[s.schedTime, { color: sub }]}>{timeStr}</Text>
+                            {!!dateStr && <Text style={{ fontSize: 9, color: sub, marginTop: 1 }}>{dateStr}</Text>}
+                          </View>
+                          <View style={[s.schedBar, { backgroundColor: '#A78BFA' }]} />
+                          <View style={{ flex: 1 }}>
+                            <Text style={[s.schedTitle, { color: txt }]} numberOfLines={1}>{title}</Text>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                              <Text style={[s.schedType, { color: sub }]}>{type}</Text>
+                              {isOnline && (
+                                <View style={{ backgroundColor: '#E0F2FE', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 }}>
+                                  <Text style={{ fontSize: 9, color: '#0284C7', fontWeight: '700' }}>Online</Text>
+                                </View>
+                              )}
+                            </View>
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+                )}
+              </>
+            )}
 
             {/* Quick actions */}
             <Text style={[s.sectionTitle, { color: txt, marginTop: 20 }]}>Quick Actions</Text>

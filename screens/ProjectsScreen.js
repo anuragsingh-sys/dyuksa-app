@@ -16,8 +16,10 @@ import TaskDetailModal from '../components/TaskDetailModal';
 import { ThemeContext } from '../context/ThemeContext';
 import NotificationBell from '../components/NotificationBell';
 
+import { API_BASE as CONFIG_API_BASE, BASE_URL } from '../config';
+
 // ── API config ────────────────────────────────────────────────────────────────
-const API_BASE     = 'http://192.168.1.188:8000';
+const API_BASE     = CONFIG_API_BASE;
 const DOCS_API     = `${API_BASE}/api/v1/documents/`;
 const TASKSITE_API = `${API_BASE}/api/v1/tasksite/`;
 
@@ -51,7 +53,7 @@ const T = {
 const PROJECT_COLORS = [T.cBlue, T.cPurple, T.cGreen, T.cYellow, T.cRed];
 const getProjectColor = (idx) => PROJECT_COLORS[idx % PROJECT_COLORS.length];
 
-const FILTER_TABS = ['All', 'In Progress', 'Completed', 'Starred'];
+const FILTER_TABS = ['All', 'In Progress', 'Completed', 'Pinned'];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const getProjectMembers = (project) => {
@@ -599,7 +601,7 @@ export default function ProjectsScreen() {
     let list = projects;
     if (activeFilter === 'In Progress') list = list.filter(p => (p.status || 'In Progress') === 'In Progress');
     else if (activeFilter === 'Completed') list = list.filter(p => p.status === 'Completed');
-    else if (activeFilter === 'Starred') list = list.filter(p => isProjectFav(p));
+    else if (activeFilter === 'Pinned') list = list.filter(p => isProjectFav(p));
     if (search.trim()) {
       const q = search.toLowerCase();
       list = list.filter(p => (p.name || '').toLowerCase().includes(q));
@@ -610,7 +612,7 @@ export default function ProjectsScreen() {
   // Summary counts
   const activeCount   = projects.filter(p => (p.status || 'In Progress') === 'In Progress').length;
   const completedCount= projects.filter(p => p.status === 'Completed').length;
-  const starredCount  = projects.filter(p => isProjectFav(p)).length;
+  const pinnedCount   = projects.filter(p => isProjectFav(p)).length;
 
   const userOptions = users.map(u => ({ label: `${u.first_name} ${u.last_name}`.trim() || u.username, ...u }));
   const roleOptions = ROLES.map(r => ({ label: r.charAt(0).toUpperCase() + r.slice(1), value: r }));
@@ -656,7 +658,7 @@ export default function ProjectsScreen() {
         <View style={s.summaryRow}>
           <SummaryTile label="Active"    count={activeCount}    dotColor={T.cBlue} />
           <SummaryTile label="Done"      count={completedCount} dotColor={T.cGreen} />
-          <SummaryTile label="Starred"   count={starredCount}   dotColor={T.cYellow} />
+          <SummaryTile label="Pinned"    count={pinnedCount}    dotColor={T.cYellow} />
         </View>
 
         {/* Search bar */}
@@ -715,11 +717,11 @@ export default function ProjectsScreen() {
           </View>
         ) : (
           <>
-            {/* Pinned/Starred horizontal scroll */}
-            {starredCount > 0 && (
+            {/* Pinned horizontal scroll */}
+            {pinnedCount > 0 && (
               <>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, marginTop: 8 }}>
-                  <Text style={{ fontSize: 13, fontWeight: '700', color: isDark ? '#ccc' : T.ink2 }}>⭐ Starred</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: isDark ? '#ccc' : T.ink2 }}>📌 Pinned</Text>
                 </View>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 12, paddingRight: 4, marginBottom: 16 }}>
                   {projects.filter(p => isProjectFav(p)).map((proj, idx) => {
@@ -735,8 +737,10 @@ export default function ProjectsScreen() {
                         <View style={[s.pinnedColorBar, { backgroundColor: color }]} />
                         <View style={{ padding: 12 }}>
                           <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
-                            <View style={[s.projectIconSmall, { backgroundColor: color + '22' }]}>
-                              <Text style={{ fontSize: 14 }}>📁</Text>
+                            <View style={[s.projectIconSmall, { backgroundColor: color }]}>
+                              <Text style={{ fontSize: 13, fontWeight: '800', color: '#fff' }}>
+                                {(proj.name?.[0] || '?').toUpperCase()}
+                              </Text>
                             </View>
                             <Text style={{ fontSize: 14 }}>📌</Text>
                           </View>
@@ -782,8 +786,10 @@ export default function ProjectsScreen() {
                 >
                   {/* Top row */}
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                    <View style={[s.projectIconLarge, { backgroundColor: color + '22' }]}>
-                      <Text style={{ fontSize: 18 }}>📁</Text>
+                    <View style={[s.projectIconLarge, { backgroundColor: color }]}>
+                      <Text style={{ fontSize: 18, fontWeight: '800', color: '#fff' }}>
+                        {(proj.name?.[0] || '?').toUpperCase()}
+                      </Text>
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={{ fontSize: 14, fontWeight: '700', color: txt }} numberOfLines={1}>{proj.name}</Text>

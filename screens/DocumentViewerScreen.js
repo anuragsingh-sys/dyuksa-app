@@ -129,8 +129,8 @@ export default function DocumentViewerScreen() {
     <View style={{ flex: 1, backgroundColor: DK.bg }}>
       <StatusBar barStyle="light-content" backgroundColor={DK.bar} translucent={false} />
 
-      {/* ── Dark nav bar (dev_1 style) ── */}
-      <View style={[s.navBar, { paddingTop: insets.top + 10 }]}>
+      {/* ── Dark nav bar ── */}
+      <View style={s.navBar}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={s.navBtn}>
           <Text style={{ color: DK.ink, fontSize: 26, fontWeight: '300', marginTop: -2 }}>‹</Text>
         </TouchableOpacity>
@@ -175,6 +175,21 @@ export default function DocumentViewerScreen() {
                 startInLoadingState={false}
                 onLoadStart={() => setWebLoading(true)}
                 onLoadEnd={() => setWebLoading(false)}
+                scalesPageToFit={true}
+                injectedJavaScript={`
+                  (function() {
+                    var style = document.createElement('style');
+                    style.innerHTML = \`
+                      body, html { margin: 0 !important; padding: 0 !important; width: 100% !important; }
+                      #drive-viewer-pdf-viewer { width: 100% !important; margin: 0 !important; padding: 0 !important; }
+                      .ndfHFb-c4YZDc { padding: 0 !important; }
+                      .drive-viewer-paginated-scrolling-container { padding: 0 !important; }
+                      embed, object, iframe { width: 100% !important; }
+                    \`;
+                    document.head.appendChild(style);
+                  })();
+                  true;
+                `}
                 onError={() => {
                   setWebLoading(false);
                   Alert.alert('Could not load', 'Try opening in browser instead.', [
@@ -288,7 +303,7 @@ export default function DocumentViewerScreen() {
         )}
       </View>
 
-      {/* ── Dark bottom action bar (dev_1 style) ── */}
+      {/* ── Dark bottom action bar ── */}
       <SafeAreaView edges={['bottom']} style={[s.bottomBar]}>
         <ActionBtn icon="ⓘ" label="Info"    onPress={() => setShowInfo(v => !v)} active={showInfo} />
         {!showViewer
@@ -304,7 +319,7 @@ export default function DocumentViewerScreen() {
 
 const s = StyleSheet.create({
   // Nav bar
-  navBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingBottom: 12, backgroundColor: DK.bar, borderBottomWidth: 1, borderBottomColor: DK.border, gap: 2 },
+  navBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingTop: 8, paddingBottom: 12, backgroundColor: DK.bar, borderBottomWidth: 1, borderBottomColor: DK.border, gap: 2 },
   navBtn: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   navTitle: { fontSize: 15, fontWeight: '700', color: DK.ink, letterSpacing: -0.2 },
   navSub: { fontSize: 11.5, color: DK.ink2, marginTop: 1 },
