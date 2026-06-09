@@ -353,8 +353,13 @@ export default function TasksScreen() {
     }, [route.params?.openCreateModal, route.params?.openCreateModalAI, route.params?.presetProjectId, route.params?.presetFilter, projects])
   );
 
-  // fetchTasks now just triggers a cache refresh (used after task creation)
+  // Pull-to-refresh: just refresh the cache, don't clear it first
   const fetchTasks = useCallback(() => {
+    refreshTasks();
+  }, [refreshTasks]);
+
+  // After creating/editing a task: clear cache so fresh data loads
+  const refetchAfterMutation = useCallback(() => {
     invalidateTasksCache();
     refreshTasks();
   }, [refreshTasks]);
@@ -427,7 +432,7 @@ export default function TasksScreen() {
       const data = await res.json();
       if (res.ok) {
         addNotification({ type: 'task', icon: '📋', title: 'Task Created', body: `"${heading.trim()}" added successfully.` });
-        await fetchTasks();
+        refetchAfterMutation();
         closeModal();
         const returnId = returnToProjectIdRef.current;
         if (returnId) {
@@ -1279,7 +1284,7 @@ export default function TasksScreen() {
         visible={!!detailTask}
         task={detailTask}
         onClose={() => setDetailTask(null)}
-        onUpdated={(updatedTask) => { fetchTasks(); if (updatedTask) setDetailTask(updatedTask); }}
+        onUpdated={(updatedTask) => { refetchAfterMutation(); if (updatedTask) setDetailTask(updatedTask); }}
       />
 
       {/* Success toast */}

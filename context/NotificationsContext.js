@@ -1,21 +1,32 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import WebSocketService from '../services/WebSocketService';
+import { getAccessToken, getWorkspaceId } from '../services/ApiService';
 
 import { API_BASE, BASE_URL, WS_BASE } from '../config';
 const NOTIF_KEY    = 'DYUKSA_NOTIFICATIONS';
 const SETTINGS_KEY = 'DYUKSA_SETTINGS';
 
-// ── Module-level singleton cache ─────────────────────────────────────────────
-// Survives workspace switches (component remounts) — notifications are global
-let _cachedNotifications = [];
-let _cachedUnread = 0;
-let _lastFetchedAt = 0;
-const STALE_MS = 30_000; // re-fetch only if > 30s old
+// ── Per-workspace module-level cache ─────────────────────────────────────────
+// Keyed by workspaceId so switching workspaces shows correct notifications
+// instantly from cache without a blank flash
+const _cache = {};       // { [workspaceId]: { notifications, unread, fetchedAt } }
+const STALE_MS = 30_000;
+
+const getCached = (wsId) => _cache[wsId] || null;
+const setCached = (wsId, notifications, unread) => {
+  _cache[wsId] = { notifications, unread, fetchedAt: Date.now() };
+};
+const isFresh = (wsId) => {
+  const c = _cache[wsId];
+  return c && Date.now() - c.fetchedAt < STALE_MS;
+};
 
 export const NotificationsContext = createContext({
   notifications:   [],
-  unreadCount:     0,
+  unreadCount:     0,   // current workspace only
+  totalUnread:     0,   // all workspaces — use for bell badge
+  otherWorkspaces: [],
   loading:         false,
   fetchNotifications: async () => {},
   markAllRead:     async () => {},
@@ -39,30 +50,46 @@ export const TYPE_META = {
 const metaFor = (type) => TYPE_META[type] || { icon: '🔔', color: '#9898A6' };
 
 export function NotificationsProvider({ children }) {
-  const [notifications, setNotifications] = useState(_cachedNotifications);
-  const [unreadCount,   setUnreadCount]   = useState(_cachedUnread);
+  const [notifications, setNotifications] = useState([]);
+  const [unreadCount,   setUnreadCount]   = useState(0);  // current workspace unread
+  const [totalUnread,   setTotalUnread]   = useState(0);  // all workspaces — for bell badge
+  const [otherWorkspaces, setOtherWorkspaces] = useState([]);
   const [loading,       setLoading]       = useState(false);
   const tokenRef = useRef(null);
+  const currentWsIdRef = useRef(null);
 
-  // ── Get token helper ──────────────────────────────────────────────
+  // ── Get token + workspace helper ──────────────────────────────────
   const getToken = async () => {
     try { return await AsyncStorage.getItem('DYUKSA_AUTH_TOKEN'); }
     catch { return null; }
   };
 
+  const getWsId = async () => {
+    try { return await getWorkspaceId(); }
+    catch { return null; }
+  };
+
   // ── Fetch from backend ────────────────────────────────────────────
-  const fetchNotifications = useCallback(async () => {
-    // Skip if data is fresh — prevents unnecessary re-fetches on workspace switch
-    if (_cachedNotifications.length > 0 && Date.now() - _lastFetchedAt < STALE_MS) return;
+  const fetchNotifications = useCallback(async (force = false) => {
     const token = await getToken();
+    const wsId  = await getWsId();
     if (!token) return;
+
+    // Show cached data instantly for this workspace
+    const cached = getCached(wsId);
+    if (cached) {
+      setNotifications(cached.notifications);
+      setUnreadCount(cached.unread);
+      if (!force && isFresh(wsId)) return; // fresh and not forced — skip network
+    }
+
+    currentWsIdRef.current = wsId;
     setLoading(true);
-    // Clear stale cache that might have un-normalized object fields
     try { await AsyncStorage.removeItem(NOTIF_KEY + '_v1_cleared') } catch {}
     try {
-      const res = await fetch(`${BASE_URL}/notification/`, {
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-      });
+      const headers = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
+      if (wsId) headers['X-Workspace-ID'] = wsId;
+      const res = await fetch(`${BASE_URL}/notification/`, { headers });
       if (!res.ok) return;
       const data = await res.json();
       const list = data.notifications || [];
@@ -91,12 +118,20 @@ export function NotificationsProvider({ children }) {
         metadata:  n.metadata || n.data || {},
       }));
 
-      setNotifications(normalised);
+      // Merge server list with any local-only WS notifications
+      // so opening the panel never wipes real-time notifications
+      setNotifications(prev => {
+        const serverIds = new Set(normalised.map(n => n.id));
+        const localOnly = prev.filter(p => !serverIds.has(p.id));
+        const merged = [...normalised, ...localOnly];
+        merged.sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0));
+        return merged;
+      });
       setUnreadCount(data.unread_count ?? normalised.filter(n => !n.read).length);
-      // Update module cache so remounts show data instantly
-      _cachedNotifications = normalised;
-      _cachedUnread = data.unread_count ?? normalised.filter(n => !n.read).length;
-      _lastFetchedAt = Date.now();
+      setTotalUnread(data.total_unread ?? data.unread_count ?? normalised.filter(n => !n.read).length);
+      setOtherWorkspaces(data.other_workspaces || []);
+      // Update per-workspace cache
+      setCached(wsId, normalised, data.unread_count ?? normalised.filter(n => !n.read).length);
       await AsyncStorage.setItem(NOTIF_KEY, JSON.stringify(normalised));
     } catch (e) {
       console.warn('fetchNotifications error:', e.message);
@@ -213,10 +248,14 @@ export function NotificationsProvider({ children }) {
     });
   }, []);
 
-  // ── Clear old corrupted cache once on mount ──────────────────────
+  // ── Sync currentWsIdRef immediately on mount ─────────────────────
+  // This ensures the WebSocket handler has the workspace ID even before
+  // fetchNotifications completes its async work
   useEffect(() => {
-    AsyncStorage.removeItem(NOTIF_KEY).catch(() => {});
-  }, []); // empty deps = runs once only
+    getWorkspaceId().then(id => {
+      if (id) currentWsIdRef.current = String(id);
+    }).catch(() => {});
+  }, []);
 
   // ── Fetch once on mount — WebSocket handles real-time updates ──────
   useEffect(() => {
@@ -226,9 +265,8 @@ export function NotificationsProvider({ children }) {
   // ── WebSocket — real-time notifications ───────────────────────────
   useEffect(() => {
     const unsubscribe = WebSocketService.subscribe((message) => {
-      
 
-      // Filter out WebSocket system/connection messages — not real notifications
+      // ── Filter out system/connection messages ──────────────────────
       const systemTypes = [
         'gateway_connected', 'gateway.connected',
         'presence_sync',     'presence.sync',     'presence',
@@ -236,19 +274,98 @@ export function NotificationsProvider({ children }) {
         'welcome', 'connected', 'connection_established',
       ];
       const msgType = (message?.type || '').toLowerCase().replace(/[\s_]/g, '');
-      if (systemTypes.some(t => t.toLowerCase().replace(/[\s_]/g, '') === msgType)) {
-        
+      if (systemTypes.some(t => t.toLowerCase().replace(/[\s_]/g, '') === msgType)) return;
+
+      // ── Handle NEW_NOTIFICATION signal ────────────────────────────
+      if (message?.type === 'SIGNAL' && message?.event === 'NEW_NOTIFICATION') {
+        const data = message.data || {};
+        const notifWsId   = String(data.workspace_id || '');
+        const currentWsId = String(currentWsIdRef.current || '');
+        const isSameWs    = notifWsId === currentWsId;
+        console.log('[Notif] WS signal:', { notifWsId, currentWsId, isSameWs, title: data.title });
+
+        if (isSameWs) {
+          // ── Same workspace: add full notification ──────────────────
+          const n = {
+            id:         String(data.id || Date.now()),
+            title:      data.title || 'Notification',
+            body:       data.message || '',
+            type:       data.related_object?.type || 'system',
+            icon:       metaFor(data.related_object?.type).icon,
+            color:      metaFor(data.related_object?.type).color,
+            read:       false,
+            time:       new Date().toISOString(),
+            time_since: 'just now',
+            priority:   'medium',
+            actor:      '',
+            metadata:   data.related_object || {},
+            workspace_id:   notifWsId,
+            workspace_name: data.workspace_name || '',
+          };
+
+          setNotifications(prev => {
+            if (prev.some(p => p.id === n.id)) return prev;
+            const next = [n, ...prev].slice(0, 100);
+            if (currentWsIdRef.current) {
+              setCached(currentWsIdRef.current, next, next.filter(x => !x.read).length);
+            }
+            return next;
+          });
+          // Update unread counts from the backend payload — source of truth
+          if (data.unread_count != null) {
+            setUnreadCount(data.unread_count);
+            // totalUnread = current workspace unread + other workspaces unread
+            setTotalUnread(prev => {
+              const otherUnread = prev - (data.unread_count - 1 >= 0 ? data.unread_count - 1 : 0);
+              return data.unread_count + Math.max(0, otherUnread);
+            });
+          } else {
+            setTotalUnread(prev => prev + 1);
+          }
+
+        } else {
+          // ── Different workspace: update other_workspaces badge only ─
+          setOtherWorkspaces(prev => {
+            const existing = prev.find(w => String(w.workspace_id) === notifWsId);
+            if (existing) {
+              return prev.map(w =>
+                String(w.workspace_id) === notifWsId
+                  ? { ...w, unread_count: (w.unread_count || 0) + 1,
+                      message: `You have ${(w.unread_count || 0) + 1} new notification${(w.unread_count || 0) + 1 !== 1 ? 's' : ''} in '${data.workspace_name || w.workspace_name}'` }
+                  : w
+              );
+            }
+            return [...prev, {
+              workspace_id:   data.workspace_id,
+              workspace_name: data.workspace_name || '',
+              unread_count:   1,
+              message:        `You have 1 new notification in '${data.workspace_name || ''}'`,
+            }];
+          });
+          setTotalUnread(prev => prev + 1);
+        }
         return;
       }
 
-      // Unwrap nested data if present
-      const payload = message?.data || message?.notification || message?.payload || message;
+      // ── Legacy fallback: explicit notification types ONLY ─────────
+      // Block chat/presence/unread-update events — they have content fields
+      // that would otherwise match the hasMessage check and leak in as
+      // fake "Notification" entries (e.g. CHAT_MESSAGE with content: "Hlo")
+      const rawType = (message?.type || '').toUpperCase();
+      const BLOCKED = ['CHAT_MESSAGE', 'CHAT_UNREAD_UPDATE', 'PRESENCE',
+                       'PRESENCE_SYNC', 'TYPING', 'READ_RECEIPT', 'GATEWAY_CONNECTED'];
+      if (BLOCKED.includes(rawType)) return;
 
-      // Must have meaningful content — not just a type
+      // Only proceed if this is explicitly a notification shape
+      const isNotif = rawType === 'NOTIFICATION' ||
+                      message?.event === 'NEW_NOTIFICATION' ||
+                      message?.data?.notification_type ||
+                      message?.notification_type;
+      if (!isNotif) return;
+
+      const payload    = message?.data || message?.notification || message?.payload || message;
       const hasTitle   = payload?.title || payload?.heading;
-      const hasMessage = payload?.message || payload?.body || payload?.content;
-
-      // Skip if no real content
+      const hasMessage = payload?.message || payload?.body; // intentionally exclude 'content'
       if (!hasTitle && !hasMessage) return;
 
       const cleanMessage = (str) => (str || '').replace(/<[^>]*>/g, '').trim();
@@ -261,6 +378,7 @@ export function NotificationsProvider({ children }) {
         if (typeof v === 'object') return v.full_name || v.username || v.name || String(v.id || '');
         return String(v);
       };
+
       const n = {
         id:         String(payload?.id || message?.id || Date.now()),
         title:      safeStr(payload?.title || payload?.heading || 'Notification'),
@@ -279,9 +397,11 @@ export function NotificationsProvider({ children }) {
       setNotifications(prev => {
         if (prev.some(p => p.id === n.id)) return prev;
         const next = [n, ...prev].slice(0, 100);
-        _cachedNotifications = next;
-        _cachedUnread = next.filter(x => !x.read).length;
-        setUnreadCount(_cachedUnread);
+        if (currentWsIdRef.current) {
+          setCached(currentWsIdRef.current, next, next.filter(x => !x.read).length);
+        }
+        setUnreadCount(next.filter(x => !x.read).length);
+        setTotalUnread(t => t + 1);
         return next;
       });
     });
@@ -293,6 +413,8 @@ export function NotificationsProvider({ children }) {
     <NotificationsContext.Provider value={{
       notifications,
       unreadCount,
+      totalUnread,
+      otherWorkspaces,
       loading,
       fetchNotifications,
       markAllRead,

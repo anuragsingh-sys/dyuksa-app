@@ -7,6 +7,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { ThemeContext } from '../context/ThemeContext';
 import { useNotifications } from '../context/NotificationsContext';
+import { useWorkspace } from '../context/WorkspaceContext';
 import SidebarMenu from '../components/SidebarMenu';
 
 const TYPE_CONFIG = {
@@ -122,15 +123,20 @@ export default function NotificationsScreen() {
   const sub  = isDark ? '#9898A6' : '#6B7588';
   const bdr  = isDark ? '#252530' : '#E6E9EF';
 
-  const { notifications, unreadCount, loading, fetchNotifications, markAllRead, markOneRead, clearAll } = useNotifications();
+  const { notifications, unreadCount, totalUnread, otherWorkspaces, loading, fetchNotifications, markAllRead, markOneRead, clearAll } = useNotifications();
+  const { workspaces, switchWorkspace } = useWorkspace();
   const [activeTab,  setActiveTab]  = useState('all');
   const [refreshing, setRefreshing] = useState(false);
 
-  useFocusEffect(useCallback(() => { fetchNotifications(); }, [fetchNotifications]));
+  useFocusEffect(useCallback(() => {
+    // fetchNotifications has a 30s stale check built in (force=false)
+    // so switching to this screen repeatedly won't hammer the backend
+    fetchNotifications();
+  }, [fetchNotifications]));
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await fetchNotifications();
+    await fetchNotifications(true); // force=true bypasses stale check
     setRefreshing(false);
   }, [fetchNotifications]);
 
@@ -234,6 +240,62 @@ export default function NotificationsScreen() {
               </View>
             </View>
           ))}
+
+          {/* ── Other Workspaces section ── */}
+          {otherWorkspaces.length > 0 && activeTab === 'all' && (
+            <View>
+              <Text style={[s.groupLabel, { color: sub }]}>OTHER WORKSPACES</Text>
+              <View style={[s.groupCard, { backgroundColor: card, borderColor: bdr }]}>
+                {otherWorkspaces.map((ws, idx) => (
+                  <View
+                    key={ws.workspace_id}
+                    style={[
+                      s.otherWsRow,
+                      idx < otherWorkspaces.length - 1 && { borderBottomWidth: 1, borderBottomColor: bdr },
+                    ]}
+                  >
+                    {/* Workspace avatar */}
+                    <View style={[s.wsAvatar, { backgroundColor: '#1A1A2E' }]}>
+                      <Text style={s.wsAvatarText}>
+                        {(ws.workspace_name?.[0] || 'W').toUpperCase()}
+                      </Text>
+                    </View>
+
+                    {/* Message */}
+                    <View style={{ flex: 1 }}>
+                      <Text style={[{ fontSize: 13, fontWeight: '700', color: txt }]} numberOfLines={1}>
+                        {ws.workspace_name}
+                      </Text>
+                      <Text style={[{ fontSize: 12, color: sub, marginTop: 2 }]} numberOfLines={1}>
+                        {ws.message}
+                      </Text>
+                    </View>
+
+                    {/* Unread badge */}
+                    {ws.unread_count > 0 && (
+                      <View style={s.wsBadge}>
+                        <Text style={s.wsBadgeText}>{ws.unread_count}</Text>
+                      </View>
+                    )}
+
+                    {/* Switch button */}
+                    <TouchableOpacity
+                      style={[s.switchBtn, { borderColor: '#4ECDC4' }]}
+                      activeOpacity={0.7}
+                      onPress={() => {
+                        const target = workspaces?.find(w =>
+                          String(w.id) === String(ws.workspace_id)
+                        );
+                        if (target) switchWorkspace(target);
+                      }}
+                    >
+                      <Text style={[s.switchBtnText, { color: '#4ECDC4' }]}>Switch</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            </View>
+          )}
         </ScrollView>
       )}
     </SafeAreaView>
@@ -264,4 +326,13 @@ const s = StyleSheet.create({
   priorityPill: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
   priorityPillText: { fontSize: 10, fontWeight: '700' },
   unreadDot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
+
+  // Other workspaces section
+  otherWsRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 12 },
+  wsAvatar: { width: 36, height: 36, borderRadius: 10, justifyContent: 'center', alignItems: 'center', flexShrink: 0 },
+  wsAvatarText: { color: '#4ECDC4', fontSize: 14, fontWeight: '800' },
+  wsBadge: { backgroundColor: '#EF4444', borderRadius: 10, minWidth: 20, height: 20, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 5 },
+  wsBadgeText: { color: '#fff', fontSize: 10, fontWeight: '800' },
+  switchBtn: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 },
+  switchBtnText: { fontSize: 12, fontWeight: '700' },
 });

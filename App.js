@@ -41,6 +41,8 @@ import ReportsScreen            from './screens/ReportsScreen';
 import DocumentViewerScreen     from './screens/DocumentViewerScreen';
 import QuickCreateScreen        from './screens/QuickCreateScreen';
 import CreateProjectScreen      from './screens/CreateProjectScreen';
+import CreateTaskScreen         from './screens/CreateTaskScreen';
+import NotificationToast        from './components/NotificationToast';
 
 export const STORAGE_KEY = 'DYUKSA_QUICK_TASKS';
 
@@ -440,6 +442,7 @@ function RootNavigator() {
           <Stack.Screen name="DocumentViewer"     component={DocumentViewerScreen} />
           <Stack.Screen name="QuickCreate"         component={QuickCreateScreen} options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />
           <Stack.Screen name="CreateProject"       component={CreateProjectScreen} options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="CreateTask"          component={CreateTaskScreen} options={{ animation: 'slide_from_right' }} />
         </>
       )}
     </Stack.Navigator>
@@ -456,6 +459,7 @@ export default function App() {
           <WorkspaceProvider>
             <NavigationContainer>
               <RootNavigator />
+              <NotificationToast />
             </NavigationContainer>
           </WorkspaceProvider>
         </ThemeProvider>

@@ -126,6 +126,10 @@ export function AuthProvider({ children }) {
       SecureStore.deleteItemAsync(AUTH_REFRESH_KEY),
       SecureStore.deleteItemAsync(TOKEN_EXPIRY_KEY),
       AsyncStorage.removeItem('DYUKSA_AUTH_TOKEN'),
+      AsyncStorage.removeItem('DYUKSA_WORKSPACE_ID'),
+      AsyncStorage.removeItem('DYUKSA_NOTIFICATIONS'),
+      AsyncStorage.removeItem('DYUKSA_SETTINGS'),
+      AsyncStorage.removeItem('TASKS_CACHE_V1'),
     ]).catch(() => {});
     clearTokenCache();
     setToken(null);
@@ -302,13 +306,19 @@ export function AuthProvider({ children }) {
 
   // ── Logout ────────────────────────────────────────────────────────────
   const logout = async () => {
+    // Call backend logout to invalidate refresh token
     try {
-      // ── BACKEND INTEGRATION POINT ──────────────────────────────────
-      // await fetch('https://api.dyuksa.com/auth/logout', {
-      //   method: 'POST',
-      //   headers: { Authorization: `Bearer ${token}` },
-      // }).catch(() => {}); // fire and forget
-      // ─────────────────────────────────────────────────────────────
+      const refreshTok = await SecureStore.getItemAsync(AUTH_REFRESH_KEY);
+      if (refreshTok && token) {
+        await fetch(`${BASE_URL}/auth/logout/`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+          body: JSON.stringify({ refresh: refreshTok }),
+        }).catch(() => {}); // fire and forget — clear session regardless
+      }
     } catch {}
     await clearSession();
   };

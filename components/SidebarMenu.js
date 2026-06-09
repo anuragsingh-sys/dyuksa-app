@@ -215,8 +215,11 @@ export default function SidebarMenu({ activeScreen }) {
                                 .then(() => {
                                   setWsExpanded(false);
                                   closeSidebar(() => {
-                                    try { navigation.jumpTo('Dashboard'); }
-                                    catch { navigation.navigate('Main', { screen: 'Dashboard' }); }
+                                    const rootNav = navigation.getParent() || navigation;
+                                    rootNav.reset({
+                                      index: 0,
+                                      routes: [{ name: 'Main' }],
+                                    });
                                   });
                                 })
                                 .catch(e => Alert.alert('Could not switch workspace', e.message || 'Try again.'));

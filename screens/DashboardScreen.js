@@ -179,7 +179,11 @@ export default function DashboardScreen() {
   const [activeTaskTab, setActiveTaskTab] = useState('upcoming');
 
   // ── Fetch projects + docs only (tasks come from shared cache) ─────────────
-  const fetchAll = useCallback(async () => {
+  const lastFetchRef  = useRef(0);
+  const STALE_MS_DASH = 30_000; // 30s — skip refetch on rapid tab switches
+
+  const fetchAll = useCallback(async (force = false) => {
+    if (!force && Date.now() - lastFetchRef.current < STALE_MS_DASH) return;
     try {
       const headers = await authHeaders();
 
@@ -197,6 +201,7 @@ export default function DashboardScreen() {
         setTotalDocs(d.count ?? (Array.isArray(d) ? d.length : (d.results?.length || 0)));
         setRecentDocs((Array.isArray(d) ? d : (d.results || [])).slice(0, 5));
       }
+      lastFetchRef.current = Date.now();
     } catch (e) {
       console.warn('DashboardScreen fetchAll:', e.message);
     } finally {
@@ -308,7 +313,7 @@ export default function DashboardScreen() {
         style={{ flex: 1 }}
         contentContainerStyle={{ paddingHorizontal: 14, paddingTop: 16, paddingBottom: 100 }}
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchAll(); }} tintColor={T.brand} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchAll(true); }} tintColor={T.brand} />}
       >
         {loading ? (
           <View style={{ flex: 1, alignItems: 'center', paddingTop: 60 }}>
