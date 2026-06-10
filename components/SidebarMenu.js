@@ -215,11 +215,8 @@ export default function SidebarMenu({ activeScreen }) {
                                 .then(() => {
                                   setWsExpanded(false);
                                   closeSidebar(() => {
-                                    const rootNav = navigation.getParent() || navigation;
-                                    rootNav.reset({
-                                      index: 0,
-                                      routes: [{ name: 'Main' }],
-                                    });
+                                    try { navigation.jumpTo('Dashboard'); }
+                                    catch { navigation.navigate('Main', { screen: 'Dashboard' }); }
                                   });
                                 })
                                 .catch(e => Alert.alert('Could not switch workspace', e.message || 'Try again.'));
@@ -318,26 +315,26 @@ const styles = StyleSheet.create({
     marginHorizontal: 12,
     marginBottom: 8,
     paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingVertical: 11,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#2D4070',
-    backgroundColor: '#1A2744',
+    borderColor: '#E6E9EF',
+    backgroundColor: '#F5F6F9',
   },
   wsName: {
-    color: '#FFFFFF',
+    color: '#1A1A2E',
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: '700',
     flexShrink: 1,
     marginRight: 8,
   },
   wsLabel: {
-    color: '#9898A6',
+    color: '#9098A6',
     fontSize: 10,
     marginTop: 1,
   },
   wsChevron: {
-    color: '#9898A6',
+    color: '#6B7280',
     fontSize: 13,
     fontWeight: '700',
     flexShrink: 0,
@@ -345,38 +342,38 @@ const styles = StyleSheet.create({
 
   wsDropdown: {
     borderTopWidth: 1,
-    borderTopColor: '#252535',
-    backgroundColor: '#131320',
+    borderTopColor: '#E6E9EF',
+    backgroundColor: '#FFFFFF',
     paddingBottom: 4,
   },
   wsDropdownTitle: {
-    fontSize: 9, fontWeight: '700', color: '#5C5C6E',
+    fontSize: 9, fontWeight: '700', color: '#9098A6',
     letterSpacing: 0.8,
     paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6,
   },
   wsItem: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingHorizontal: 14, paddingVertical: 9,
+    paddingHorizontal: 14, paddingVertical: 11,
     borderRadius: 8, marginHorizontal: 6, marginBottom: 2,
   },
-  wsItemActive: { backgroundColor: 'rgba(78,205,196,0.12)' },
+  wsItemActive: { backgroundColor: 'rgba(78,205,196,0.14)' },
   wsItemAvatar: {
     width: 26, height: 26, borderRadius: 7,
-    backgroundColor: '#252535',
+    backgroundColor: '#EEF0F4',
     justifyContent: 'center', alignItems: 'center',
   },
   wsItemAvatarActive: { backgroundColor: '#4ECDC4' },
-  wsItemAvatarText: { color: '#9898A6', fontSize: 11, fontWeight: '700' },
-  wsItemName: { flex: 1, color: '#9898A6', fontSize: 13, fontWeight: '500' },
-  wsItemNameActive: { color: '#4ECDC4', fontWeight: '700' },
-  wsItemCheck: { color: '#4ECDC4', fontSize: 14, fontWeight: '700' },
-  wsEmpty: { color: '#5C5C6E', fontSize: 12, textAlign: 'center', padding: 12 },
+  wsItemAvatarText: { color: '#6B7280', fontSize: 11, fontWeight: '700' },
+  wsItemName: { flex: 1, color: '#3A3A4A', fontSize: 13, fontWeight: '500' },
+  wsItemNameActive: { color: '#1AA89E', fontWeight: '700' },
+  wsItemCheck: { color: '#1AA89E', fontSize: 14, fontWeight: '700' },
+  wsEmpty: { color: '#9098A6', fontSize: 12, textAlign: 'center', padding: 12 },
   wsFooterNote: {
-    borderTopWidth: 1, borderTopColor: '#252535',
+    borderTopWidth: 1, borderTopColor: '#E6E9EF',
     paddingHorizontal: 12, paddingVertical: 8,
     marginTop: 4,
   },
-  wsFooterNoteText: { color: '#5C5C6E', fontSize: 10, textAlign: 'center' },
+  wsFooterNoteText: { color: '#9098A6', fontSize: 10, textAlign: 'center' },
 
   sidebarBottom: { flexDirection: 'row', paddingHorizontal: 12, paddingBottom: 16, gap: 8, borderTopWidth: 1, borderTopColor: 'rgba(0,0,0,0.06)' },
   sidebarBottomBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(0,0,0,0.08)' },

@@ -11,14 +11,14 @@ import { ThemeContext } from '../context/ThemeContext';
 import { getAccessToken, getWorkspaceId } from '../services/ApiService';
 import { BASE_URL, API_BASE } from '../config';
 
-// ── Dark viewer tokens (dev_1) ────────────────────────────────────────────────
+// ── Light viewer tokens ───────────────────────────────────────────────────────
 const DK = {
-  bg:     '#202329',
-  bar:    '#2A2D34',
-  ink:    '#FFFFFF',
-  ink2:   'rgba(255,255,255,0.55)',
-  ink3:   'rgba(255,255,255,0.35)',
-  border: 'rgba(255,255,255,0.08)',
+  bg:     '#FFFFFF',
+  bar:    '#FFFFFF',
+  ink:    '#1A1A2E',
+  ink2:   'rgba(26,26,46,0.55)',
+  ink3:   'rgba(26,26,46,0.35)',
+  border: 'rgba(0,0,0,0.08)',
 };
 
 const authHeaders = async () => {
@@ -111,14 +111,17 @@ export default function DocumentViewerScreen() {
   const imgFile = isImage(ext);
   const pdfFile = isPdf(ext);
 
-  // Build viewer URL — only PDF/Office docs support Google Docs viewer
+  // Build viewer URL
+  // - PDFs: load the file directly — iOS/Android WebView renders PDF natively, full width
+  // - Office docs (docx/xlsx/pptx): use Google Docs viewer (can't render natively)
   const isOffice = ['doc','docx','ppt','pptx','xls','xlsx'].includes(ext);
-  const canPreview = pdfFile || isOffice;
   const viewerUrl = imgFile
     ? fileUrl
-    : canPreview && fileUrl
-      ? `https://docs.google.com/viewer?url=${encodeURIComponent(fileUrl)}&embedded=true`
-      : null;
+    : pdfFile && fileUrl
+      ? fileUrl  // direct PDF — native full-width render
+      : isOffice && fileUrl
+        ? `https://docs.google.com/viewer?url=${encodeURIComponent(fileUrl)}&embedded=true`
+        : null;
 
   const openInBrowser = () => {
     if (fileUrl) Linking.openURL(fileUrl).catch(() => Alert.alert('Error', 'Could not open URL'));
@@ -127,10 +130,10 @@ export default function DocumentViewerScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: DK.bg }}>
-      <StatusBar barStyle="light-content" backgroundColor={DK.bar} translucent={false} />
+      <StatusBar barStyle="dark-content" backgroundColor={DK.bar} translucent={false} />
 
       {/* ── Dark nav bar ── */}
-      <View style={s.navBar}>
+      <View style={[s.navBar, { paddingTop: Platform.OS === 'ios' ? (insets.top || 44) : (StatusBar.currentHeight || 24) + 4 }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={s.navBtn}>
           <Text style={{ color: DK.ink, fontSize: 26, fontWeight: '300', marginTop: -2 }}>‹</Text>
         </TouchableOpacity>
@@ -172,24 +175,14 @@ export default function DocumentViewerScreen() {
               <WebView
                 source={{ uri: viewerUrl }}
                 style={{ flex: 1, backgroundColor: DK.bg }}
+                originWhitelist={['*']}
                 startInLoadingState={false}
                 onLoadStart={() => setWebLoading(true)}
                 onLoadEnd={() => setWebLoading(false)}
                 scalesPageToFit={true}
-                injectedJavaScript={`
-                  (function() {
-                    var style = document.createElement('style');
-                    style.innerHTML = \`
-                      body, html { margin: 0 !important; padding: 0 !important; width: 100% !important; }
-                      #drive-viewer-pdf-viewer { width: 100% !important; margin: 0 !important; padding: 0 !important; }
-                      .ndfHFb-c4YZDc { padding: 0 !important; }
-                      .drive-viewer-paginated-scrolling-container { padding: 0 !important; }
-                      embed, object, iframe { width: 100% !important; }
-                    \`;
-                    document.head.appendChild(style);
-                  })();
-                  true;
-                `}
+                allowsInlineMediaPlayback
+                javaScriptEnabled
+                domStorageEnabled
                 onError={() => {
                   setWebLoading(false);
                   Alert.alert('Could not load', 'Try opening in browser instead.', [
