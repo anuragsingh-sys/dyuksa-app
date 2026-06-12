@@ -50,7 +50,7 @@ const T = {
 };
 
 // Project colors cycle
-const PROJECT_COLORS = [T.cBlue, T.cPurple, T.cGreen, T.cYellow, T.cRed];
+const PROJECT_COLORS = [T.cBlue, T.cPurple, T.cGreen, T.cYellow, T.cRed, '#0EA5E9', '#10B981', '#F97316'];
 const getProjectColor = (idx) => PROJECT_COLORS[idx % PROJECT_COLORS.length];
 
 const FILTER_TABS = ['All', 'In Progress', 'Completed', 'Pinned'];
@@ -199,6 +199,8 @@ export default function ProjectsScreen() {
   const [modalVisible, setModalVisible] = useState(false);
   const [saving,       setSaving]       = useState(false);
   const [projectName,  setProjectName]  = useState('');
+  const [description,  setDescription]  = useState('');
+  const [projectColor, setProjectColor] = useState(PROJECT_COLORS[0]);
   const [taskType,     setTaskType]     = useState(null);
   const [projectImages,setProjectImages]= useState([]);
   const [members,      setMembers]      = useState([{ user: null, role: null }]);
@@ -290,7 +292,11 @@ export default function ProjectsScreen() {
   const closeModal = () => {
     Animated.timing(slideAnim, { toValue: -600, duration: 250, useNativeDriver: true }).start(() => {
       setModalVisible(false);
-      setProjectName(''); setTaskType(null); setProjectImages([]);
+      setProjectName('');
+      setDescription('');
+      setProjectColor(PROJECT_COLORS[0]);
+      setTaskType(null);
+      setProjectImages([]);
       setMembers([{ user: null, role: null }]);
     });
   };
@@ -582,6 +588,7 @@ export default function ProjectsScreen() {
     const validMembers = members.filter(m => m.user && m.role);
     const body = {
       name: projectName.trim(), task_type: taskType,
+      description: description.trim() || undefined,
       assigned_members: validMembers.map(m => ({ user_id: m.user.id, role: m.role })),
       project_settings: { priority: 'high' },
     };
@@ -873,11 +880,43 @@ export default function ProjectsScreen() {
                   </TouchableOpacity>
                 </View>
 
+                {/* Color picker */}
+                <View style={{ alignItems: 'center', marginBottom: 16 }}>
+                  <View style={{ width: 72, height: 72, borderRadius: 18, backgroundColor: projectColor + '22', justifyContent: 'center', alignItems: 'center', marginBottom: 6 }}>
+                    <Text style={{ fontSize: 30, fontWeight: '800', color: projectColor }}>
+                      {(projectName.trim()[0] || 'P').toUpperCase()}
+                    </Text>
+                  </View>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'center' }}>
+                    {PROJECT_COLORS.map(c => (
+                      <TouchableOpacity
+                        key={c}
+                        onPress={() => setProjectColor(c)}
+                        style={[{
+                          width: 28, height: 28, borderRadius: 14,
+                          backgroundColor: c, justifyContent: 'center', alignItems: 'center',
+                        }, projectColor === c && { borderWidth: 2.5, borderColor: '#fff', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 4, elevation: 4 }]}
+                      >
+                        {projectColor === c && <Text style={{ color: '#fff', fontSize: 12, fontWeight: '800' }}>✓</Text>}
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+
                 <Text style={[ms.fieldLabel, { color: sub }]}>Project Name *</Text>
                 <TextInput
                   placeholder="Enter project name..." placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
                   style={[ms.input, { backgroundColor: isDark ? '#252530' : '#F5F5F7', color: txt }]}
                   value={projectName} onChangeText={setProjectName} autoFocus
+                />
+
+                <Text style={[ms.fieldLabel, { color: sub }]}>Description</Text>
+                <TextInput
+                  placeholder="What's this project about?"
+                  placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
+                  multiline
+                  style={[ms.input, { backgroundColor: isDark ? '#252530' : '#F5F5F7', color: txt, height: 80, textAlignVertical: 'top', paddingTop: 12 }]}
+                  value={description} onChangeText={setDescription}
                 />
 
                 <Text style={[ms.fieldLabel, { color: sub }]}>Assigned To</Text>

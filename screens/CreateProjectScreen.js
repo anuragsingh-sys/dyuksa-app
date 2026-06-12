@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useContext, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView,
-  StyleSheet, Alert, ActivityIndicator, StatusBar, Animated,
+  StyleSheet, Alert, ActivityIndicator, StatusBar, Animated, Image,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
+import * as ImagePicker from 'expo-image-picker';
 import { ThemeContext } from '../context/ThemeContext';
 import { NotificationsContext } from '../context/NotificationsContext';
 import { getUsers, createProject } from '../services/ApiService';
@@ -160,6 +161,7 @@ export default function CreateProjectScreen() {
   const [users,         setUsers]         = useState([]);
   const [saving,        setSaving]        = useState(false);
   const [typeDropOpen,  setTypeDropOpen]  = useState(false);
+  const [projectImages, setProjectImages] = useState([]);
 
   // Fade-in animation
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -173,6 +175,23 @@ export default function CreateProjectScreen() {
   const removeMemberRow = (i) => setMembers(m => m.filter((_, idx) => idx !== i));
   const setMemberUser   = (i, user) => setMembers(m => m.map((r, idx) => idx === i ? { ...r, user } : r));
   const setMemberRole   = (i, role) => setMembers(m => m.map((r, idx) => idx === i ? { ...r, role } : r));
+
+  // Camera / gallery for attach images
+  const openCamera = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') { Alert.alert('Permission Denied', 'Camera access is needed.'); return; }
+    const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.8 });
+    if (!result.canceled && result.assets?.[0]?.uri)
+      setProjectImages(p => [...p, result.assets[0].uri]);
+  };
+
+  const openGallery = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') { Alert.alert('Permission Denied', 'Gallery access is needed.'); return; }
+    const result = await ImagePicker.launchImageLibraryAsync({ allowsMultipleSelection: true, quality: 0.8 });
+    if (!result.canceled && result.assets?.length)
+      setProjectImages(p => [...p, ...result.assets.map(a => a.uri)]);
+  };
 
   // Submit — same body shape as ProjectsScreen.addProject
   const handleCreate = async () => {
@@ -341,6 +360,44 @@ export default function CreateProjectScreen() {
           )}
         </View>
 
+        {/* ── Attach Images ── */}
+        <View style={[styles.card, { backgroundColor: cardBg, borderColor: bdr }]}>
+          <Text style={[styles.fieldLabel, { color: sub }]}>ATTACH IMAGES</Text>
+          <View style={styles.attachRow}>
+            {[
+              { icon: '📷', label: 'Camera',  sub2: 'Take a photo',     onPress: openCamera },
+              { icon: '🖼️', label: 'Gallery', sub2: 'Pick from photos', onPress: openGallery },
+            ].map((btn, i) => (
+              <TouchableOpacity
+                key={i}
+                style={[styles.attachBtn, { backgroundColor: isDark ? '#252538' : '#F5F5F7', borderColor: bdr }]}
+                onPress={btn.onPress}
+              >
+                <View style={[styles.attachIconWrap, { backgroundColor: cardBg, borderColor: bdr }]}>
+                  <Text style={{ fontSize: 22 }}>{btn.icon}</Text>
+                </View>
+                <Text style={[styles.attachLabel, { color: txt }]}>{btn.label}</Text>
+                <Text style={[styles.attachSub, { color: sub }]}>{btn.sub2}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          {projectImages.length > 0 && (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 10 }}>
+              {projectImages.map((uri, i) => (
+                <View key={i} style={{ position: 'relative', marginRight: 10 }}>
+                  <Image source={{ uri }} style={[styles.previewImg, { borderColor: bdr }]} />
+                  <TouchableOpacity
+                    style={styles.removeImg}
+                    onPress={() => setProjectImages(p => p.filter((_, idx) => idx !== i))}
+                  >
+                    <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700' }}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </ScrollView>
+          )}
+        </View>
+
         {/* ── Privacy note ── */}
         <View style={[styles.infoBox, { backgroundColor: isDark ? 'rgba(78,205,196,0.08)' : 'rgba(78,205,196,0.06)', borderColor: 'rgba(78,205,196,0.25)' }]}>
           <Text style={{ fontSize: 12, color: accent, lineHeight: 18 }}>
@@ -499,4 +556,25 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3, shadowRadius: 10, elevation: 8,
   },
   createBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+
+  // Attach images
+  attachRow: { flexDirection: 'row', gap: 12 },
+  attachBtn: {
+    flex: 1, borderRadius: 12, borderWidth: 1.5,
+    paddingVertical: 12, alignItems: 'center', gap: 3,
+  },
+  attachIconWrap: {
+    width: 44, height: 44, borderRadius: 22,
+    justifyContent: 'center', alignItems: 'center',
+    marginBottom: 2, borderWidth: 1,
+  },
+  attachLabel: { fontSize: 12, fontWeight: '700' },
+  attachSub:   { fontSize: 10, color: '#AAAABC' },
+  previewImg:  { width: 80, height: 80, borderRadius: 10, borderWidth: 1 },
+  removeImg: {
+    position: 'absolute', top: -6, right: -6,
+    width: 20, height: 20, borderRadius: 10,
+    backgroundColor: '#F87171', justifyContent: 'center', alignItems: 'center',
+    borderWidth: 1.5, borderColor: '#fff',
+  },
 });

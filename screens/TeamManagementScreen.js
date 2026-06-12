@@ -1,11 +1,11 @@
-import React, { useState, useContext, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useContext, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   ActivityIndicator, RefreshControl, StatusBar, Alert,
   Modal, TextInput, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useNavigation, useFocusEffect, useRoute } from '@react-navigation/native';
 import { ThemeContext } from '../context/ThemeContext';
 import { AuthContext } from '../context/AuthContext';
 import { getAccessToken, getWorkspaceId } from '../services/ApiService';
@@ -158,6 +158,7 @@ function TeamDetail({ team, onClose, isDark, card, txt, sub, bdr }) {
 // ── Main Screen ──────────────────────────────────────────────────────────────
 export default function TeamManagementScreen() {
   const navigation = useNavigation();
+  const route      = useRoute();
   const { theme, fontScale } = useContext(ThemeContext);
   const { user } = useContext(AuthContext);
   const isDark = theme === 'Dark';
@@ -176,6 +177,13 @@ export default function TeamManagementScreen() {
   const [selected,   setSelected]   = useState(null);
   const [activeTab,  setActiveTab]  = useState('teams');
 
+  // Sync tab from route params
+  useEffect(() => {
+    if (route.params?.initialTab) {
+      setActiveTab(route.params.initialTab);
+    }
+  }, [route.params?.initialTab]);
+
   // ── Add New User modal state ──
   const [showAddUser,    setShowAddUser]    = useState(false);
   const [addFirstName,   setAddFirstName]   = useState('');
@@ -187,24 +195,11 @@ export default function TeamManagementScreen() {
   const [addConfirmPass, setAddConfirmPass] = useState('');
   const [addSaving,      setAddSaving]      = useState(false);
 
-  // ── Invite User modal state ──
-  const [showInvite,      setShowInvite]      = useState(false);
-  const [inviteEmail,     setInviteEmail]     = useState('');
-  const [inviteRole,      setInviteRole]      = useState('viewer');
-  const [inviteWorkspace, setInviteWorkspace] = useState(null); // null = default
-  const [inviteWorkspaces, setInviteWorkspaces] = useState([]);
-  const [inviteSaving,    setInviteSaving]    = useState(false);
-  const [wsDropdownOpen,  setWsDropdownOpen]  = useState(false);
-
-  const ROLES = ['admin', 'manager', 'developer', 'viewer'];
+  const ROLES = ['admin', 'manager', 'annotator', 'viewer', 'developer'];
 
   const resetAddForm = () => {
     setAddFirstName(''); setAddLastName(''); setAddUsername('');
     setAddEmail(''); setAddRole('viewer'); setAddPassword(''); setAddConfirmPass('');
-  };
-  const resetInviteForm = () => {
-    setInviteEmail(''); setInviteRole('viewer');
-    setInviteWorkspace(null); setWsDropdownOpen(false);
   };
 
   // ── Fetch ─────────────────────────────────────────────────────────
@@ -298,46 +293,6 @@ export default function TeamManagementScreen() {
     finally { setAddSaving(false); }
   };
 
-  const fetchInviteWorkspaces = useCallback(async () => {
-    try {
-      const headers = await authHeaders();
-      const res = await fetch(`${BASE_URL}/organizations/workspaces/`, { headers });
-      if (res.ok) {
-        const data = await res.json();
-        setInviteWorkspaces(Array.isArray(data) ? data : (data.results || data.workspaces || []));
-      }
-    } catch (e) { console.warn('fetchInviteWorkspaces:', e.message); }
-  }, []);
-
-  const handleInviteUser = async () => {
-    if (!inviteEmail.trim()) { Alert.alert('Required', 'Enter email.'); return; }
-    setInviteSaving(true);
-    try {
-      const headers = await authHeaders();
-      const payload = { email: inviteEmail.trim(), role: inviteRole };
-      if (inviteWorkspace?.id) payload.workspace_id = inviteWorkspace.id;
-      const res = await fetch(`${BASE_URL}/auth/invite/send/`, {
-        method: 'POST',
-        headers: { ...headers, 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      // Guard against HTML error pages (404/500)
-      const contentType = res.headers.get('content-type') || '';
-      if (!contentType.includes('application/json')) {
-        Alert.alert('Error', `Server error (${res.status}). Check the invite endpoint with the backend team.`);
-        return;
-      }
-      const data = await res.json();
-      if (!res.ok) {
-        Alert.alert('Error', data.detail || data.message || 'Failed to send invite.'); return;
-      }
-      const wsName = data.workspace || inviteWorkspace?.name || 'Default Workspace';
-      Alert.alert('Invite Sent ✓', `Invitation sent to ${inviteEmail.trim()}\nWorkspace: ${wsName}`);
-      setShowInvite(false); resetInviteForm();
-    } catch (e) { Alert.alert('Error', e.message); }
-    finally { setInviteSaving(false); }
-  };
-
   const onRefresh = () => {
     setRefreshing(true);
     if (activeTab === 'roles') fetchUsers().then(() => setRefreshing(false));
@@ -410,7 +365,7 @@ export default function TeamManagementScreen() {
             <View style={{ flexDirection: 'row', gap: 8 }}>
               <TouchableOpacity
                 style={[styles.rolesBtn, { backgroundColor: isDark ? '#252530' : '#F0F2F6', borderColor: bdr }]}
-                onPress={() => { setShowInvite(true); fetchInviteWorkspaces(); }}
+                onPress={() => navigation.navigate('InviteUser')}
               >
                 <Text style={{ fontSize: 12, fontWeight: '700', color: '#4ECDC4' }}>✉ Invite</Text>
               </TouchableOpacity>
@@ -504,9 +459,30 @@ export default function TeamManagementScreen() {
                       </View>
                     </View>
                     <Text style={[styles.modalLabel, { color: sub }]}>Username</Text>
-                    <TextInput value={addUsername} onChangeText={setAddUsername} placeholder="unique_username" placeholderTextColor={sub} autoCapitalize="none" style={[styles.modalInput, { backgroundColor: isDark ? '#252530' : '#F5F6F9', borderColor: bdr, color: txt }]} />
+                    <TextInput
+                      value={addUsername}
+                      onChangeText={setAddUsername}
+                      placeholder="unique_username"
+                      placeholderTextColor={sub}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      autoComplete="off"
+                      textContentType="none"
+                      style={[styles.modalInput, { backgroundColor: isDark ? '#252530' : '#F5F6F9', borderColor: bdr, color: txt }]}
+                    />
                     <Text style={[styles.modalLabel, { color: sub }]}>Email</Text>
-                    <TextInput value={addEmail} onChangeText={setAddEmail} placeholder="user@example.com" placeholderTextColor={sub} keyboardType="email-address" autoCapitalize="none" style={[styles.modalInput, { backgroundColor: isDark ? '#252530' : '#F5F6F9', borderColor: bdr, color: txt }]} />
+                    <TextInput
+                      value={addEmail}
+                      onChangeText={setAddEmail}
+                      placeholder="user@example.com"
+                      placeholderTextColor={sub}
+                      keyboardType="email-address"
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      autoComplete="off"
+                      textContentType="none"
+                      style={[styles.modalInput, { backgroundColor: isDark ? '#252530' : '#F5F6F9', borderColor: bdr, color: txt }]}
+                    />
                     <Text style={[styles.modalLabel, { color: sub }]}>Role</Text>
                     <View style={styles.rolePillRow}>
                       {ROLES.map(r => (
@@ -534,94 +510,6 @@ export default function TeamManagementScreen() {
             </KeyboardAvoidingView>
           </Modal>
 
-          {/* ── Invite User Modal ── */}
-          <Modal visible={showInvite} animationType="slide" transparent onRequestClose={() => setShowInvite(false)}>
-            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
-              <View style={styles.modalOverlay}>
-                <View style={[styles.modalCard, { backgroundColor: card }]}>
-                  <View style={styles.modalHeader}>
-                    <Text style={[styles.modalTitle, { color: txt }]}>Invite User</Text>
-                    <TouchableOpacity onPress={() => { setShowInvite(false); resetInviteForm(); }}>
-                      <Text style={{ fontSize: 20, color: sub }}>✕</Text>
-                    </TouchableOpacity>
-                  </View>
-                  <Text style={[styles.modalLabel, { color: sub }]}>Email</Text>
-                  <TextInput
-                    value={inviteEmail} onChangeText={setInviteEmail}
-                    placeholder="user@example.com" placeholderTextColor={sub}
-                    keyboardType="email-address" autoCapitalize="none"
-                    style={[styles.modalInput, { backgroundColor: isDark ? '#252530' : '#F5F6F9', borderColor: bdr, color: txt }]}
-                  />
-                  <Text style={[styles.modalLabel, { color: sub }]}>Role</Text>
-                  <View style={styles.rolePillRow}>
-                    {ROLES.map(r => (
-                      <TouchableOpacity key={r} onPress={() => setInviteRole(r)}
-                        style={[styles.rolePill, { backgroundColor: inviteRole === r ? '#1A1A2E' : (isDark ? '#252530' : '#F5F6F9'), borderColor: inviteRole === r ? '#1A1A2E' : bdr }]}>
-                        <Text style={{ fontSize: 11, fontWeight: '700', color: inviteRole === r ? '#fff' : sub, textTransform: 'capitalize' }}>{r}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-
-                  {/* Workspace dropdown */}
-                  <Text style={[styles.modalLabel, { color: sub }]}>
-                    Add to Workspace <Text style={{ fontWeight: '400', fontSize: 10 }}>(optional)</Text>
-                  </Text>
-                  <TouchableOpacity
-                    style={[styles.modalInput, { backgroundColor: isDark ? '#252530' : '#F5F6F9', borderColor: wsDropdownOpen ? '#4ECDC4' : bdr, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', height: 44 }]}
-                    onPress={() => setWsDropdownOpen(o => !o)}
-                  >
-                    <Text style={{ color: inviteWorkspace ? txt : sub, fontSize: 14 }} numberOfLines={1}>
-                      {inviteWorkspace ? inviteWorkspace.name : 'Default Workspace'}
-                    </Text>
-                    <Text style={{ color: sub, fontSize: 11 }}>{wsDropdownOpen ? '▲' : '▾'}</Text>
-                  </TouchableOpacity>
-                  {wsDropdownOpen && (
-                    <View style={[styles.wsPickerList, { backgroundColor: card, borderColor: '#4ECDC4' }]}>
-                      <ScrollView nestedScrollEnabled style={{ maxHeight: 160 }} showsVerticalScrollIndicator={false}>
-                        {/* Default option */}
-                        <TouchableOpacity
-                          style={[styles.wsPickerItem, { borderBottomColor: bdr }]}
-                          onPress={() => { setInviteWorkspace(null); setWsDropdownOpen(false); }}
-                        >
-                          <Text style={[styles.wsPickerItemTxt, { color: !inviteWorkspace ? '#4ECDC4' : txt, fontWeight: !inviteWorkspace ? '700' : '500' }]}>
-                            Default Workspace
-                          </Text>
-                          {!inviteWorkspace && <Text style={{ color: '#4ECDC4' }}>✓</Text>}
-                        </TouchableOpacity>
-                        {inviteWorkspaces.map(ws => (
-                          <TouchableOpacity
-                            key={ws.id}
-                            style={[styles.wsPickerItem, { borderBottomColor: bdr }]}
-                            onPress={() => { setInviteWorkspace(ws); setWsDropdownOpen(false); }}
-                          >
-                            <View style={{ flex: 1 }}>
-                              <Text style={[styles.wsPickerItemTxt, { color: inviteWorkspace?.id === ws.id ? '#4ECDC4' : txt, fontWeight: inviteWorkspace?.id === ws.id ? '700' : '500' }]} numberOfLines={1}>
-                                {ws.name}
-                              </Text>
-                              {ws.is_default && <Text style={{ fontSize: 9, color: sub }}>Default</Text>}
-                            </View>
-                            {inviteWorkspace?.id === ws.id && <Text style={{ color: '#4ECDC4' }}>✓</Text>}
-                          </TouchableOpacity>
-                        ))}
-                        {inviteWorkspaces.length === 0 && (
-                          <Text style={{ color: sub, fontSize: 12, textAlign: 'center', padding: 12 }}>Loading workspaces…</Text>
-                        )}
-                      </ScrollView>
-                    </View>
-                  )}
-
-                  <View style={[styles.modalFooter, { marginTop: 16 }]}>
-                    <TouchableOpacity style={[styles.modalCancelBtn, { borderColor: bdr }]} onPress={() => { setShowInvite(false); resetInviteForm(); }}>
-                      <Text style={{ color: sub, fontWeight: '600' }}>Cancel</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.modalConfirmBtn} onPress={handleInviteUser} disabled={inviteSaving}>
-                      {inviteSaving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={{ color: '#fff', fontWeight: '700' }}>✉ Send Invite</Text>}
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              </View>
-            </KeyboardAvoidingView>
-          </Modal>
         </>
       ) : (
         <>

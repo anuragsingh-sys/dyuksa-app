@@ -2,11 +2,13 @@ import { NavigationContainer, useNavigation, useNavigationState } from '@react-n
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import {
-  Text, View, TouchableOpacity, StyleSheet, Platform, Modal, Animated, ScrollView, Image, PanResponder, Dimensions,
+  Text, View, TouchableOpacity, StyleSheet, Platform, Modal, Animated, ScrollView,
+  Image, PanResponder, Dimensions, Alert, KeyboardAvoidingView, TextInput, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useState, useEffect, useContext, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { BASE_URL } from './config';
 import { NotificationsProvider } from './context/NotificationsContext';
 import { AuthProvider, AuthContext } from './context/AuthContext';
 import { registerForPushNotifications, addNotificationListeners, rescheduleAllEvents } from './services/PushNotificationService';
@@ -41,7 +43,7 @@ import ReportsScreen            from './screens/ReportsScreen';
 import DocumentViewerScreen     from './screens/DocumentViewerScreen';
 import QuickCreateScreen        from './screens/QuickCreateScreen';
 import CreateProjectScreen      from './screens/CreateProjectScreen';
-import CreateTaskScreen         from './screens/CreateTaskScreen';
+import InviteUserScreen         from './screens/InviteUserScreen';
 import NotificationToast        from './components/NotificationToast';
 
 export const STORAGE_KEY = 'DYUKSA_QUICK_TASKS';
@@ -120,6 +122,59 @@ function QuickAddModal({ visible, onClose, navigation }) {
   const modalTxt = isDark ? '#FFFFFF' : '#1A1A2E';
   const modalSub = isDark ? '#9898A6' : '#6B7588';
   const modalBdr = isDark ? '#2A2A38' : '#F0F0F5';
+  const inputBg  = isDark ? '#252530' : '#F5F6F9';
+
+  // ── Inline invite state ───────────────────────────────────────────
+  const [showInvite,      setShowInvite]      = useState(false);
+  const [inviteEmail,     setInviteEmail]     = useState('');
+  const [inviteRole,      setInviteRole]      = useState('viewer');
+  const [inviteWorkspace, setInviteWorkspace] = useState(null);
+  const [inviteWorkspaces, setInviteWorkspaces] = useState([]);
+  const [inviteSaving,    setInviteSaving]    = useState(false);
+  const [wsDropOpen,      setWsDropOpen]      = useState(false);
+  const ROLES = ['admin', 'manager', 'annotator', 'viewer', 'developer'];
+
+  const resetInvite = () => {
+    setInviteEmail(''); setInviteRole('viewer');
+    setInviteWorkspace(null); setWsDropOpen(false);
+  };
+
+  const fetchWS = async () => {
+    try {
+      const token = await AsyncStorage.getItem('DYUKSA_AUTH_TOKEN');
+      const wsId  = await AsyncStorage.getItem('DYUKSA_WORKSPACE_ID');
+      const h = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+      if (wsId) h['X-Workspace-ID'] = wsId;
+      const res = await fetch(`${BASE_URL}/organizations/workspaces/`, { headers: h });
+      if (res.ok) {
+        const d = await res.json();
+        setInviteWorkspaces(Array.isArray(d) ? d : (d.results || d.workspaces || []));
+      }
+    } catch {}
+  };
+
+  const handleInvite = async () => {
+    if (!inviteEmail.trim()) { Alert.alert('Required', 'Enter email.'); return; }
+    setInviteSaving(true);
+    try {
+      const token = await AsyncStorage.getItem('DYUKSA_AUTH_TOKEN');
+      const wsId  = await AsyncStorage.getItem('DYUKSA_WORKSPACE_ID');
+      const h = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+      if (wsId) h['X-Workspace-ID'] = wsId;
+      const payload = { email: inviteEmail.trim(), role: inviteRole };
+      if (inviteWorkspace?.id) payload.workspace_id = inviteWorkspace.id;
+      const res = await fetch(`${BASE_URL}/auth/invite/send/`, { method: 'POST', headers: h, body: JSON.stringify(payload) });
+      const ct = res.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) {
+        Alert.alert('Error', `Server error (${res.status})`); return;
+      }
+      const data = await res.json();
+      if (!res.ok) { Alert.alert('Error', data.detail || 'Failed to send invite.'); return; }
+      Alert.alert('Invite Sent ✓', `Invitation sent to ${inviteEmail.trim()}`);
+      resetInvite(); setShowInvite(false);
+    } catch (e) { Alert.alert('Error', e.message); }
+    finally { setInviteSaving(false); }
+  };
 
   useEffect(() => {
     if (visible) {
@@ -178,11 +233,97 @@ function QuickAddModal({ visible, onClose, navigation }) {
       iconColor: '#7C3AED',
       label: 'Invite Member',
       desc: 'By email or link',
-      action: () => navigation.navigate('TeamManagement'),
+      action: () => { fetchWS(); setShowInvite(true); },
     },
   ];
 
   if (!visible) return null;
+
+  // ── Invite form view ──────────────────────────────────────────────
+  if (showInvite) {
+    return (
+      <Modal transparent visible animationType="slide" onRequestClose={() => { setShowInvite(false); resetInvite(); onClose(); }}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+          <TouchableOpacity style={styles.qaOverlay} activeOpacity={1} onPress={() => { setShowInvite(false); resetInvite(); onClose(); }} />
+          <View style={[styles.qaPanel, { backgroundColor: modalBg, paddingHorizontal: 20, paddingBottom: 34 }]}>
+            <View style={styles.qaHandle} />
+            <View style={[styles.qaHeader, { borderBottomColor: modalBdr }]}>
+              <TouchableOpacity onPress={() => setShowInvite(false)} style={{ padding: 4 }}>
+                <Text style={{ fontSize: 22, color: modalSub }}>‹</Text>
+              </TouchableOpacity>
+              <Text style={[styles.qaTitle, { color: modalTxt, flex: 1, textAlign: 'center' }]}>Invite Member</Text>
+              <TouchableOpacity onPress={() => { setShowInvite(false); resetInvite(); onClose(); }} style={[styles.qaCloseCircle, { backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}>
+                <Text style={[styles.qaCloseText, { color: modalSub }]}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <Text style={{ fontSize: 11, fontWeight: '700', color: modalSub, marginTop: 16, marginBottom: 6, letterSpacing: 0.5 }}>EMAIL</Text>
+              <TextInput
+                value={inviteEmail} onChangeText={setInviteEmail}
+                placeholder="user@example.com" placeholderTextColor={modalSub}
+                keyboardType="email-address" autoCapitalize="none" autoCorrect={false}
+                style={{ borderRadius: 10, borderWidth: 1.5, borderColor: modalBdr, backgroundColor: inputBg, paddingHorizontal: 14, height: 46, fontSize: 14, color: modalTxt }}
+              />
+
+              <Text style={{ fontSize: 11, fontWeight: '700', color: modalSub, marginTop: 14, marginBottom: 8, letterSpacing: 0.5 }}>ROLE</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                {ROLES.map(r => (
+                  <TouchableOpacity key={r} onPress={() => setInviteRole(r)}
+                    style={{ paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, borderWidth: 1.5,
+                      backgroundColor: inviteRole === r ? '#1A1A2E' : inputBg,
+                      borderColor: inviteRole === r ? '#1A1A2E' : modalBdr }}>
+                    <Text style={{ fontSize: 12, fontWeight: '700', textTransform: 'capitalize',
+                      color: inviteRole === r ? '#fff' : modalSub }}>{r}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={{ fontSize: 11, fontWeight: '700', color: modalSub, marginTop: 14, marginBottom: 6, letterSpacing: 0.5 }}>
+                WORKSPACE <Text style={{ fontWeight: '400', fontSize: 10 }}>(optional)</Text>
+              </Text>
+              <TouchableOpacity
+                style={{ borderRadius: 10, borderWidth: 1.5, borderColor: wsDropOpen ? '#4ECDC4' : modalBdr, backgroundColor: inputBg, paddingHorizontal: 14, height: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+                onPress={() => setWsDropOpen(o => !o)}
+              >
+                <Text style={{ color: inviteWorkspace ? modalTxt : modalSub, fontSize: 14 }}>{inviteWorkspace?.name || 'Default Workspace'}</Text>
+                <Text style={{ color: modalSub, fontSize: 11 }}>{wsDropOpen ? '▲' : '▾'}</Text>
+              </TouchableOpacity>
+              {wsDropOpen && (
+                <View style={{ borderRadius: 10, borderWidth: 1.5, borderColor: '#4ECDC4', backgroundColor: modalBg, marginTop: 4, maxHeight: 160, overflow: 'hidden' }}>
+                  <ScrollView nestedScrollEnabled showsVerticalScrollIndicator={false}>
+                    <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: modalBdr }}
+                      onPress={() => { setInviteWorkspace(null); setWsDropOpen(false); }}>
+                      <Text style={{ flex: 1, fontSize: 13, fontWeight: !inviteWorkspace ? '700' : '500', color: !inviteWorkspace ? '#4ECDC4' : modalTxt }}>Default Workspace</Text>
+                      {!inviteWorkspace && <Text style={{ color: '#4ECDC4' }}>✓</Text>}
+                    </TouchableOpacity>
+                    {inviteWorkspaces.map(ws => (
+                      <TouchableOpacity key={ws.id} style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: modalBdr }}
+                        onPress={() => { setInviteWorkspace(ws); setWsDropOpen(false); }}>
+                        <Text style={{ flex: 1, fontSize: 13, fontWeight: inviteWorkspace?.id === ws.id ? '700' : '500', color: inviteWorkspace?.id === ws.id ? '#4ECDC4' : modalTxt }} numberOfLines={1}>{ws.name}</Text>
+                        {inviteWorkspace?.id === ws.id && <Text style={{ color: '#4ECDC4' }}>✓</Text>}
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
+            </ScrollView>
+
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 20 }}>
+              <TouchableOpacity style={{ flex: 1, height: 48, borderRadius: 12, borderWidth: 1.5, borderColor: modalBdr, justifyContent: 'center', alignItems: 'center' }}
+                onPress={() => { setShowInvite(false); resetInvite(); }}>
+                <Text style={{ color: modalSub, fontWeight: '600' }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={{ flex: 2, height: 48, borderRadius: 12, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center' }}
+                onPress={handleInvite} disabled={inviteSaving}>
+                {inviteSaving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={{ color: '#fff', fontWeight: '700' }}>✉ Send Invite</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+    );
+  }
 
   return (
     <Modal transparent visible animationType="none" onRequestClose={handleClose}>
@@ -424,10 +565,10 @@ function RootNavigator() {
           <Stack.Screen name="Team"               component={TeamScreen} />
           <Stack.Screen name="MyWork"             component={MyWorkScreen} />
           <Stack.Screen name="Reports"            component={ReportsScreen} />
-          <Stack.Screen name="DocumentViewer" component={DocumentViewerScreen} options={{ statusBarTranslucent: false, statusBarColor: '#2A2D34' }} />
+          <Stack.Screen name="DocumentViewer"     component={DocumentViewerScreen} />
           <Stack.Screen name="QuickCreate"         component={QuickCreateScreen} options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />
           <Stack.Screen name="CreateProject"       component={CreateProjectScreen} options={{ animation: 'slide_from_right' }} />
-          <Stack.Screen name="CreateTask"          component={CreateTaskScreen} options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="InviteUser"          component={InviteUserScreen}    options={{ animation: 'slide_from_right' }} />
         </>
       )}
     </Stack.Navigator>

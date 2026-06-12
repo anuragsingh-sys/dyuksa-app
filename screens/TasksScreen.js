@@ -140,7 +140,7 @@ function TaskCard({ item, card, txt, sub, bdr, isDark, onPress, onStatusPress, f
     >
       {/* Row 1: Checkbox + Title + Status badge */}
       <View style={styles.cardRow1}>
-        <View style={[styles.checkbox, isDone && { backgroundColor: STATUS_COLORS.completed, borderColor: STATUS_COLORS.completed }]}>
+        <View style={[styles.checkbox, { borderColor: isDark ? '#505060' : '#DEDEE8', backgroundColor: isDark ? '#3A3A4A' : '#F5F5FA' }, isDone && { backgroundColor: STATUS_COLORS.completed, borderColor: STATUS_COLORS.completed }]}>
           {isDone && <Text style={{ color: '#fff', fontSize: 11, fontWeight: '800' }}>✓</Text>}
         </View>
         <View style={{ flex: 1 }}>
@@ -1405,7 +1405,7 @@ const styles = StyleSheet.create({
   tabBadgeText: { fontSize: 11, fontWeight: '700' },
 
   // Dev_1 task card — checkbox + left border
-  checkbox: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: '#DEDEE8', backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', marginTop: 1, flexShrink: 0 },
+  checkbox: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: '#DEDEE8', backgroundColor: 'transparent', alignItems: 'center', justifyContent: 'center', marginTop: 1, flexShrink: 0 },
 
   // Due date meta pill
   metaDatePill: { flexDirection: 'row', alignItems: 'center', gap: 3 },

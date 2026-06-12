@@ -72,11 +72,15 @@ const OPTIONS = [
     desc: 'By email or link',
     subLabel: null,
     ai: false,
+    selfNavigate: true,
     icon: MemberIcon,
     accent: '#8B5CF6',
     accentLight: 'rgba(139,92,246,0.10)',
     accentDark: 'rgba(139,92,246,0.20)',
-    navigate: (nav) => nav.navigate('TeamManagement'),
+    navigate: (nav) => {
+      nav.goBack();
+      setTimeout(() => nav.navigate('InviteUser'), 300);
+    },
   },
 ];
 

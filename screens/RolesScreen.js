@@ -60,10 +60,6 @@ export default function RolesScreen() {
   const [editUser,    setEditUser]    = useState(null);
   const [newRole,     setNewRole]     = useState('');
   const [saving,      setSaving]      = useState(false);
-  const [inviteModal, setInviteModal] = useState(false);
-  const [inviteEmail, setInviteEmail] = useState('');
-  const [inviteRole,  setInviteRole]  = useState('developer');
-  const [inviting,    setInviting]    = useState(false);
 
   const authHeaders = async () => {
     const token = await getAccessToken();
@@ -119,31 +115,6 @@ export default function RolesScreen() {
     }
   };
 
-  const inviteUser = async () => {
-    if (!inviteEmail.trim()) { Alert.alert('Enter email', 'Please enter an email address.'); return; }
-    setInviting(true);
-    try {
-      const headers = await authHeaders();
-      const res = await fetch(`${BASE_URL}/auth/users/invite/`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ email: inviteEmail.trim(), role: inviteRole }),
-      });
-      if (!res.ok) {
-        const e = await res.json().catch(() => ({}));
-        throw new Error(e.detail || e.message || `Failed (${res.status})`);
-      }
-      Alert.alert('✅ Invited', `Invitation sent to ${inviteEmail}.`);
-      setInviteModal(false);
-      setInviteEmail('');
-      fetchUsers();
-    } catch (e) {
-      Alert.alert('Error', e.message || 'Could not send invite.');
-    } finally {
-      setInviting(false);
-    }
-  };
-
   const filtered = users.filter(u => {
     const name = `${u.first_name} ${u.last_name} ${u.username} ${u.email}`.toLowerCase();
     const matchSearch = !search.trim() || name.includes(search.toLowerCase());
@@ -171,7 +142,7 @@ export default function RolesScreen() {
         </View>
         <TouchableOpacity
           style={[styles.inviteBtn, { backgroundColor: '#4ECDC4' }]}
-          onPress={() => { setInviteEmail(''); setInviteRole('developer'); setInviteModal(true); }}
+          onPress={() => navigation.navigate('InviteUser')}
         >
           <Text style={{ color: '#fff', fontSize: fs(12), fontWeight: '700' }}>+ Invite</Text>
         </TouchableOpacity>
@@ -354,66 +325,6 @@ export default function RolesScreen() {
         </View>
       </Modal>
 
-      {/* Invite Modal */}
-      <Modal visible={inviteModal} transparent animationType="fade" statusBarTranslucent onRequestClose={() => !inviting && setInviteModal(false)}>
-        <View style={styles.overlay}>
-          <Pressable style={StyleSheet.absoluteFillObject} onPress={() => !inviting && setInviteModal(false)} />
-          <View style={[styles.modal, { backgroundColor: card, borderColor: bdr }]}>
-            <View style={[styles.modalHeader, { borderBottomColor: bdr }]}>
-              <Text style={[styles.modalTitle, { color: txt }]}>Invite User</Text>
-              <TouchableOpacity onPress={() => !inviting && setInviteModal(false)}>
-                <Text style={{ color: sub, fontSize: 18 }}>✕</Text>
-              </TouchableOpacity>
-            </View>
-            <View style={{ padding: 16 }}>
-              <Text style={[{ fontSize: 11, fontWeight: '600', color: sub, marginBottom: 6 }]}>EMAIL ADDRESS *</Text>
-              <TextInput
-                style={[styles.input, { borderColor: bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7', color: txt }]}
-                placeholder="Enter email address…"
-                placeholderTextColor={sub}
-                value={inviteEmail}
-                onChangeText={setInviteEmail}
-                keyboardType="email-address"
-                autoCapitalize="none"
-              />
-
-              <Text style={[{ fontSize: 11, fontWeight: '600', color: sub, marginBottom: 10, marginTop: 14 }]}>SELECT ROLE</Text>
-              {ROLES.map(role => {
-                const rs = roleStyle(role);
-                const selected = inviteRole === role;
-                return (
-                  <TouchableOpacity
-                    key={role}
-                    style={[styles.roleOption, { borderColor: selected ? rs.txt : bdr, backgroundColor: selected ? rs.bg : 'transparent' }]}
-                    onPress={() => setInviteRole(role)}
-                  >
-                    <View style={[styles.roleOptionDot, { borderColor: selected ? rs.txt : bdr, backgroundColor: selected ? rs.txt : 'transparent' }]} />
-                    <Text style={[{ fontSize: 14, color: selected ? rs.txt : txt, fontWeight: selected ? '700' : '500', flex: 1 }]}>{rs.label}</Text>
-                    {selected && <Text style={{ color: rs.txt, fontWeight: '700' }}>✓</Text>}
-                  </TouchableOpacity>
-                );
-              })}
-
-              <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
-                <TouchableOpacity
-                  style={[styles.cancelBtn, { borderColor: bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
-                  onPress={() => setInviteModal(false)}
-                  disabled={inviting}
-                >
-                  <Text style={{ fontSize: 14, fontWeight: '600', color: sub }}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.saveBtn, inviting && { opacity: 0.6 }]}
-                  onPress={inviteUser}
-                  disabled={inviting}
-                >
-                  {inviting ? <ActivityIndicator color="#fff" size="small" /> : <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>Send Invite</Text>}
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
