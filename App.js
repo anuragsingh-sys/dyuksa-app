@@ -565,7 +565,7 @@ function RootNavigator() {
           <Stack.Screen name="Team"               component={TeamScreen} />
           <Stack.Screen name="MyWork"             component={MyWorkScreen} />
           <Stack.Screen name="Reports"            component={ReportsScreen} />
-          <Stack.Screen name="DocumentViewer"     component={DocumentViewerScreen} />
+          <Stack.Screen name="DocumentViewer"     component={DocumentViewerScreen} options={{ statusBarTranslucent: false, statusBarColor: '#FFFFFF' }} />
           <Stack.Screen name="QuickCreate"         component={QuickCreateScreen} options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />
           <Stack.Screen name="CreateProject"       component={CreateProjectScreen} options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="InviteUser"          component={InviteUserScreen}    options={{ animation: 'slide_from_right' }} />

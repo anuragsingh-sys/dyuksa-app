@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useContext } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet,
-  ActivityIndicator, Alert, StatusBar, Image, Platform,
+  ActivityIndicator, Alert, StatusBar, Image,
   Linking,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { WebView } from 'react-native-webview';
 import { ThemeContext } from '../context/ThemeContext';
@@ -60,7 +60,6 @@ function ActionBtn({ icon, label, onPress, active }) {
 export default function DocumentViewerScreen() {
   const navigation = useNavigation();
   const route      = useRoute();
-  const insets     = useSafeAreaInsets();
 
   // Accept doc object directly or fetch by ID
   const docId      = route?.params?.id || route?.params?.docId;
@@ -129,26 +128,17 @@ export default function DocumentViewerScreen() {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: DK.bg }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: DK.bg }} edges={['top', 'left', 'right']}>
       <StatusBar barStyle="dark-content" backgroundColor={DK.bar} translucent={false} />
 
-      {/* ── Dark nav bar ── */}
-      <View style={[s.navBar, { paddingTop: Platform.OS === 'ios' ? (insets.top || 44) : (StatusBar.currentHeight || 24) + 4 }]}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={s.navBtn}>
-          <Text style={{ color: DK.ink, fontSize: 26, fontWeight: '300', marginTop: -2 }}>‹</Text>
-        </TouchableOpacity>
-        <View style={{ flex: 1 }}>
+      {/* ── Nav bar — title only ── */}
+      <View style={s.navBar}>
+        <View style={{ flex: 1, alignItems: 'center' }}>
           <Text style={s.navTitle} numberOfLines={1}>{name}</Text>
           <Text style={s.navSub}>
             {ext.toUpperCase()}{doc.file_size ? `  ·  ${fmtSize(doc.file_size)}` : ''}
           </Text>
         </View>
-        <TouchableOpacity style={s.navBtn} onPress={() => setShowInfo(v => !v)}>
-          <Text style={{ fontSize: 18, color: showInfo ? '#4ECDC4' : DK.ink }}>ⓘ</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={s.navBtn} onPress={openInBrowser}>
-          <Text style={{ fontSize: 18, color: DK.ink }}>⬡</Text>
-        </TouchableOpacity>
       </View>
 
       {/* ── Content area ── */}
@@ -296,26 +286,26 @@ export default function DocumentViewerScreen() {
         )}
       </View>
 
-      {/* ── Dark bottom action bar ── */}
-      <SafeAreaView edges={['bottom']} style={[s.bottomBar]}>
+      {/* ── Bottom action bar ── */}
+      <SafeAreaView edges={['bottom']} style={s.bottomBar}>
+        <ActionBtn icon="←" label="Back"    onPress={() => navigation.goBack()} />
         <ActionBtn icon="ⓘ" label="Info"    onPress={() => setShowInfo(v => !v)} active={showInfo} />
         {!showViewer
           ? <ActionBtn icon="⬡" label="View"    onPress={() => setShowViewer(true)} />
           : <ActionBtn icon="☰" label="Details" onPress={() => setShowViewer(false)} />
         }
         <ActionBtn icon="⬆" label="Browser" onPress={openInBrowser} />
-        <ActionBtn icon="⤴" label="Share"   onPress={() => Alert.alert('Share', 'Sharing coming soon.')} />
       </SafeAreaView>
-    </View>
+    </SafeAreaView>
   );
 }
 
 const s = StyleSheet.create({
   // Nav bar
-  navBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingTop: 8, paddingBottom: 12, backgroundColor: DK.bar, borderBottomWidth: 1, borderBottomColor: DK.border, gap: 2 },
+  navBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, paddingVertical: 12, backgroundColor: DK.bar, borderBottomWidth: 1, borderBottomColor: DK.border },
   navBtn: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  navTitle: { fontSize: 15, fontWeight: '700', color: DK.ink, letterSpacing: -0.2 },
-  navSub: { fontSize: 11.5, color: DK.ink2, marginTop: 1 },
+  navTitle: { fontSize: 15, fontWeight: '700', color: DK.ink, letterSpacing: -0.2, textAlign: 'center' },
+  navSub: { fontSize: 11.5, color: DK.ink2, marginTop: 1, textAlign: 'center' },
 
   // Detail info
   infoCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 14, padding: 14, marginBottom: 12 },
