@@ -37,7 +37,6 @@ export default function SidebarMenu({ activeScreen }) {
   } = useWorkspace();
   const isDark = theme === 'Dark';
   const [open, setOpen] = useState(false);
-  const [tasksExpanded, setTasksExpanded] = useState(activeScreen === 'Tasks');
   const slideAnim = useRef(new Animated.Value(-SIDEBAR_WIDTH)).current;
   const [wsExpanded, setWsExpanded] = useState(false);
 
@@ -63,22 +62,6 @@ export default function SidebarMenu({ activeScreen }) {
     catch { navigation.navigate('Main', { screen: tab }); }
   });
   const goToStack      = (screen, params) => closeSidebar(() => navigation.navigate(screen, params));
-  const goToTasksWith  = (params)         => closeSidebar(() => {
-    try { navigation.jumpTo('Tasks', params); }
-    catch { navigation.navigate('Main', { screen: 'Tasks', params }); }
-  });
-
-  const taskSubmenu = [
-    { icon: '＋', label: 'Create Task',       params: { openCreateModal: true } },
-    { icon: '☑',  label: 'All Tasks',         params: { presetFilter: 'All' } },
-    { icon: '✓',  label: 'Completed Tasks',   params: { presetFilter: 'completed' } },
-    { icon: '⏱',  label: 'Pending Tasks',     params: { presetFilter: 'pending' } },
-    { icon: '☷',  label: 'Backlog Tasks',     params: { presetFilter: 'backlog' } },
-    { icon: '▶',  label: 'In Progress Tasks', params: { presetFilter: 'in_progress' } },
-    { icon: '☑',  label: 'Deployed Tasks',    params: { presetFilter: 'deployed' } },
-    { icon: '⏸',  label: 'Deferred Tasks',    params: { presetFilter: 'deferred' } },
-    { icon: '👁',  label: 'Review Tasks',      params: { presetFilter: 'review' } },
-  ];
 
   // Initial letter for workspace avatar
 
@@ -138,40 +121,19 @@ export default function SidebarMenu({ activeScreen }) {
               {/* Nav items */}
               <ScrollView style={styles.sidebarNav} showsVerticalScrollIndicator={false}>
                 <SidebarItem icon="grid"          label="Dashboard" active={activeScreen === 'Dashboard'} onPress={goToDashboard} isDarkMode={isDark} />
-                <SidebarItem icon="folder"        label="Projects"  active={activeScreen === 'Projects'}  hasArrow onPress={() => goToTab('Projects')} isDarkMode={isDark} />
+                <SidebarItem icon="folder"        label="Projects"  active={activeScreen === 'Projects'}  onPress={() => goToTab('Projects')} isDarkMode={isDark} />
                 <SidebarItem icon="file-text"     label="Documents"  active={activeScreen === 'Docs'}      onPress={() => goToStack('Docs')} isDarkMode={isDark} />
 
-                {/* Tasks expandable */}
-                <TouchableOpacity
-                  style={[styles.sidebarItem, activeScreen === 'Tasks' && styles.sidebarItemActive]}
-                  onPress={() => setTasksExpanded(v => !v)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.sidebarItemIcon}>☑️</Text>
-                  <Text style={[styles.sidebarItemLabel, activeScreen === 'Tasks' && styles.sidebarItemLabelActive]}>
-                    Tasks
-                  </Text>
-                  <Text style={[styles.sidebarArrow, tasksExpanded && { transform: [{ rotate: '90deg' }] }]}>›</Text>
-                </TouchableOpacity>
-                {tasksExpanded && (
-                  <View style={styles.submenu}>
-                    {taskSubmenu.map((item, i) => (
-                      <TouchableOpacity key={i} style={styles.submenuItem} onPress={() => goToTasksWith(item.params)} activeOpacity={0.7}>
-                        <Text style={styles.submenuIcon}>{item.icon}</Text>
-                        <Text style={styles.submenuLabel}>{item.label}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                )}
+                <SidebarItem icon="check-square"  label="Tasks"      active={activeScreen === 'Tasks'}     onPress={() => goToTab('Tasks')} isDarkMode={isDark} />
 
-                <SidebarItem icon="calendar"      label="Calendar"       active={activeScreen === 'Calendar'}   hasArrow onPress={() => goToTab('Calendar')} isDarkMode={isDark} />
+                <SidebarItem icon="calendar"      label="Calendar"       active={activeScreen === 'Calendar'}   onPress={() => goToTab('Calendar')} isDarkMode={isDark} />
                 <SidebarItem icon="briefcase"     label="My Work"        active={activeScreen === 'MyWork'}     onPress={() => goToStack('MyWork')} isDarkMode={isDark} />
                 <SidebarItem icon="bar-chart-2"   label="Reports"        active={activeScreen === 'Reports'}    onPress={() => goToStack('Reports')} isDarkMode={isDark} />
                 <SidebarItem icon="zap"           label="Quick Notes"    active={activeScreen === 'QuickNotes'} onPress={() => goToStack('QuickNotes')} isDarkMode={isDark} />
                 {canManageMembers(user?.role) && (
-                  <SidebarItem icon="users"       label="Team Management" hasArrow onPress={() => goToStack('TeamManagement')} isDarkMode={isDark} />
+                  <SidebarItem icon="users"       label="Team Management" onPress={() => goToStack('TeamManagement')} isDarkMode={isDark} />
                 )}
-                <SidebarItem icon="message-square" label="Chats"          active={activeScreen === 'Chat'} hasArrow onPress={() => goToStack('Chat')} isDarkMode={isDark} />
+                <SidebarItem icon="message-square" label="Chats"          active={activeScreen === 'Chat'} onPress={() => goToStack('Chat')} isDarkMode={isDark} />
                 <SidebarItem icon="settings"      label="Settings"      active={activeScreen === 'Settings'} onPress={() => goToStack('Settings')} isDarkMode={isDark} />
               </ScrollView>
 
@@ -278,8 +240,8 @@ const styles = StyleSheet.create({
 
   sidebarHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.1)', gap: 10 },
   sidebarBrand: { flex: 1, fontSize: 16, fontWeight: '700', letterSpacing: 1 },
-  logoBox: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#4ECDC4', justifyContent: 'center', alignItems: 'center' },
-  logoText: { color: '#1A1A2E', fontSize: 15, fontWeight: '800' },
+  logoBox: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#3B72EE', justifyContent: 'center', alignItems: 'center' },
+  logoText: { color: '#FFFFFF', fontSize: 15, fontWeight: '800' },
   closeBtn: { padding: 4 },
   closeBtnText: { fontSize: 16 },
 

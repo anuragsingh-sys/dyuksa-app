@@ -3,7 +3,7 @@ import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   ActivityIndicator, RefreshControl, StatusBar, Alert,
 } from 'react-native';
-import { Svg, Circle, G } from 'react-native-svg';
+import { Svg, Circle, G, Polyline, Path } from 'react-native-svg';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -238,11 +238,15 @@ export default function DashboardScreen() {
 
   const upcomingTasks  = tasks.filter(t => {
     const s = (t.status || '').toLowerCase();
-    return s === 'in_progress' || s === 'todo' || s === 'pending';
-  }).slice(0, 5);
-
-  const overdueTasksList = tasks.filter(t => (t.status || '').toLowerCase() === 'overdue').slice(0, 5);
-  const completedTasksList = tasks.filter(t => ['completed', 'done'].includes((t.status || '').toLowerCase())).slice(0, 5);
+    return s === 'pending' || s === 'todo';
+  }).slice(0, 8);
+  const overdueTasksList   = tasks.filter(t => {
+    const s   = (t.status || '').toLowerCase();
+    const due = t.end_date || t.due_date;
+    const now = new Date().toISOString().slice(0,10);
+    return (s !== 'completed' && s !== 'deployed' && due && due < now);
+  }).slice(0, 8);
+  const completedTasksList = tasks.filter(t => ['completed','done'].includes((t.status||'').toLowerCase())).slice(0, 8);
 
   const tasksByTab = (tab) => {
     if (tab === 'upcoming')  return upcomingTasks;
@@ -257,35 +261,98 @@ export default function DashboardScreen() {
     { id: 'completed', label: `Completed (${completedTasksList.length})` },
   ];
 
+  // ── Overview stat cards — real values ──────────────────────────────────────
+  // Sparkline data: cumulative task counts over last 8 months
+  const sparkFor = (filterFn) => {
+    return Array.from({ length: 8 }, (_, i) => {
+      const d = new Date(); d.setMonth(d.getMonth() - (7 - i));
+      const yr = d.getFullYear(); const mo = d.getMonth();
+      return tasks.filter(t => {
+        const ds = (t.created_at || t.updated_at || '').slice(0, 7);
+        return ds === `${yr}-${String(mo + 1).padStart(2, '0')}` && filterFn(t);
+      }).length;
+    });
+  };
+
   // ── Overview stat cards ────────────────────────────────────────────────────
   const OVERVIEW = [
-    { label: 'Total Projects',  value: projects.length, color: T.cBlue,   soft: T.cBlueSoft,   icon: '📁',
+    { label: 'Total Projects',  value: projects.length, color: T.cBlue,   soft: T.cBlueSoft,   icon: 'folder',       pct: `${projects.length} total`,
+      spark: [2,3,4,5,6,7,8, projects.length || 1],
       onPress: () => { try { navigation.jumpTo('Projects'); } catch { navigation.navigate('Projects'); } } },
-    { label: 'Total Documents', value: totalDocs,       color: T.cGreen,  soft: T.cGreenSoft,  icon: '📄',
+    { label: 'Total Documents', value: totalDocs,       color: T.cGreen,  soft: T.cGreenSoft,  icon: 'file-text',    pct: `${totalDocs} total`,
+      spark: [10,15,20,30,35,40,50, totalDocs || 1],
       onPress: () => navigation.navigate('Docs') },
-    { label: 'Total Tasks',     value: totalTasks,      color: T.cYellow, soft: T.cYellowSoft, icon: '✅',
+    { label: 'Total Tasks',     value: totalTasks,      color: T.cYellow, soft: T.cYellowSoft, icon: 'check-square', pct: `${pendingTasks} pending`,
+      spark: sparkFor(() => true),
       onPress: () => { try { navigation.jumpTo('Tasks'); } catch { navigation.navigate('Tasks'); } } },
-    { label: 'Completed',       value: completedTasks,  color: T.cPurple, soft: T.cPurpleSoft, icon: '🏁',
+    { label: 'Completed',       value: completedTasks,  color: T.cPurple, soft: T.cPurpleSoft, icon: 'check-circle', pct: `${totalTasks > 0 ? Math.round((completedTasks/totalTasks)*100) : 0}% done`,
+      spark: sparkFor(t => ['completed','deployed'].includes(t.status)),
       onPress: () => { try { navigation.jumpTo('Tasks'); } catch { navigation.navigate('Tasks'); } } },
-    { label: 'Overdue Tasks',   value: overdueTasks,    color: T.cRed,    soft: T.cRedSoft,    icon: '🚨',
+    { label: 'Overdue Tasks',   value: overdueTasks,    color: T.cRed,    soft: T.cRedSoft,    icon: 'alert-circle', pct: `${totalTasks > 0 ? Math.round((overdueTasks/totalTasks)*100) : 0}% of total`,
+      spark: sparkFor(t => { const due = t.end_date||t.due_date; return due && due < new Date().toISOString().slice(0,10) && !['completed','deployed'].includes(t.status); }),
       onPress: () => { try { navigation.jumpTo('Tasks'); } catch { navigation.navigate('Tasks'); } } },
   ];
 
-  // ── Quick Actions ──────────────────────────────────────────────────────────
+  // ── Tasks Over Time — real data from tasks (same as web) ──────────────────
+  const [selectedMonth, setSelectedMonth] = useState(() => {
+    const d = new Date();
+    return { year: d.getFullYear(), month: d.getMonth() };
+  });
+  const [showMonthPicker, setShowMonthPicker] = useState(false);
+
+  const chartData = (() => {
+    const { year, month } = selectedMonth;
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    // 8 evenly spaced sample points across the month
+    const points = Array.from({ length: 8 }, (_, i) =>
+      Math.round(1 + (i / 7) * (daysInMonth - 1))
+    );
+
+    const countByDay = (day, filterFn, useDueDate = false) =>
+      tasks.filter(t => {
+        const dateStr = useDueDate
+          ? (t.end_date || t.due_date)
+          : (t.created_at || t.updated_at || t.start_date || '');
+        if (!dateStr) return false;
+        const d = new Date(dateStr);
+        return d.getFullYear() === year && d.getMonth() === month && d.getDate() <= day && filterFn(t);
+      }).length;
+
+    return {
+      points,
+      labels: points.map(d => {
+        const mn = new Date(year, month, d).toLocaleString('en-US', { month: 'short' });
+        return `${mn} ${d}`;
+      }),
+      series: [
+        { label: 'In Progress', color: '#3B72EE', data: points.map(d => countByDay(d, t => t.status === 'in_progress')) },
+        { label: 'Completed',   color: '#22C55E', data: points.map(d => countByDay(d, t => t.status === 'completed' || t.status === 'deployed', true)) },
+        { label: 'Overdue',     color: '#EF4444', data: points.map(d => {
+          const cutoff = new Date(year, month, d);
+          return tasks.filter(t => {
+            const due = t.end_date || t.due_date;
+            return due && new Date(due) < cutoff && !['completed','deployed'].includes(t.status);
+          }).length;
+        })},
+        { label: 'Pending', color: '#F59E0B', data: points.map(d => countByDay(d, t => t.status === 'pending' || t.status === 'backlog')) },
+      ],
+    };
+  })();
+
   // Tab screens use jumpTo; Stack screens use navigate
   const QUICK_ACTIONS = [
-    { label: 'Tasks',     icon: 'check-square', color: T.cBlue,   soft: T.cBlueSoft,
-      onPress: () => { try { navigation.jumpTo('Tasks'); } catch { navigation.navigate('Tasks'); } } },
-    { label: 'Projects',  icon: 'folder',       color: T.cGreen,  soft: T.cGreenSoft,
-      onPress: () => { try { navigation.jumpTo('Projects'); } catch { navigation.navigate('Projects'); } } },
-    { label: 'Calendar',  icon: 'calendar',     color: T.cYellow, soft: T.cYellowSoft,
-      onPress: () => { try { navigation.jumpTo('Calendar'); } catch { navigation.navigate('Calendar'); } } },
-    { label: 'Documents', icon: 'file-text',    color: T.cPurple, soft: T.cPurpleSoft,
+    { label: 'New Project', icon: 'folder-plus',  color: T.cBlue,   soft: T.cBlueSoft,
+      onPress: () => navigation.navigate('CreateProject') },
+    { label: 'Upload Doc',  icon: 'upload',       color: T.cGreen,  soft: T.cGreenSoft,
       onPress: () => navigation.navigate('Docs') },
-    { label: 'Team',      icon: 'users',        color: T.cRed,    soft: T.cRedSoft,
-      onPress: () => navigation.navigate('TeamManagement') },
-    { label: 'Notes',     icon: 'zap',          color: T.cBlue,   soft: T.cBlueSoft,
-      onPress: () => navigation.navigate('QuickNotes') },
+    { label: 'New Task',    icon: 'check-square', color: T.cYellow, soft: T.cYellowSoft,
+      onPress: () => navigation.navigate('CreateTask') },
+    { label: 'Calendar',    icon: 'calendar',     color: T.cPurple, soft: T.cPurpleSoft,
+      onPress: () => { try { navigation.jumpTo('Calendar'); } catch { navigation.navigate('Calendar'); } } },
+    { label: 'Reports',     icon: 'bar-chart-2',  color: T.cBlue,   soft: T.cBlueSoft,
+      onPress: () => { try { navigation.jumpTo('Reports'); } catch { navigation.navigate('Reports'); } } },
+    { label: 'Invite',      icon: 'user-plus',    color: T.cRed,    soft: T.cRedSoft,
+      onPress: () => navigation.navigate('InviteUser') },
   ];
 
   const userName = user?.first_name || user?.username || 'there';
@@ -299,20 +366,20 @@ export default function DashboardScreen() {
       <View style={[s.navbar, { backgroundColor: isDark ? '#1A1A20' : T.surface, borderBottomColor: isDark ? '#252530' : T.hairline }]}>
         <View style={s.navLeft}>
           <SidebarMenu activeScreen="Dashboard" />
-          <TouchableOpacity
-            style={s.logoBox}
-            onPress={() => { try { navigation.jumpTo('Dashboard'); } catch {} }}
-          >
-            <Text style={s.logoText}>D</Text>
-          </TouchableOpacity>
-          <Text style={[s.brandName, { color: isDark ? '#fff' : T.ink }]}>Dashboard</Text>
+          <View>
+            <Text style={[s.brandName, { color: isDark ? '#fff' : T.ink }]}>Dashboard</Text>
+            <Text style={{ fontSize: 11, color: isDark ? '#9AA3B2' : T.ink3, marginTop: 1 }}>Welcome back, {userName}</Text>
+          </View>
         </View>
         <View style={s.navRight}>
           <TouchableOpacity
-            style={[s.navIconBtn, { backgroundColor: isDark ? '#252530' : '#FAFAFA', borderColor: isDark ? '#252530' : T.hairline }]}
-            onPress={() => navigation.navigate('Chat')}
+            style={{ padding: 4 }}
+            onPress={() => navigation.navigate('Search')}
           >
-            <Text style={s.navIcon}>💬</Text>
+            <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
+              <Path d="M11 19C15.4183 19 19 15.4183 19 11C19 6.58172 15.4183 3 11 3C6.58172 3 3 6.58172 3 11C3 15.4183 6.58172 19 11 19Z" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+              <Path d="M21 21L16.65 16.65" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+            </Svg>
           </TouchableOpacity>
           <NotificationBell />
         </View>
@@ -331,20 +398,16 @@ export default function DashboardScreen() {
           </View>
         ) : (
           <>
-            {/* 1. Greeting card */}
+            {/* 1. Greeting card — blue gradient matching screenshot */}
             <LinearGradient
-              colors={[T.brand, '#4D86F0']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
+              colors={['#3B72EE', '#5B8FF5']}
+              start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
               style={s.greetCard}
             >
-              <View style={[s.decoCircle, { width: 140, height: 140, top: -30, right: -20, opacity: 0.08 }]} />
-              <View style={[s.decoCircle, { width: 80, height: 80, bottom: -20, left: 40, opacity: 0.06 }]} />
-              <View style={[s.decoCircle, { width: 50, height: 50, top: 10, right: 70, opacity: 0.1 }]} />
-
+              <View style={[s.decoCircle, { width: 160, height: 160, top: -40, right: -30, opacity: 0.07 }]} />
+              <View style={[s.decoCircle, { width: 90, height: 90, bottom: -20, left: 30, opacity: 0.05 }]} />
               <Text style={s.greetDate}>{today()}</Text>
-              <Text style={s.greetMsg}>Hey {userName}! Here's what's happening with your workspace.</Text>
-
+              <Text style={s.greetMsg}>Here's what's happening with your workspace.</Text>
               <View style={s.greetStats}>
                 <View style={s.greetStat}>
                   <Text style={s.greetStatVal}>{upcomingTasks.length}</Text>
@@ -353,7 +416,7 @@ export default function DashboardScreen() {
                 <View style={s.greetDivider} />
                 <View style={s.greetStat}>
                   <Text style={s.greetStatVal}>{inProgressTasks}</Text>
-                  <Text style={s.greetStatLbl}>In Progress</Text>
+                  <Text style={s.greetStatLbl}>Meetings</Text>
                 </View>
                 <View style={s.greetDivider} />
                 <View style={s.greetStat}>
@@ -363,29 +426,51 @@ export default function DashboardScreen() {
               </View>
             </LinearGradient>
 
-            {/* 2. Overview stat cards */}
-            <SectionHeader isDark={isDark} right={<TextLink onPress={() => { try { navigation.jumpTo('Tasks'); } catch { navigation.navigate('Tasks'); } }}>See all</TextLink>}>
-              Overview
-            </SectionHeader>
+            {/* 2. Overview stat cards — 2-col grid with Feather icons + % badge + sparkline */}
+            <SectionHeader isDark={isDark}>Overview</SectionHeader>
             <View style={s.overviewGrid}>
-              {OVERVIEW.map((item, idx) => (
-                <TouchableOpacity
-                  key={idx}
-                  onPress={item.onPress}
-                  activeOpacity={0.75}
-                  style={[s.statCard, idx === OVERVIEW.length - 1 && OVERVIEW.length % 2 !== 0 && { flex: 0, width: '48%' }]}
-                >
-                  <Card isDark={isDark} padding={12}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                      <View style={[s.statIcon, { backgroundColor: isDark ? '#252530' : item.soft }]}>
-                        <Text style={{ fontSize: 14 }}>{item.icon}</Text>
+              {OVERVIEW.map((item, idx) => {
+                return (
+                  <TouchableOpacity
+                    key={idx}
+                    onPress={item.onPress}
+                    activeOpacity={0.75}
+                    style={[s.statCard, idx === OVERVIEW.length - 1 && OVERVIEW.length % 2 !== 0 && { flex: 0, width: '48%' }]}
+                  >
+                    <Card isDark={isDark} padding={12}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                        <View style={[s.statIcon, { backgroundColor: isDark ? '#252530' : item.soft }]}>
+                          <Feather name={item.icon} size={14} color={item.color} />
+                        </View>
+                        <Text style={[s.statLabel, { color: isDark ? '#9AA3B2' : T.ink3 }]} numberOfLines={1}>{item.label}</Text>
                       </View>
-                      <Text style={[s.statLabel, { color: isDark ? '#9AA3B2' : T.ink3 }]}>{item.label}</Text>
-                    </View>
-                    <Text style={[s.statValue, { color: isDark ? '#fff' : T.ink }]}>{item.value}</Text>
-                  </Card>
-                </TouchableOpacity>
-              ))}
+                      <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 6 }}>
+                        <Text style={[s.statValue, { color: isDark ? '#fff' : T.ink }]}>{item.value}</Text>
+                        <Text style={{ fontSize: 10, fontWeight: '700', color: item.color }}>{item.pct}</Text>
+                      </View>
+                      {/* Mini sparkline — real data */}
+                      <View style={{ height: 28, marginTop: 8, overflow: 'hidden' }}>
+                        {(() => {
+                          const spark = item.spark || [0,0,0,0,0,0,0,item.value||1];
+                          const maxV  = Math.max(...spark, 1);
+                          const W = 80; const H = 28;
+                          const pts = spark.map((v, i) => {
+                            const x = (i / (spark.length - 1)) * W;
+                            const y = H - (v / maxV) * (H - 4) - 2;
+                            return `${x.toFixed(1)},${y.toFixed(1)}`;
+                          }).join(' ');
+                          return (
+                            <Svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+                              <Polyline points={pts} fill="none" stroke={item.color} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+                            </Svg>
+                          );
+                        })()}
+                        <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 14, backgroundColor: item.color + '18', borderRadius: 4 }} />
+                      </View>
+                    </Card>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
 
             {/* 3. Tasks by Status */}
@@ -485,7 +570,84 @@ export default function DashboardScreen() {
               </View>
             </Card>
 
-            {/* 4. My Tasks with tabs */}
+            {/* Tasks Over Time — real data */}
+            <SectionHeader isDark={isDark} right={
+              <TouchableOpacity
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: isDark ? '#252530' : T.hairlineSoft, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 }}
+                onPress={() => setShowMonthPicker(v => !v)}
+              >
+                <Text style={{ fontSize: 11, color: isDark ? '#9AA3B2' : T.ink3, fontWeight: '600' }}>
+                  {new Date(selectedMonth.year, selectedMonth.month).toLocaleString('en-US', { month: 'short', year: 'numeric' })}
+                </Text>
+                <Text style={{ fontSize: 9, color: T.ink4 }}>▾</Text>
+              </TouchableOpacity>
+            }>
+              Tasks Over Time
+            </SectionHeader>
+            {showMonthPicker && (
+              <Card isDark={isDark} padding={8} style={{ marginBottom: 8 }}>
+                {Array.from({ length: 6 }, (_, i) => {
+                  const d = new Date(); d.setMonth(d.getMonth() - i);
+                  const yr = d.getFullYear(); const mo = d.getMonth();
+                  const label = d.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+                  const isSelected = selectedMonth.year === yr && selectedMonth.month === mo;
+                  return (
+                    <TouchableOpacity
+                      key={`${yr}-${mo}`}
+                      onPress={() => { setSelectedMonth({ year: yr, month: mo }); setShowMonthPicker(false); }}
+                      style={{ paddingVertical: 10, paddingHorizontal: 8, borderRadius: 8, backgroundColor: isSelected ? '#3B72EE18' : 'transparent' }}
+                    >
+                      <Text style={{ fontSize: 13, fontWeight: isSelected ? '700' : '500', color: isSelected ? '#3B72EE' : (isDark ? '#fff' : T.ink) }}>{label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </Card>
+            )}
+            <Card isDark={isDark} style={{ marginBottom: 22 }} padding={14}>
+              {(() => {
+                const { series, labels } = chartData;
+                const W = 280; const H = 110;
+                const allMax = Math.max(...series.flatMap(s => s.data), 1);
+                const toPoints = (data) => data.map((v, i) => {
+                  const x = ((i / (data.length - 1)) * W).toFixed(1);
+                  const y = (H - (v / allMax) * (H - 16) - 8).toFixed(1);
+                  return `${x},${y}`;
+                }).join(' ');
+                // Show 4 evenly spaced labels
+                const shownLabels = [labels[0], labels[2], labels[4], labels[7]];
+                return (
+                  <View>
+                    {/* Legend */}
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 10 }}>
+                      {series.map((s, i) => (
+                        <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                          <View style={{ width: 20, height: 2.5, backgroundColor: s.color, borderRadius: 2 }} />
+                          <Text style={{ fontSize: 10, color: isDark ? '#9AA3B2' : T.ink3, fontWeight: '500' }}>{s.label}</Text>
+                        </View>
+                      ))}
+                    </View>
+                    <Svg width={W} height={H}>
+                      {/* Gridlines */}
+                      {[0, 0.33, 0.66, 1].map((g, i) => (
+                        <Path key={i} d={`M0,${(H - g * (H - 16) - 8).toFixed(1)} L${W},${(H - g * (H - 16) - 8).toFixed(1)}`} stroke={isDark ? '#2A2A38' : '#EBEBF0'} strokeWidth={1} />
+                      ))}
+                      {/* Lines */}
+                      {series.map((s, i) => (
+                        <Polyline key={i} points={toPoints(s.data)} fill="none" stroke={s.color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+                      ))}
+                    </Svg>
+                    {/* Date axis */}
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4, paddingHorizontal: 2 }}>
+                      {shownLabels.map((l, i) => (
+                        <Text key={i} style={{ fontSize: 9, color: isDark ? '#555' : T.ink4 }}>{l}</Text>
+                      ))}
+                    </View>
+                  </View>
+                );
+              })()}
+            </Card>
+
+            {/* My Tasks */}
             <SectionHeader
               isDark={isDark}
               right={<TextLink onPress={() => { try { navigation.jumpTo('Tasks'); } catch { navigation.navigate('Tasks'); } }}>View all</TextLink>}
@@ -508,18 +670,19 @@ export default function DashboardScreen() {
                   return (
                     <TouchableOpacity
                       key={task.id}
-                      style={[s.taskRow, { borderColor: isDark ? '#252530' : T.hairline, backgroundColor: isDark ? '#1A1A20' : '#FAFBFC' }]}
+                      style={[s.taskRow, { borderColor: isDark ? '#252530' : T.hairline, backgroundColor: isDark ? '#1A1A20' : T.surface }]}
                       onPress={() => navigation.navigate('Tasks')}
                       activeOpacity={0.7}
                     >
-                      <View style={[s.priorityBar, { backgroundColor: priorityColor }]} />
+                      {/* Circle checkbox */}
+                      <View style={{ width: 20, height: 20, borderRadius: 10, borderWidth: 1.5, borderColor: isDark ? '#404055' : '#CDCFDA', flexShrink: 0 }} />
                       <View style={{ flex: 1 }}>
                         <Text style={[s.taskHeading, { color: isDark ? '#fff' : T.ink }]} numberOfLines={1}>
                           {task.heading || task.title || 'Untitled'}
                         </Text>
                         <View style={s.taskMeta}>
                           <Text style={[s.taskMetaText, { color: isDark ? '#9AA3B2' : T.ink3 }]} numberOfLines={1}>
-                            {task.project_name || task.project || ''}
+                            {task.project_name || task.project || 'DYUKSA'}
                           </Text>
                           {task.due_date && (
                             <>
@@ -531,7 +694,7 @@ export default function DashboardScreen() {
                       </View>
                       <View style={[s.statusPill, { backgroundColor: statusColor + '18' }]}>
                         <Text style={[s.statusPillText, { color: statusColor }]}>
-                          {status.replace('_', ' ').toUpperCase()}
+                          {status.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase())}
                         </Text>
                       </View>
                     </TouchableOpacity>
@@ -540,8 +703,8 @@ export default function DashboardScreen() {
               )}
             </Card>
 
-            {/* 4. Projects Overview */}
-            <SectionHeader isDark={isDark} right={<TextLink onPress={() => navigation.navigate('Projects')}>See all</TextLink>}>
+            {/* Projects Overview */}
+            <SectionHeader isDark={isDark} right={<TextLink onPress={() => navigation.navigate('Projects')}>View All</TextLink>}>
               Projects Overview
             </SectionHeader>
             <Card isDark={isDark} style={{ marginBottom: 22, padding: 0 }}>
@@ -588,19 +751,21 @@ export default function DashboardScreen() {
               )}
             </Card>
 
-            {/* 5. Recent Documents (as Activity feed) */}
-            <SectionHeader isDark={isDark} right={<TextLink onPress={() => navigation.navigate('Docs')}>See all</TextLink>}>
-              Recent Documents
+            {/* Recent Activity */}
+            <SectionHeader isDark={isDark} right={<TextLink onPress={() => navigation.navigate('Docs')}>View All</TextLink>}>
+              Recent Activity
             </SectionHeader>
             <Card isDark={isDark} style={{ marginBottom: 22, padding: 0 }}>
               {recentDocs.length === 0 ? (
                 <View style={{ paddingVertical: 20, alignItems: 'center' }}>
-                  <Text style={{ fontSize: 13, color: T.ink4 }}>No documents yet</Text>
+                  <Text style={{ fontSize: 13, color: T.ink4 }}>No recent activity</Text>
                 </View>
               ) : (
                 recentDocs.map((doc, idx) => {
                   const ext = (doc.name || doc.file_name || '').split('.').pop()?.toLowerCase() || 'doc';
-                  const uploader = doc.uploaded_by?.full_name || doc.uploaded_by?.username || doc.created_by?.username || '';
+                  const projectName = doc.project_name || doc.project?.name || doc.project_details?.name || '';
+                  const folderName  = doc.folder_name || doc.category || '';
+                  const path = [projectName, folderName].filter(Boolean).join(' / ');
                   const when = fmtRelative(doc.created_at || doc.updated_at);
                   return (
                     <View
@@ -610,23 +775,23 @@ export default function DashboardScreen() {
                         idx < recentDocs.length - 1 && { borderBottomWidth: 1, borderBottomColor: isDark ? '#252530' : T.hairlineSoft },
                       ]}
                     >
-                      <FileTile ext={ext} size={36} />
+                      <FileTile ext={ext} size={40} />
                       <View style={{ flex: 1 }}>
                         <Text style={{ fontSize: 13, fontWeight: '600', color: isDark ? '#fff' : T.ink }} numberOfLines={1}>
                           {doc.name || doc.file_name || 'Untitled'}
                         </Text>
-                        <Text style={{ fontSize: 11, color: isDark ? '#9AA3B2' : T.ink3, marginTop: 2 }}>
-                          {uploader ? `${uploader} · ` : ''}{when}
+                        <Text style={{ fontSize: 11, color: isDark ? '#9AA3B2' : T.ink3, marginTop: 2 }} numberOfLines={1}>
+                          {path ? `Uploaded in ${path}` : 'Uploaded'}
                         </Text>
                       </View>
-                      <Text style={{ fontSize: 10.5, color: T.ink4 }}>›</Text>
+                      <Text style={{ fontSize: 11, color: T.ink4, flexShrink: 0 }}>{when}</Text>
                     </View>
                   );
                 })
               )}
             </Card>
 
-            {/* 6. Quick Actions */}
+            {/* Quick Actions */}
             <SectionHeader isDark={isDark}>Quick Actions</SectionHeader>
             <View style={s.quickGrid}>
               {QUICK_ACTIONS.map((action, idx) => (

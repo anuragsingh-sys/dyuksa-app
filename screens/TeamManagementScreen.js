@@ -6,6 +6,7 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect, useRoute } from '@react-navigation/native';
+import Svg, { Path } from 'react-native-svg';
 import { ThemeContext } from '../context/ThemeContext';
 import { AuthContext } from '../context/AuthContext';
 import { getAccessToken, getWorkspaceId } from '../services/ApiService';
@@ -51,10 +52,10 @@ function AvatarStack({ members, max = 4, isDark }) {
           key={m.id}
           style={[
             styles.stackAvatar,
-            { marginLeft: i === 0 ? 0 : -8, zIndex: max - i, backgroundColor: '#4ECDC4' },
+            { marginLeft: i === 0 ? 0 : -8, zIndex: max - i, backgroundColor: '#3B72EE22' },
           ]}
         >
-          <Text style={styles.stackAvatarText}>{m.user?.initials || '?'}</Text>
+          <Text style={[styles.stackAvatarText, { color: '#3B72EE' }]}>{m.user?.initials || '?'}</Text>
         </View>
       ))}
       {extra > 0 && (
@@ -75,7 +76,7 @@ function TeamDetail({ team, onClose, isDark, card, txt, sub, bdr }) {
       {/* Header */}
       <View style={[styles.detailHeader, { borderBottomColor: bdr, paddingTop: insets.top + 10 }]}>
         <TouchableOpacity onPress={onClose} style={styles.detailClose}>
-          <Text style={{ color: '#4ECDC4', fontSize: 14, fontWeight: '600' }}>← Back</Text>
+          <Text style={{ color: '#3B72EE', fontSize: 14, fontWeight: '600' }}>← Back</Text>
         </TouchableOpacity>
         <Text style={[styles.detailTitle, { color: txt }]} numberOfLines={1}>{team.name}</Text>
         <View style={{ width: 60 }} />
@@ -108,7 +109,7 @@ function TeamDetail({ team, onClose, isDark, card, txt, sub, bdr }) {
             </View>
             <View style={styles.detailMetaItem}>
               <Text style={[styles.detailMetaLabel, { color: sub }]}>My Role</Text>
-              <Text style={[styles.detailMetaValue, { color: '#4ECDC4' }]}>{team.my_role || '—'}</Text>
+              <Text style={[styles.detailMetaValue, { color: '#3B72EE' }]}>{team.my_role || '—'}</Text>
             </View>
             <View style={styles.detailMetaItem}>
               <Text style={[styles.detailMetaLabel, { color: sub }]}>Created</Text>
@@ -129,8 +130,8 @@ function TeamDetail({ team, onClose, isDark, card, txt, sub, bdr }) {
                 i === team.members.length - 1 && { borderBottomWidth: 0 },
               ]}
             >
-              <View style={[styles.memberAvatar, { backgroundColor: '#4ECDC4' }]}>
-                <Text style={styles.memberAvatarText}>{m.user?.initials || '?'}</Text>
+              <View style={[styles.memberAvatar, { backgroundColor: '#3B72EE22' }]}>
+                <Text style={[styles.memberAvatarText, { color: '#3B72EE' }]}>{m.user?.initials || '?'}</Text>
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={[styles.memberName, { color: txt }]}>{m.user?.full_name}</Text>
@@ -308,20 +309,17 @@ export default function TeamManagementScreen() {
       <View style={[styles.navbar, { backgroundColor: card, borderBottomColor: bdr }]}>
         <View style={styles.navLeft}>
           <SidebarMenu activeScreen="TeamManagement" />
-          <TouchableOpacity
-            style={styles.logoBox}
-            onPress={() => { try { navigation.jumpTo('Dashboard'); } catch { navigation.navigate('Main', { screen: 'Dashboard' }); } }}
-          >
-            <Text style={styles.logoText}>D</Text>
-          </TouchableOpacity>
           <Text style={[styles.brandName, { color: txt, fontSize: fs(15) }]}>Team Management</Text>
         </View>
         <View style={styles.navRight}>
           <TouchableOpacity
-            style={[styles.navIconBtn, { backgroundColor: isDark ? '#252530' : '#FAFAFA', borderColor: bdr }]}
-            onPress={() => navigation.navigate('Chat')}
+            style={{ padding: 6 }}
+            onPress={() => navigation.navigate('Search')}
           >
-            <Text style={styles.navIcon}>💬</Text>
+            <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
+              <Path d="M11 19C15.4183 19 19 15.4183 19 11C19 6.58172 15.4183 3 11 3C6.58172 3 3 6.58172 3 11C3 15.4183 6.58172 19 11 19Z" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+              <Path d="M21 21L16.65 16.65" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+            </Svg>
           </TouchableOpacity>
           <NotificationBell />
         </View>
@@ -344,7 +342,7 @@ export default function TeamManagementScreen() {
                 : handleTabSwitch(tab.key)
               }
             >
-              <Text style={[styles.subTabTxt, { color: isActive ? '#4ECDC4' : sub, fontSize: fs(13) }]}>
+              <Text style={[styles.subTabTxt, { color: isActive ? '#3B72EE' : sub, fontSize: fs(13) }]}>
                 {tab.label}
               </Text>
               {isActive && <View style={styles.subTabUnderline} />}
@@ -367,7 +365,7 @@ export default function TeamManagementScreen() {
                 style={[styles.rolesBtn, { backgroundColor: isDark ? '#252530' : '#F0F2F6', borderColor: bdr }]}
                 onPress={() => navigation.navigate('InviteUser')}
               >
-                <Text style={{ fontSize: 12, fontWeight: '700', color: '#4ECDC4' }}>✉ Invite</Text>
+                <Text style={{ fontSize: 12, fontWeight: '700', color: '#3B72EE' }}>✉ Invite</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.rolesBtn, { backgroundColor: '#1A1A2E', borderColor: '#1A1A2E' }]}
@@ -380,13 +378,13 @@ export default function TeamManagementScreen() {
 
           {usersLoading ? (
             <View style={styles.centerState}>
-              <ActivityIndicator size="large" color="#4ECDC4" />
+              <ActivityIndicator size="large" color="#3B72EE" />
             </View>
           ) : (
             <ScrollView
               showsVerticalScrollIndicator={false}
               contentContainerStyle={{ paddingBottom: 40 }}
-              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#4ECDC4" />}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#3B72EE" />}
             >
               {/* Header row */}
               <View style={[styles.userTableHeader, { backgroundColor: isDark ? '#252530' : '#F5F6F9', borderBottomColor: bdr }]}>
@@ -399,10 +397,12 @@ export default function TeamManagementScreen() {
                 const name = [u.first_name, u.last_name].filter(Boolean).join(' ') || u.username;
                 const initial = (name[0] || '?').toUpperCase();
                 const role = (u.role || 'member').toLowerCase();
-                const roleColor = role === 'admin' ? '#22C55E' : role === 'manager' ? '#3B82F6' : role === 'developer' ? '#A78BFA' : '#9098A6';
-                const roleBg   = role === 'admin' ? '#F0FDF4' : role === 'manager' ? '#EFF6FF' : role === 'developer' ? '#F5F3FF' : '#F3F4F6';
-                const AVATAR_COLORS = ['#3B82F6','#8B5CF6','#10B981','#F59E0B','#EF4444','#06B6D4','#EC4899'];
+                const roleColor = '#3B72EE';
+                const roleBg   = '#3B72EE15';
+                const AVATAR_COLORS = ['#3B72EE22','#10B98122','#F59E0B22','#EF444422','#06B6D422','#EC489922','#8B5CF622'];
+                const avatarTextColors = ['#3B72EE','#10B981','#F59E0B','#EF4444','#06B6D4','#EC4899','#8B5CF6'];
                 const avatarBg = AVATAR_COLORS[i % AVATAR_COLORS.length];
+                const avatarTxt = avatarTextColors[i % avatarTextColors.length];
                 const joined = u.date_joined || u.created_at || '';
                 return (
                   <View
@@ -410,7 +410,7 @@ export default function TeamManagementScreen() {
                     style={[styles.userRow, { borderBottomColor: bdr }, i === users.length - 1 && { borderBottomWidth: 0 }]}
                   >
                     <View style={[styles.userAvatar, { backgroundColor: avatarBg }]}>
-                      <Text style={styles.userAvatarTxt}>{initial}</Text>
+                      <Text style={[styles.userAvatarTxt, { color: avatarTxt }]}>{initial}</Text>
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.userName2, { color: txt }]} numberOfLines={1}>{name}</Text>
@@ -515,7 +515,7 @@ export default function TeamManagementScreen() {
         <>
           {loading ? (
             <View style={styles.centerState}>
-              <ActivityIndicator size="large" color="#4ECDC4" />
+              <ActivityIndicator size="large" color="#3B72EE" />
               <Text style={[styles.loadingTxt, { color: sub }]}>Loading teams…</Text>
             </View>
           ) : teams.length === 0 ? (
@@ -528,7 +528,7 @@ export default function TeamManagementScreen() {
         <ScrollView
           showsVerticalScrollIndicator={false}
           contentContainerStyle={{ padding: 14, paddingBottom: 40 }}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#4ECDC4" />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#3B72EE" />}
         >
           {/* Stats bar */}
           <View style={[styles.statsRow, { backgroundColor: card, borderColor: bdr }]}>
@@ -538,7 +538,7 @@ export default function TeamManagementScreen() {
             </View>
             <View style={[styles.statDivider, { backgroundColor: bdr }]} />
             <View style={styles.statItem}>
-              <Text style={[styles.statNum, { color: '#4ECDC4', fontSize: fs(20) }]}>
+              <Text style={[styles.statNum, { color: '#3B72EE', fontSize: fs(20) }]}>
                 {teams.filter(t => t.my_role === 'owner').length}
               </Text>
               <Text style={[styles.statLabel, { color: sub, fontSize: fs(10) }]}>LEADING</Text>
@@ -552,7 +552,7 @@ export default function TeamManagementScreen() {
             </View>
             <View style={[styles.statDivider, { backgroundColor: bdr }]} />
             <View style={styles.statItem}>
-              <Text style={[styles.statNum, { color: '#A78BFA', fontSize: fs(20) }]}>
+              <Text style={[styles.statNum, { color: '#3B72EE', fontSize: fs(20) }]}>
                 {teams.reduce((s, t) => s + (t.member_count || 0), 0)}
               </Text>
               <Text style={[styles.statLabel, { color: sub, fontSize: fs(10) }]}>MEMBERS</Text>
@@ -571,7 +571,7 @@ export default function TeamManagementScreen() {
               >
                 {/* Card header */}
                 <View style={styles.teamCardHeader}>
-                  <View style={[styles.teamColorDot, { backgroundColor: team.color || '#4ECDC4' }]} />
+                  <View style={[styles.teamColorDot, { backgroundColor: team.color || '#3B72EE' }]} />
                   <Text style={[styles.teamName, { color: txt, fontSize: fs(15) }]} numberOfLines={1}>
                     {team.name}
                   </Text>
@@ -599,8 +599,8 @@ export default function TeamManagementScreen() {
                 {/* Footer: leader + avatars + member count */}
                 <View style={[styles.teamCardFooter, { borderTopColor: bdr }]}>
                   <View style={styles.leaderRow}>
-                    <View style={[styles.leaderAvatar, { backgroundColor: '#4ECDC4' }]}>
-                      <Text style={styles.leaderAvatarTxt}>
+                    <View style={[styles.leaderAvatar, { backgroundColor: '#3B72EE22' }]}>
+                      <Text style={[styles.leaderAvatarTxt, { color: '#3B72EE' }]}>
                         {team.leader_info?.initials || '?'}
                       </Text>
                     </View>
@@ -669,7 +669,7 @@ const styles = StyleSheet.create({
   navLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   navRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   logoBox: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center' },
-  logoText: { color: '#4ECDC4', fontSize: 15, fontWeight: '800' },
+  logoText: { color: '#3B72EE', fontSize: 15, fontWeight: '800' },
   brandName: { fontWeight: '700' },
   navIconBtn: { width: 36, height: 36, borderRadius: 8, borderWidth: 1, justifyContent: 'center', alignItems: 'center' },
   navIcon: { fontSize: 16 },
@@ -679,7 +679,7 @@ const styles = StyleSheet.create({
   subTab: { paddingVertical: 12, paddingHorizontal: 16, position: 'relative' },
   subTabActive: {},
   subTabTxt: { fontWeight: '600' },
-  subTabUnderline: { position: 'absolute', bottom: 0, left: 16, right: 16, height: 2, backgroundColor: '#4ECDC4', borderRadius: 1 },
+  subTabUnderline: { position: 'absolute', bottom: 0, left: 16, right: 16, height: 2, backgroundColor: '#3B72EE', borderRadius: 1 },
 
   // States
   centerState: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 10, padding: 20 },

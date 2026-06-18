@@ -4,6 +4,7 @@ import {
   ScrollView, Dimensions, StatusBar, Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Svg, { Path, Rect, Circle } from 'react-native-svg';
 import { ThemeContext } from '../context/ThemeContext';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
@@ -17,9 +18,9 @@ const OPTIONS = [
     subLabel: 'AI-powered',
     ai: true,
     icon: TaskIcon,
-    accent: '#4F46E5',
-    accentLight: 'rgba(79,70,229,0.10)',
-    accentDark: 'rgba(79,70,229,0.20)',
+    accent: '#3B72EE',
+    accentLight: 'rgba(59,114,238,0.10)',
+    accentDark: 'rgba(59,114,238,0.20)',
     navigate: (nav) => nav.navigate('CreateTask', { aiMode: true }),
   },
   {
@@ -51,6 +52,22 @@ const OPTIONS = [
     },
   },
   {
+    id: 'note',
+    label: 'New Note',
+    desc: 'Quick capture',
+    subLabel: null,
+    ai: false,
+    selfNavigate: true,
+    icon: NoteIcon,
+    accent: '#9370DB',
+    accentLight: 'rgba(147,112,219,0.10)',
+    accentDark: 'rgba(147,112,219,0.20)',
+    navigate: (nav) => {
+      nav.goBack();
+      setTimeout(() => nav.navigate('QuickNotes', { openCreate: true }), 300);
+    },
+  },
+  {
     id: 'doc',
     label: 'Upload Document',
     desc: 'PDF, Word, Sheet, Slide',
@@ -74,9 +91,9 @@ const OPTIONS = [
     ai: false,
     selfNavigate: true,
     icon: MemberIcon,
-    accent: '#8B5CF6',
-    accentLight: 'rgba(139,92,246,0.10)',
-    accentDark: 'rgba(139,92,246,0.20)',
+    accent: '#F97316',
+    accentLight: 'rgba(249,115,22,0.10)',
+    accentDark: 'rgba(249,115,22,0.20)',
     navigate: (nav) => {
       nav.goBack();
       setTimeout(() => nav.navigate('InviteUser'), 300);
@@ -84,24 +101,13 @@ const OPTIONS = [
   },
 ];
 
-// ─── Inline SVG-style icons via View/Text primitives ─────────────────────────
+// ─── SVG Icons ────────────────────────────────────────────────────────────────
 function TaskIcon({ color, size = 22 }) {
   return (
-    <View style={{ width: size, height: size, justifyContent: 'center', alignItems: 'center' }}>
-      <View style={{ width: size - 2, height: size - 2, borderRadius: 4, borderWidth: 2, borderColor: color }}>
-        <View style={{ position: 'absolute', bottom: 1, left: 3, right: 3 }}>
-          <View style={{ height: 2, backgroundColor: color, borderRadius: 1, marginBottom: 2, width: '70%' }} />
-          <View style={{ height: 2, backgroundColor: color, borderRadius: 1, width: '50%' }} />
-        </View>
-        <View style={{
-          position: 'absolute', top: -4, right: -4,
-          width: 10, height: 10, borderRadius: 5,
-          backgroundColor: color, justifyContent: 'center', alignItems: 'center',
-        }}>
-          <Text style={{ color: '#fff', fontSize: 7, fontWeight: '800', lineHeight: 10 }}>✓</Text>
-        </View>
-      </View>
-    </View>
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Rect x="3" y="3" width="18" height="18" rx="3" stroke={color} strokeWidth="2" />
+      <Path d="M8 12l3 3 5-5" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
   );
 }
 
@@ -128,21 +134,9 @@ function EventIcon({ color, size = 22 }) {
 
 function ProjectIcon({ color, size = 22 }) {
   return (
-    <View style={{ width: size, height: size, justifyContent: 'center', alignItems: 'center' }}>
-      <View style={{ position: 'relative', width: size, height: size }}>
-        <View style={{
-          position: 'absolute', bottom: 0, left: 0,
-          width: size - 4, height: size - 5,
-          borderRadius: 3, borderWidth: 2, borderColor: color,
-        }} />
-        <View style={{
-          position: 'absolute', top: 0, left: 3,
-          width: size - 7, height: 6,
-          borderTopLeftRadius: 3, borderTopRightRadius: 3,
-          backgroundColor: color,
-        }} />
-      </View>
-    </View>
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" stroke={color} strokeWidth="2" strokeLinejoin="round" />
+    </Svg>
   );
 }
 
@@ -188,6 +182,25 @@ function MemberIcon({ color, size = 22 }) {
   );
 }
 
+function NoteIcon({ color, size = 22 }) {
+  return (
+    <View style={{ width: size, height: size, justifyContent: 'center', alignItems: 'center' }}>
+      <View style={{
+        width: size - 2, height: size - 2,
+        borderRadius: 4, borderWidth: 2, borderColor: color,
+        justifyContent: 'center', alignItems: 'center', paddingHorizontal: 3,
+      }}>
+        <View style={{ width: '80%', height: 2, backgroundColor: color, borderRadius: 1, marginBottom: 3 }} />
+        <View style={{ width: '80%', height: 2, backgroundColor: color, borderRadius: 1, marginBottom: 3 }} />
+        <View style={{ width: '50%', height: 2, backgroundColor: color, borderRadius: 1, alignSelf: 'flex-start' }} />
+        <View style={{ position: 'absolute', top: -6, right: -6, width: 11, height: 11, borderRadius: 5.5, backgroundColor: color, justifyContent: 'center', alignItems: 'center' }}>
+          <Text style={{ color: '#fff', fontSize: 7, lineHeight: 11 }}>✎</Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
 // ─── AI Sparkle badge ─────────────────────────────────────────────────────────
 function AIBadge({ color }) {
   return (
@@ -204,7 +217,7 @@ function OptionRow({ opt, index, isDark, onPress, animVal }) {
   const labelClr = isDark ? '#F0F0F8' : '#18182E';
   const descClr  = isDark ? '#9090A8' : '#6B6B82';
   const chevClr  = isDark ? '#3A3A50' : '#D4D4E0';
-  const rowBg    = isDark ? '#1E1E2C' : '#FFFFFF';
+  const rowBg    = isDark ? '#1E1E2C' : '#F5F5F5';
   const borderClr = isDark ? '#252538' : '#EBEBF3';
 
   const scale = animVal.interpolate({ inputRange: [0, 1], outputRange: [0.88, 1] });
@@ -284,8 +297,8 @@ export default function QuickCreateScreen({ navigation }) {
   };
 
   // Theme colors
-  const bgColor    = isDark ? '#12121C' : '#F5F5FA';
-  const cardBg     = isDark ? '#1A1A28' : '#FFFFFF';
+  const bgColor    = isDark ? '#12121C' : '#FFFFFF';
+  const cardBg     = isDark ? '#1A1A28' : '#F5F5F5';
   const titleClr   = isDark ? '#F2F2FF' : '#12121C';
   const subtitleClr = isDark ? '#7070A0' : '#8888A8';
 
@@ -306,19 +319,19 @@ export default function QuickCreateScreen({ navigation }) {
             What would you like to add?
           </Text>
         </View>
-        <TouchableOpacity onPress={handleClose} style={[styles.closeBtn, { backgroundColor: isDark ? '#252535' : '#EAEAF2' }]} activeOpacity={0.7}>
+        <TouchableOpacity onPress={handleClose} style={styles.closeBtn} activeOpacity={0.7}>
           <Text style={[styles.closeBtnText, { color: isDark ? '#9090B8' : '#7070A0' }]}>✕</Text>
         </TouchableOpacity>
       </Animated.View>
 
       {/* ── AI info strip ── */}
       <Animated.View style={[styles.aiStrip, {
-        backgroundColor: isDark ? 'rgba(99,102,241,0.12)' : 'rgba(99,102,241,0.07)',
-        borderColor: isDark ? 'rgba(99,102,241,0.3)' : 'rgba(99,102,241,0.18)',
+        backgroundColor: isDark ? 'rgba(59,114,238,0.12)' : 'rgba(59,114,238,0.07)',
+        borderColor: isDark ? 'rgba(59,114,238,0.3)' : 'rgba(59,114,238,0.18)',
         opacity: headerAnim,
       }]}>
         <Text style={styles.aiStripIcon}>✦</Text>
-        <Text style={[styles.aiStripText, { color: isDark ? '#A5A8FF' : '#4F46E5' }]}>
+        <Text style={[styles.aiStripText, { color: isDark ? '#7BA8F5' : '#3B72EE' }]}>
           Tasks & Events are AI-assisted — just describe what you need
         </Text>
       </Animated.View>
@@ -343,7 +356,6 @@ export default function QuickCreateScreen({ navigation }) {
         ))}
 
         {/* Section: Quick Actions */}
-        <Text style={[styles.sectionLabel, { color: subtitleClr, marginTop: 20 }]}>QUICK ACTIONS</Text>
         {OPTIONS.filter(o => !o.ai).map((opt) => (
           <OptionRow
             key={opt.id}

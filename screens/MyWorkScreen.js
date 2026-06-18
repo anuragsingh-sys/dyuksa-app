@@ -9,6 +9,7 @@ import { ThemeContext } from '../context/ThemeContext';
 import { AuthContext } from '../context/AuthContext';
 import { getAccessToken, getWorkspaceId } from '../services/ApiService';
 import { BASE_URL } from '../config';
+import Svg, { Path } from 'react-native-svg';
 import SidebarMenu from '../components/SidebarMenu';
 import NotificationBell from '../components/NotificationBell';
 import { useTasksCache } from '../hooks/useTasksCache';
@@ -44,6 +45,14 @@ const todayStr = () => {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 };
 
+
+const SearchIcon = ({ size = 20, color = '#3B72EE' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Path d="M11 19C15.4183 19 19 15.4183 19 11C19 6.58172 15.4183 3 11 3C6.58172 3 3 6.58172 3 11C3 15.4183 6.58172 19 11 19Z" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+    <Path d="M21 21L16.65 16.65" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+  </Svg>
+);
+
 export default function MyWorkScreen() {
   const navigation = useNavigation();
   const insets     = useSafeAreaInsets();
@@ -70,13 +79,22 @@ export default function MyWorkScreen() {
     ? (user.first_name || user.name?.split(' ')[0] || user.username || 'there')
     : 'there';
 
-  // ── Week boundaries (Mon–Sun of current week) ─────────────────────
+  // ── Week boundaries (Mon–Fri of current week) ────────────────────
   const getWeekBounds = () => {
-    const now  = new Date();
-    const day  = now.getDay(); // 0=Sun
-    const mon  = new Date(now); mon.setDate(now.getDate() - (day === 0 ? 6 : day - 1)); mon.setHours(0,0,0,0);
-    const sun  = new Date(mon); sun.setDate(mon.getDate() + 6); sun.setHours(23,59,59,999);
-    return { mon, sun };
+    const now = new Date();
+    const day = now.getDay(); // 0=Sun
+    const mon = new Date(now); mon.setDate(now.getDate() - (day === 0 ? 6 : day - 1)); mon.setHours(0,0,0,0);
+    const fri = new Date(mon); fri.setDate(mon.getDate() + 4); fri.setHours(23,59,59,999);
+    return { mon, fri };
+  };
+
+  // ── Weekday names for schedule grouping ──────────────────────────
+  const getWeekDays = () => {
+    const { mon } = getWeekBounds();
+    return Array.from({ length: 5 }, (_, i) => {
+      const d = new Date(mon); d.setDate(mon.getDate() + i);
+      return d;
+    });
   };
 
   // ── My tasks — client-side filter ────────────────────────────────
@@ -131,12 +149,12 @@ export default function MyWorkScreen() {
   const filteredTasks = (() => {
     if (period === 'Backlog') return myTasks.filter(t => t.status === 'backlog');
     if (period === 'This week') {
-      const { mon, sun } = getWeekBounds();
+      const { mon, fri } = getWeekBounds();
       return myTasks.filter(t => {
         const due = t.end_date || t.due_date;
         if (!due) return false;
         const d = new Date(due);
-        return d >= mon && d <= sun && !['completed', 'deployed'].includes(t.status);
+        return d >= mon && d <= fri && !['completed', 'deployed'].includes(t.status);
       });
     }
     // Today — due today OR overdue and not done
@@ -148,29 +166,70 @@ export default function MyWorkScreen() {
     });
   })();
 
-  // ── Filter events: today + next 5 days always ─────────────────────
+  // ── Filter events scoped to current period ───────────────────────
   const filteredEvents = (() => {
     if (period === 'Backlog') return [];
 
-    const now     = new Date(); now.setHours(0, 0, 0, 0);
-    const cutoff  = new Date(now); cutoff.setDate(now.getDate() + 5); cutoff.setHours(23, 59, 59, 999);
+    const now = new Date(); now.setHours(0, 0, 0, 0);
+    const todayEnd = new Date(now); todayEnd.setHours(23, 59, 59, 999);
 
-    // Only my events (organizer or attendee)
-    return events
+    let windowStart, windowEnd;
+    if (period === 'Today') {
+      windowStart = now;
+      windowEnd   = todayEnd;
+    } else if (period === 'This week') {
+      const { mon, fri } = getWeekBounds();
+      windowStart = mon;
+      windowEnd   = fri;
+    } else {
+      windowStart = now;
+      windowEnd   = new Date(now); windowEnd.setDate(now.getDate() + 60); windowEnd.setHours(23, 59, 59, 999);
+    }
+
+    // My calendar events in window — compare date portion only (ignore time zone shifts)
+    const myEvents = events
       .filter(e => {
         if (!myId) return true;
         if (String(e.organizer) === myId) return true;
         if (Array.isArray(e.attendees) && e.attendees.some(a =>
-          String(a.id || a.user_id || a) === myId
+          String(a?.id ?? a?.user_id ?? a) === myId
         )) return true;
         return false;
       })
       .filter(e => {
         const start = e.start_time || e.eventTimestamp || e.start_date;
         if (!start) return false;
-        const d = new Date(start);
-        return d >= now && d <= cutoff;
+        // Compare date strings to avoid timezone issues
+        const evDateStr = start.substring(0, 10);
+        const startStr  = windowStart.toISOString().substring(0, 10);
+        const endStr    = windowEnd.toISOString().substring(0, 10);
+        return evDateStr >= startStr && evDateStr <= endStr;
       })
+      .map(e => ({ ...e, _kind: 'event' }));
+
+    // My tasks with dates in window
+    const taskRows = myTasks
+      .filter(t => !['completed', 'deployed'].includes(t.status))
+      .filter(t => {
+        const dateStr = (t.start_date || t.end_date || t.due_date || '').substring(0, 10);
+        if (!dateStr) return false;
+        const startStr = windowStart.toISOString().substring(0, 10);
+        const endStr   = windowEnd.toISOString().substring(0, 10);
+        return dateStr >= startStr && dateStr <= endStr;
+      })
+      .map(t => ({
+        id: `task_${t.id}`,
+        _kind: 'task',
+        _task: t,
+        title: t.heading || t.title || 'Untitled',
+        start_time: t.start_date || t.end_date || t.due_date,
+        event_type: 'Task',
+        duration_minutes: null,
+        attendees: [],
+        organizer_name: null,
+      }));
+
+    return [...myEvents, ...taskRows]
       .sort((a, b) => new Date(a.start_time) - new Date(b.start_time));
   })();
 
@@ -184,56 +243,46 @@ export default function MyWorkScreen() {
   const nowHour = new Date().getHours();
   const greeting = nowHour < 12 ? 'Good morning' : nowHour < 17 ? 'Good afternoon' : 'Good evening';
 
+
+  // ── Focus block (first in_progress task) ─────────────────────────
+  const focusTask = myTasks.find(t => t.status === 'in_progress') || filteredTasks[0] || null;
+  const focusProgress = focusTask ? Math.floor(Math.random() * 60 + 20) : 38; // TODO: real progress
+
+  const todayFormatted = new Date().toLocaleDateString('en-IN', { weekday: 'long', month: 'long', day: 'numeric' });
+
   return (
     <SafeAreaView style={[s.safe, { backgroundColor: bg }]} edges={['top', 'left', 'right']}>
-      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={card} />
 
-      {/* Navbar */}
+      {/* ── Navbar ── */}
       <View style={[s.navbar, { backgroundColor: card, borderBottomColor: bdr }]}>
         <View style={s.navLeft}>
           <SidebarMenu activeScreen="MyWork" />
-          <TouchableOpacity onPress={() => { try { navigation.jumpTo('Dashboard'); } catch { navigation.navigate('Main', { screen: 'Dashboard' }); } }}>
-            <View style={s.logoBox}><Text style={s.logoText}>D</Text></View>
-          </TouchableOpacity>
-          <Text style={[s.brandName, { color: txt }]}>My Work</Text>
+          <View>
+            <Text style={[s.navTitle, { color: txt }]}>My Work</Text>
+            <Text style={{ fontSize: 11, color: sub }}>{todayFormatted}</Text>
+          </View>
         </View>
-        <NotificationBell />
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <TouchableOpacity style={{ padding: 6 }} onPress={() => navigation.navigate('Search')}>
+            <SearchIcon size={20} color='#3B72EE' />
+          </TouchableOpacity>
+          <NotificationBell />
+        </View>
       </View>
 
       {loading ? (
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-          <ActivityIndicator size="large" color="#4ECDC4" />
+          <ActivityIndicator size="large" color="#3B72EE" />
         </View>
       ) : (
         <ScrollView
-          contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}
+          contentContainerStyle={{ paddingBottom: insets.bottom + 80 }}
           showsVerticalScrollIndicator={false}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#4ECDC4" colors={['#4ECDC4']} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#3B72EE" />}
         >
-          {/* Hero greeting card */}
-          <View style={[s.heroCard, { backgroundColor: '#1A1A2E' }]}>
-            <View style={s.heroDeco} />
-            <Text style={s.heroGreeting}>{greeting},</Text>
-            <Text style={s.heroName}>{userName} 👋</Text>
-            <Text style={s.heroDate}>{new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}</Text>
-
-            {/* Stats row */}
-            <View style={s.heroStats}>
-              {[
-                { label: 'Pending',   value: pendingTasks,   color: '#4ECDC4' },
-                { label: 'Done today', value: completedToday, color: '#4ADE80' },
-                { label: 'Overdue',    value: overdueCount,   color: '#F87171' },
-              ].map((stat, i) => (
-                <View key={i} style={[s.heroStat, i > 0 && { borderLeftWidth: 1, borderLeftColor: 'rgba(255,255,255,0.1)' }]}>
-                  <Text style={[s.heroStatVal, { color: stat.color }]}>{stat.value}</Text>
-                  <Text style={s.heroStatLabel}>{stat.label}</Text>
-                </View>
-              ))}
-            </View>
-          </View>
-
-          <View style={{ paddingHorizontal: 12 }}>
-            {/* Period segmented control */}
+          {/* ── Period tabs ── */}
+          <View style={{ paddingHorizontal: 12, paddingTop: 14 }}>
             <View style={[s.segWrap, { backgroundColor: isDark ? '#252530' : '#F0F2F6' }]}>
               {PERIODS.map(p => {
                 const active = p === period;
@@ -241,7 +290,7 @@ export default function MyWorkScreen() {
                   <TouchableOpacity
                     key={p}
                     onPress={() => setPeriod(p)}
-                    style={[s.segBtn, active && { backgroundColor: card, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 3, elevation: 2 }]}
+                    style={[s.segBtn, active && { backgroundColor: card, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 3, elevation: 2 }]}
                     activeOpacity={0.7}
                   >
                     <Text style={[s.segText, { color: active ? txt : sub, fontWeight: active ? '700' : '500' }]}>{p}</Text>
@@ -249,23 +298,131 @@ export default function MyWorkScreen() {
                 );
               })}
             </View>
+          </View>
 
-            {/* Tasks */}
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 16, marginBottom: 10 }}>
+          {/* ── Focus Block ── */}
+          {focusTask && period === 'Today' && (
+            <View style={{ paddingHorizontal: 12, paddingTop: 14 }}>
+              <View style={s.focusCard}>
+                <Text style={s.focusLabel}>FOCUS BLOCK</Text>
+                <Text style={s.focusTitle} numberOfLines={2}>{focusTask.heading || focusTask.title || 'Current task'}</Text>
+                <Text style={s.focusTime}>
+                  {(() => {
+                    const start = focusTask.start_date;
+                    const end   = focusTask.end_date || focusTask.due_date;
+                    const fmt   = d => new Date(d).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+                    if (start && end) {
+                      const mins = Math.round((new Date(end) - new Date(start)) / 60000);
+                      const dur  = mins >= 60 ? `${Math.floor(mins/60)}h${mins%60 ? ` ${mins%60}m` : ''}` : `${mins}m`;
+                      return `${fmt(start)} — ${fmt(end)} · ${dur}`;
+                    }
+                    if (start) return fmt(start);
+                    return 'In progress';
+                  })()}
+                </Text>
+                {/* Progress bar */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 14, marginBottom: 16 }}>
+                  <View style={s.progressTrack}>
+                    <View style={[s.progressFill, { width: `${focusProgress}%` }]} />
+                  </View>
+                  <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700', width: 36 }}>{focusProgress}%</Text>
+                </View>
+                {/* Buttons */}
+                <View style={{ flexDirection: 'row', gap: 10 }}>
+                  <TouchableOpacity
+                    style={s.focusResumeBtn}
+                    onPress={() => navigation.navigate('TaskDetail', { taskId: focusTask.id, task: focusTask })}
+                  >
+                    <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>Resume</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={s.focusSkipBtn}>
+                    <Text style={{ color: '#fff', fontSize: 14, fontWeight: '600' }}>Skip</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          )}
+
+          <View style={{ paddingHorizontal: 12 }}>
+            {/* ── Schedule (Events + Tasks) ── */}
+            {period !== 'Backlog' && filteredEvents.length > 0 && (
+              <>
+                <Text style={[s.sectionTitle, { color: txt }]}>
+                  {period === 'This week' ? 'This Week (Mon–Fri)' : 'Schedule'}
+                </Text>
+                <View style={[s.groupCard, { backgroundColor: card, borderColor: bdr }]}>
+                  {filteredEvents.slice(0, 8).map((ev, i) => {
+                    const isTask     = ev._kind === 'task';
+                    const title      = ev.title || ev.name || 'Event';
+                    const startTime  = ev.start_time || ev.eventTimestamp || ev.start_date;
+                    const endTime    = ev.end_time;
+                    const timeStr    = startTime
+                      ? new Date(startTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
+                      : '';
+                    // Duration from start/end times
+                    const dur = (() => {
+                      if (ev.duration_minutes) return `${ev.duration_minutes}m`;
+                      if (startTime && endTime) {
+                        const mins = Math.round((new Date(endTime) - new Date(startTime)) / 60000);
+                        return mins > 0 ? `${mins}m` : '';
+                      }
+                      return '';
+                    })();
+                    const type       = ev.event_type || ev.type || 'Meeting';
+                    const typeColors = { Meeting: '#3B72EE', Task: '#F59E0B', Event: '#3B72EE', Review: '#3B72EE' };
+                    const barColor   = isTask ? '#F59E0B' : '#3B72EE';
+                    const AVATAR_COLORS = ['#3B72EE', '#3B72EE', '#3B72EE', '#F59E0B', '#3B72EE'];
+                    // Organizer name avatar (attendees are plain IDs — no names available)
+                    const organizerName = ev.organizer_name || '';
+                    const organizerInitials = organizerName.split(' ').slice(0,2).map(w => w[0]).join('').toUpperCase();
+                    // Date label if not today
+                    const evDate = startTime ? new Date(startTime) : null;
+                    const todayD = new Date(); todayD.setHours(0,0,0,0);
+                    const isToday = evDate && evDate.toDateString() === todayD.toDateString();
+                    const dateLabel = evDate && !isToday
+                      ? evDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
+                      : '';
+
+                    return (
+                      <TouchableOpacity
+                        key={ev.id || i}
+                        style={[s.schedRow, i < Math.min(filteredEvents.length, 8) - 1 && { borderBottomWidth: 1, borderBottomColor: bdr }]}
+                        onPress={() => isTask && ev._task ? navigation.navigate('TaskDetail', { taskId: ev._task.id, task: ev._task }) : null}
+                        activeOpacity={isTask ? 0.7 : 1}
+                      >
+                        <View style={{ width: 68 }}>
+                          <Text style={[s.schedTime, { color: sub }]}>{timeStr}</Text>
+                          {dateLabel ? <Text style={{ fontSize: 10, color: sub }}>{dateLabel}</Text> : null}
+                        </View>
+                        <View style={[s.schedBar, { backgroundColor: barColor }]} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={[s.schedTitle, { color: txt }]} numberOfLines={1}>{title}</Text>
+                          <Text style={[s.schedType, { color: sub }]}>{type}{dur ? ` · ${dur}` : ''}</Text>
+                        </View>
+                        {organizerInitials ? (
+                          <View style={[s.attendeeAvatar, { backgroundColor: AVATAR_COLORS[0] }]}>
+                            <Text style={{ color: '#fff', fontSize: 8, fontWeight: '700' }}>{organizerInitials}</Text>
+                          </View>
+                        ) : null}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </>
+            )}
+
+            {/* ── Assigned to me ── */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 20, marginBottom: 10 }}>
               <Text style={[s.sectionTitle, { color: txt, marginTop: 0, marginBottom: 0 }]}>
-                {period === 'Backlog' ? 'Backlog Tasks' : period === 'This week' ? 'Due This Week' : 'Due Today'}
-                {' '}({filteredTasks.length})
+                {period === 'Backlog' ? 'Backlog Tasks' : period === 'This week' ? 'Due This Week' : 'Assigned to me'}
               </Text>
               <TouchableOpacity onPress={() => { try { navigation.jumpTo('Tasks'); } catch { navigation.navigate('Main', { screen: 'Tasks' }); } }}>
-                <Text style={{ color: '#4ECDC4', fontSize: 13, fontWeight: '600' }}>See all</Text>
+                <Text style={{ color: '#3B72EE', fontSize: 13, fontWeight: '600' }}>View all</Text>
               </TouchableOpacity>
             </View>
 
             {filteredTasks.length === 0 ? (
               <View style={[s.groupCard, { backgroundColor: card, borderColor: bdr, padding: 32, alignItems: 'center' }]}>
-                <Text style={{ fontSize: 36, opacity: 0.3, marginBottom: 8 }}>
-                  {period === 'Backlog' ? '📦' : '🎉'}
-                </Text>
                 <Text style={[{ fontSize: 15, fontWeight: '600', color: txt }]}>
                   {period === 'Today' ? 'Nothing due today!' : period === 'This week' ? 'Clear for the week!' : 'No backlog tasks'}
                 </Text>
@@ -296,17 +453,15 @@ export default function MyWorkScreen() {
                     </Text>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
                       {t.project_details?.name && (
-                        <Text style={[s.taskMeta, { color: sub }]}>🗂 {t.project_details.name}</Text>
+                        <Text style={[s.taskMeta, { color: sub }]}>{t.project_details.name}</Text>
                       )}
+                      <Text style={{ fontSize: 10, color: sub }}>📅 {fmtDate(t.end_date || t.due_date)}</Text>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
                         <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: pc }} />
                         <Text style={[s.taskMeta, { color: pc }]}>
                           {(t.priority || 'medium').charAt(0).toUpperCase() + (t.priority || 'medium').slice(1)}
                         </Text>
                       </View>
-                      {(t.end_date || t.due_date) && (
-                        <Text style={[s.taskMeta, { color: sub }]}>📅 {fmtDate(t.end_date || t.due_date)}</Text>
-                      )}
                     </View>
                   </View>
                   <View style={[s.statusPill, { backgroundColor: sc + '18' }]}>
@@ -315,134 +470,59 @@ export default function MyWorkScreen() {
                 </TouchableOpacity>
               );
             })}
-
-            {/* Events section — always visible when not Backlog */}
-            {period !== 'Backlog' && (
-              <>
-                <Text style={[s.sectionTitle, { color: txt }]}>
-                  Upcoming Events
-                  {filteredEvents.length > 0 ? ` (${filteredEvents.length})` : ''}
-                </Text>
-                {filteredEvents.length === 0 ? (
-                  <View style={[s.groupCard, { backgroundColor: card, borderColor: bdr, padding: 20, alignItems: 'center' }]}>
-                    <Text style={{ fontSize: 24, opacity: 0.3, marginBottom: 6 }}>📅</Text>
-                    <Text style={[{ fontSize: 13, color: sub }]}>No events in the next 5 days</Text>
-                  </View>
-                ) : (
-                  <View style={[s.groupCard, { backgroundColor: card, borderColor: bdr }]}>
-                    {filteredEvents.slice(0, 8).map((ev, i) => {
-                      const title = ev.title || ev.name || 'Event';
-                      const startTime = ev.start_time || ev.eventTimestamp || ev.start_date;
-                      const timeStr = startTime
-                        ? new Date(startTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
-                        : '';
-                      const dateStr = startTime
-                        ? new Date(startTime).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })
-                        : '';
-                      const type = ev.event_type || ev.type || 'Meeting';
-                      const isOnline = ev.is_online_meeting;
-                      return (
-                        <View
-                          key={ev.id || i}
-                          style={[s.schedRow, i < Math.min(filteredEvents.length, 8) - 1 && { borderBottomWidth: 1, borderBottomColor: bdr }]}
-                        >
-                          <View style={{ width: 60 }}>
-                            <Text style={[s.schedTime, { color: sub }]}>{timeStr}</Text>
-                            {!!dateStr && <Text style={{ fontSize: 9, color: sub, marginTop: 1 }}>{dateStr}</Text>}
-                          </View>
-                          <View style={[s.schedBar, { backgroundColor: '#A78BFA' }]} />
-                          <View style={{ flex: 1 }}>
-                            <Text style={[s.schedTitle, { color: txt }]} numberOfLines={1}>{title}</Text>
-                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                              <Text style={[s.schedType, { color: sub }]}>{type}</Text>
-                              {isOnline && (
-                                <View style={{ backgroundColor: '#E0F2FE', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 }}>
-                                  <Text style={{ fontSize: 9, color: '#0284C7', fontWeight: '700' }}>Online</Text>
-                                </View>
-                              )}
-                            </View>
-                          </View>
-                        </View>
-                      );
-                    })}
-                  </View>
-                )}
-              </>
-            )}
-
-            {/* Quick actions */}
-            <Text style={[s.sectionTitle, { color: txt, marginTop: 20 }]}>Quick Actions</Text>
-            <View style={s.actionsRow}>
-              {[
-                { icon: '+ Task',    color: '#1A1A2E', onPress: () => { try { navigation.jumpTo('Tasks', { openCreateModal: true }); } catch { navigation.navigate('Main', { screen: 'Tasks', params: { openCreateModal: true } }); } } },
-                { icon: '📅 Event',  color: '#7C3AED', onPress: () => { try { navigation.jumpTo('Calendar', { openCreateModal: true }); } catch { navigation.navigate('Main', { screen: 'Calendar', params: { openCreateModal: true } }); } } },
-                { icon: '💬 Chat',   color: '#0284C7', onPress: () => navigation.navigate('Chat') },
-              ].map((a, i) => (
-                <TouchableOpacity
-                  key={i}
-                  style={[s.actionBtn, { backgroundColor: a.color }]}
-                  onPress={a.onPress}
-                  activeOpacity={0.8}
-                >
-                  <Text style={s.actionBtnText}>{a.icon}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
           </View>
         </ScrollView>
       )}
+
     </SafeAreaView>
   );
 }
+
 
 const s = StyleSheet.create({
   safe: { flex: 1 },
   navbar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1 },
   navLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  logoBox: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center' },
-  logoText: { color: '#4ECDC4', fontSize: 15, fontWeight: '800' },
-  brandName: { fontWeight: '700', fontSize: 15 },
-
-  // Hero card
-  heroCard: { margin: 12, marginBottom: 0, borderRadius: 20, padding: 20, overflow: 'hidden' },
-  heroDeco: { position: 'absolute', width: 200, height: 200, borderRadius: 100, top: -60, right: -40, backgroundColor: 'rgba(45,106,227,0.15)' },
-  heroGreeting: { fontSize: 14, color: 'rgba(255,255,255,0.5)', fontWeight: '500' },
-  heroName: { fontSize: 24, fontWeight: '700', color: '#fff', marginBottom: 4, letterSpacing: -0.3 },
-  heroDate: { fontSize: 12, color: 'rgba(255,255,255,0.45)', marginBottom: 16 },
-  heroStats: { flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 12, paddingVertical: 12 },
-  heroStat: { flex: 1, alignItems: 'center' },
-  heroStatVal: { fontSize: 20, fontWeight: '800', letterSpacing: -0.5 },
-  heroStatLabel: { fontSize: 10, color: 'rgba(255,255,255,0.45)', fontWeight: '500', marginTop: 2 },
+  navTitle: { fontWeight: '700', fontSize: 17 },
 
   // Segmented
-  segWrap: { flexDirection: 'row', borderRadius: 14, padding: 4, marginTop: 12, marginBottom: 4 },
+  segWrap: { flexDirection: 'row', borderRadius: 14, padding: 4 },
   segBtn: { flex: 1, paddingVertical: 8, borderRadius: 10, alignItems: 'center' },
   segText: { fontSize: 13 },
 
+  // Focus block
+  focusCard: {
+    borderRadius: 18, padding: 20,
+    backgroundColor: '#0F1B3D',
+    overflow: 'hidden',
+  },
+  focusLabel: { fontSize: 11, fontWeight: '700', color: 'rgba(255,255,255,0.45)', letterSpacing: 1.2, marginBottom: 6 },
+  focusTitle: { fontSize: 20, fontWeight: '700', color: '#fff', marginBottom: 4, lineHeight: 26 },
+  focusTime: { fontSize: 12, color: 'rgba(255,255,255,0.5)' },
+  progressTrack: { flex: 1, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.15)' },
+  progressFill: { height: 6, borderRadius: 3, backgroundColor: '#3B72EE' },
+  focusResumeBtn: { flex: 1, height: 44, borderRadius: 12, backgroundColor: '#3B72EE', justifyContent: 'center', alignItems: 'center' },
+  focusSkipBtn: { width: 80, height: 44, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.1)', justifyContent: 'center', alignItems: 'center' },
+
   // Section title
-  sectionTitle: { fontSize: 14, fontWeight: '700', marginTop: 16, marginBottom: 10 },
+  sectionTitle: { fontSize: 16, fontWeight: '700', marginTop: 16, marginBottom: 10 },
 
   // Group card
   groupCard: { borderRadius: 14, borderWidth: 1, overflow: 'hidden', marginBottom: 4 },
 
   // Schedule row
-  schedRow: { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 12, paddingHorizontal: 14, gap: 10 },
-  schedTime: { width: 60, fontSize: 12, fontWeight: '600', paddingTop: 2 },
-  schedBar: { width: 4, minHeight: 36, borderRadius: 2 },
-  schedContent: { flex: 1 },
+  schedRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 14, gap: 10 },
+  schedTime: { width: 68, fontSize: 12, fontWeight: '600' },
+  schedBar: { width: 4, height: 36, borderRadius: 2 },
   schedTitle: { fontSize: 14, fontWeight: '600', marginBottom: 2 },
   schedType: { fontSize: 12 },
+  attendeeAvatar: { width: 24, height: 24, borderRadius: 12, justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: '#fff' },
 
   // Task card
-  taskCard: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, borderRadius: 14, borderWidth: 1, borderLeftWidth: 4, padding: 12, marginBottom: 8 },
-  taskCheck: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: '#DEDEE8', backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', marginTop: 2, flexShrink: 0 },
+  taskCard: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, borderRadius: 14, borderWidth: 1, borderLeftWidth: 4, padding: 14, marginBottom: 8 },
+  taskCheck: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: '#DEDEE8', backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', marginTop: 1, flexShrink: 0 },
   taskTitle: { fontSize: 14, fontWeight: '600', lineHeight: 19 },
   taskMeta: { fontSize: 11, fontWeight: '500' },
-  statusPill: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, flexShrink: 0, marginTop: 2 },
+  statusPill: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, flexShrink: 0 },
   statusPillText: { fontSize: 10, fontWeight: '700' },
-
-  // Quick actions
-  actionsRow: { flexDirection: 'row', gap: 10, marginBottom: 24 },
-  actionBtn: { flex: 1, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  actionBtnText: { fontSize: 13, fontWeight: '700', color: '#fff' },
 });

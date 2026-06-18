@@ -1,4 +1,4 @@
-import { NavigationContainer, useNavigation, useNavigationState } from '@react-navigation/native';
+import { NavigationContainer, useNavigation, useNavigationState, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import {
@@ -28,6 +28,7 @@ import DashboardScreen from './screens/DashboardScreen';
 import CalendarScreen  from './screens/CalendarScreen';
 import ProjectsScreen  from './screens/ProjectsScreen';
 import TasksScreen     from './screens/TasksScreen';
+import CreateTaskScreen from './screens/CreateTaskScreen';
 import DocumentsScreen from './screens/DocumentsScreen';
 import ChatScreen      from './screens/ChatScreen';
 import SettingsScreen  from './screens/SettingsScreen';
@@ -51,11 +52,11 @@ export const STORAGE_KEY = 'DYUKSA_QUICK_TASKS';
 const Stack = createNativeStackNavigator();
 const Tab   = createBottomTabNavigator();
 
-function QuickTaskButton({ onPress, borderColor }) {
+function QuickTaskButton({ onPress }) {
   return (
     <View style={styles.fabWrapper}>
       <TouchableOpacity
-        style={[styles.fab, { borderColor: borderColor || '#fff' }]}
+        style={styles.fab}
         onPress={onPress}
         activeOpacity={0.85}
       >
@@ -210,6 +211,22 @@ function QuickAddModal({ visible, onClose, navigation }) {
       label: 'New Project',
       desc: 'Start a workspace',
       action: () => navigation.navigate('CreateProject'),
+    },
+    {
+      icon: '📝',
+      iconBg: '#FFF7ED',
+      iconColor: '#EA580C',
+      label: 'New Note',
+      desc: 'Quick capture',
+      action: () => navigation.navigate('QuickNotes'),
+    },
+    {
+      icon: '📝',
+      iconBg: '#FFF7ED',
+      iconColor: '#F97316',
+      label: 'New Note',
+      desc: 'Quick capture',
+      action: () => navigation.navigate('QuickNotes', { openCreate: true }),
     },
     {
       icon: '⬆️',
@@ -462,7 +479,7 @@ function MainTabs() {
           options={{
             tabBarLabel:  () => null,
             tabBarIcon:   () => null,
-            tabBarButton: () => <QuickTaskButton onPress={openAIModalDirect} borderColor={tabBg} />,
+            tabBarButton: () => <QuickTaskButton onPress={openAIModalDirect} />,
           }}
           listeners={{
             tabPress: (e) => {
@@ -475,9 +492,6 @@ function MainTabs() {
         <Tab.Screen name="Calendar" component={CalendarScreen} />
         <Tab.Screen name="Tasks"    component={TasksScreen} />
       </Tab.Navigator>
-
-      {/* Draggable floating FAB */}
-      <DraggableFAB onPress={openAIModalDirect} />
 
       <QuickAddModal
         visible={qaVisible}
@@ -496,6 +510,22 @@ function MainTabsWithWorkspaceKey(props) {
   const { currentWorkspace } = useWorkspace();
   const workspaceKey = currentWorkspace?.id ? `ws_${currentWorkspace.id}` : 'ws_default';
   return <MainTabs key={workspaceKey} {...props} />;
+}
+
+// ── FABOverlay — ref-based, never uses navigation hooks (crash-proof) ────────
+const FAB_SCREENS = ['Main', 'Docs', 'QuickNotes', 'MyWork', 'TeamManagement', 'Reports'];
+export const navigationRef = createNavigationContainerRef();
+
+function FABOverlay({ currentRoute }) {
+  const { isAuthenticated } = useContext(AuthContext);
+  if (!isAuthenticated || !FAB_SCREENS.includes(currentRoute)) return null;
+  return (
+    <DraggableFAB
+      onPress={() => {
+        if (navigationRef.isReady()) navigationRef.navigate('QuickCreate');
+      }}
+    />
+  );
 }
 
 function RootNavigator() {
@@ -568,6 +598,7 @@ function RootNavigator() {
           <Stack.Screen name="DocumentViewer"     component={DocumentViewerScreen} options={{ statusBarTranslucent: false, statusBarColor: '#FFFFFF' }} />
           <Stack.Screen name="QuickCreate"         component={QuickCreateScreen} options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />
           <Stack.Screen name="CreateProject"       component={CreateProjectScreen} options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="CreateTask"           component={CreateTaskScreen}    options={{ presentation: 'modal', animation: 'slide_from_bottom', headerShown: false }} />
           <Stack.Screen name="InviteUser"          component={InviteUserScreen}    options={{ animation: 'slide_from_right' }} />
         </>
       )}
@@ -576,6 +607,17 @@ function RootNavigator() {
 }
 
 export default function App() {
+  const [currentRoute, setCurrentRoute] = useState(null);
+
+  const handleStateChange = () => {
+    if (!navigationRef.isReady()) return;
+    const route = navigationRef.getCurrentRoute();
+    // Top-level stack route name (Main, Docs, QuickNotes, etc.)
+    const rootState = navigationRef.getRootState();
+    const topName = rootState?.routes?.[rootState.index ?? rootState.routes.length - 1]?.name;
+    setCurrentRoute(topName || route?.name || null);
+  };
+
   return (
     <ErrorBoundary>
     <SafeAreaProvider>
@@ -583,10 +625,15 @@ export default function App() {
       <NotificationsProvider>
         <ThemeProvider>
           <WorkspaceProvider>
-            <NavigationContainer>
+            <NavigationContainer
+              ref={navigationRef}
+              onReady={handleStateChange}
+              onStateChange={handleStateChange}
+            >
               <RootNavigator />
               <NotificationToast />
             </NavigationContainer>
+            <FABOverlay currentRoute={currentRoute} />
           </WorkspaceProvider>
         </ThemeProvider>
       </NotificationsProvider>
@@ -615,18 +662,17 @@ const styles = StyleSheet.create({
     elevation: 20,
   },
   fab: {
-    width: 58, height: 58, borderRadius: 29,
+    width: 66, height: 66, borderRadius: 33,
     backgroundColor: '#2D6AE3',
     justifyContent: 'center', alignItems: 'center',
-    borderWidth: 2.5, borderColor: '#fff',
     shadowColor: '#2D6AE3',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.45,
     shadowRadius: 12,
     elevation: 14,
   },
-  fabLogo: { width: 58, height: 58, borderRadius: 29 },
-  fabIcon: { color: '#fff', fontSize: 30, fontWeight: '300', lineHeight: 34, marginTop: -1 },
+  fabLogo: { width: 66, height: 66, borderRadius: 33 },
+  fabIcon: { color: '#fff', fontSize: 34, fontWeight: '300', lineHeight: 38, marginTop: -1 },
 
   // ── Quick Add modal ──
   qaOverlay: {

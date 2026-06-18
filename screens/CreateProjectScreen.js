@@ -1,16 +1,18 @@
 import React, { useState, useEffect, useContext, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView,
-  StyleSheet, Alert, ActivityIndicator, StatusBar, Animated, Image,
+  StyleSheet, Alert, ActivityIndicator, StatusBar, Animated, Modal,
+  FlatList, Image, Keyboard, Platform,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
+import Svg, { Circle, Line } from 'react-native-svg';
 import { ThemeContext } from '../context/ThemeContext';
 import { NotificationsContext } from '../context/NotificationsContext';
 import { getUsers, createProject } from '../services/ApiService';
 
-// ── Constants (mirrors ProjectsScreen exactly) ────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 const TASK_TYPES = ['client', 'internal', 'content_creation', 'ideas'];
 const TASK_TYPE_LABELS = {
   client: 'Client',
@@ -18,122 +20,176 @@ const TASK_TYPE_LABELS = {
   content_creation: 'Content Creation',
   ideas: 'Ideas',
 };
-const ROLES = ['manager', 'annotator', 'viewer', 'admin'];
 
-const PROJECT_COLORS = ['#2D6AE3', '#7A5AF8', '#22A06B', '#E5A60E', '#E5484D', '#0EA5E9', '#10B981', '#F97316'];
+const PROJECT_COLORS = [
+  '#3B72EE', // blue (default, matches accent)
+  '#22A06B', // green
+  '#E5A60E', // yellow
+  '#7A5AF8', // purple
+  '#E5484D', // red
+  '#F97316', // orange
+  '#0EA5E9', // sky
+  '#10B981', // emerald
+];
 
-// ── Member row component ──────────────────────────────────────────────────────
-function MemberRow({ member, index, users, isDark, onChangeUser, onChangeRole, onRemove }) {
-  const [userSearch, setUserSearch] = useState('');
-  const [userDropOpen, setUserDropOpen] = useState(false);
-  const [roleDropOpen, setRoleDropOpen] = useState(false);
+// ── Helper: user display name ─────────────────────────────────────────────────
+function displayName(u) {
+  return `${u.first_name || ''} ${u.last_name || ''}`.trim() || u.username || '?';
+}
 
-  const cardBg  = isDark ? '#1E1E2C' : '#FFFFFF';
-  const inputBg = isDark ? '#252538' : '#F5F5F7';
-  const bdr     = isDark ? '#303048' : '#E0E0EC';
-  const txt     = isDark ? '#F0F0F8' : '#18182E';
-  const sub     = isDark ? '#8080A0' : '#7070A0';
-  const accent  = '#4ECDC4';
+// ── Helper: initials from user ────────────────────────────────────────────────
+function initials(u) {
+  const n = displayName(u);
+  const parts = n.split(' ');
+  return parts.length >= 2
+    ? (parts[0][0] + parts[1][0]).toUpperCase()
+    : n.slice(0, 2).toUpperCase();
+}
 
-  const filtered = users.filter(u => {
-    const name = `${u.first_name || ''} ${u.last_name || ''}`.trim() || u.username || '';
-    return name.toLowerCase().includes(userSearch.toLowerCase());
-  });
+// ── Avatar chip colors (cycle by index) ──────────────────────────────────────
+const AVATAR_COLORS = ['#3B72EE', '#7A5AF8', '#22A06B', '#E5A60E', '#E5484D', '#0EA5E9'];
 
-  const displayName = member.user
-    ? (`${member.user.first_name || ''} ${member.user.last_name || ''}`.trim() || member.user.username)
-    : '';
+// ── Member picker bottom sheet ────────────────────────────────────────────────
+function MemberPickerSheet({ visible, users, selectedIds, onToggle, onDone, isDark }) {
+  const [search, setSearch] = useState('');
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const cardBg = isDark ? '#1A1A28' : '#FFFFFF';
+  const inputBg = isDark ? '#252538' : '#F0F0F0';
+  const bdr = isDark ? '#303048' : '#EBEBEB';
+  const txt = isDark ? '#F0F0F8' : '#111827';
+  const sub = isDark ? '#8080A0' : '#9CA3AF';
+  const accent = '#3B72EE';
+
+  useEffect(() => {
+    const show = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      e => setKeyboardHeight(e.endCoordinates.height)
+    );
+    const hide = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => setKeyboardHeight(0)
+    );
+    return () => { show.remove(); hide.remove(); };
+  }, []);
+
+  // Reset search when sheet closes
+  useEffect(() => {
+    if (!visible) setSearch('');
+  }, [visible]);
+
+  const filtered = users.filter(u =>
+    displayName(u).toLowerCase().includes(search.toLowerCase())
+  );
 
   return (
-    <View style={[styles.memberRow, { backgroundColor: cardBg, borderColor: bdr }]}>
-      {/* User picker */}
-      <View style={{ flex: 1, marginRight: 8 }}>
-        <Text style={[styles.fieldLabel, { color: sub }]}>MEMBER</Text>
-        <TouchableOpacity
-          style={[styles.dropTrigger, { backgroundColor: inputBg, borderColor: userDropOpen ? accent : bdr }]}
-          onPress={() => { setUserDropOpen(o => !o); setRoleDropOpen(false); }}
-        >
-          <Text style={[styles.dropTriggerText, { color: member.user ? txt : sub }]} numberOfLines={1}>
-            {displayName || 'Select member'}
-          </Text>
-          <Text style={{ color: sub, fontSize: 10 }}>{userDropOpen ? '▲' : '▾'}</Text>
-        </TouchableOpacity>
-        {userDropOpen && (
-          <View style={[styles.dropList, { backgroundColor: cardBg, borderColor: accent }]}>
+    <Modal visible={visible} transparent animationType="slide">
+      <View style={sheet.overlay}>
+        <View style={[
+          sheet.container,
+          { backgroundColor: cardBg, paddingBottom: keyboardHeight || 34, flex: 1 },
+        ]}>
+          {/* Handle */}
+          <View style={[sheet.handle, { backgroundColor: bdr }]} />
+
+          {/* Title row */}
+          <View style={sheet.titleRow}>
+            <Text style={[sheet.title, { color: txt }]}>Add Members</Text>
+            <TouchableOpacity onPress={onDone} style={[sheet.doneBtn, { backgroundColor: accent }]}>
+              <Text style={sheet.doneBtnText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Search */}
+          <View style={[sheet.searchWrap, { backgroundColor: inputBg, borderColor: bdr }]}>
+            <Svg width={16} height={16} viewBox="0 0 24 24" fill="none" style={{ marginRight: 8 }}>
+              <Circle cx="11" cy="11" r="7" stroke={sub} strokeWidth="2" />
+              <Line x1="16.5" y1="16.5" x2="22" y2="22" stroke={sub} strokeWidth="2" strokeLinecap="round" />
+            </Svg>
             <TextInput
-              value={userSearch}
-              onChangeText={setUserSearch}
-              placeholder="Search..."
+              value={search}
+              onChangeText={setSearch}
+              placeholder="Search members..."
               placeholderTextColor={sub}
-              style={[styles.dropSearch, { backgroundColor: inputBg, color: txt, borderColor: bdr }]}
+              style={[sheet.searchInput, { color: txt }]}
             />
-            <ScrollView nestedScrollEnabled style={{ maxHeight: 150 }}>
-              {filtered.map(u => {
-                const name = `${u.first_name || ''} ${u.last_name || ''}`.trim() || u.username;
-                return (
-                  <TouchableOpacity
-                    key={u.id}
-                    style={[styles.dropItem, { borderBottomColor: bdr }]}
-                    onPress={() => { onChangeUser(u); setUserDropOpen(false); setUserSearch(''); }}
-                  >
-                    <View style={[styles.miniAvatar, { backgroundColor: accent + '33' }]}>
-                      <Text style={[styles.miniAvatarText, { color: accent }]}>
-                        {(name[0] || 'U').toUpperCase()}
-                      </Text>
-                    </View>
-                    <View>
-                      <Text style={[styles.dropItemText, { color: txt }]}>{name}</Text>
-                      {u.email ? <Text style={{ fontSize: 10, color: sub }}>{u.email}</Text> : null}
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
-              {filtered.length === 0 && (
-                <Text style={[styles.dropEmpty, { color: sub }]}>No members found</Text>
-              )}
-            </ScrollView>
           </View>
-        )}
-      </View>
 
-      {/* Role picker */}
-      <View style={{ width: 110 }}>
-        <Text style={[styles.fieldLabel, { color: sub }]}>ROLE</Text>
-        <TouchableOpacity
-          style={[styles.dropTrigger, { backgroundColor: inputBg, borderColor: roleDropOpen ? accent : bdr }]}
-          onPress={() => { setRoleDropOpen(o => !o); setUserDropOpen(false); }}
-        >
-          <Text style={[styles.dropTriggerText, { color: member.role ? txt : sub, fontSize: 12 }]} numberOfLines={1}>
-            {member.role ? member.role.charAt(0).toUpperCase() + member.role.slice(1) : 'Role'}
-          </Text>
-          <Text style={{ color: sub, fontSize: 10 }}>{roleDropOpen ? '▲' : '▾'}</Text>
-        </TouchableOpacity>
-        {roleDropOpen && (
-          <View style={[styles.dropList, { backgroundColor: cardBg, borderColor: accent, right: 0, left: 'auto' }]}>
-            {ROLES.map(r => (
-              <TouchableOpacity
-                key={r}
-                style={[styles.dropItem, { borderBottomColor: bdr }]}
-                onPress={() => { onChangeRole(r); setRoleDropOpen(false); }}
-              >
-                <Text style={[styles.dropItemText, { color: txt }]}>
-                  {r.charAt(0).toUpperCase() + r.slice(1)}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
+          {/* List */}
+          <FlatList
+            data={filtered}
+            keyExtractor={u => String(u.id)}
+            style={{ flex: 1, minHeight: 200 }}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="none"
+            renderItem={({ item: u, index }) => {
+              const selected = selectedIds.includes(u.id);
+              const avatarColor = AVATAR_COLORS[index % AVATAR_COLORS.length];
+              return (
+                <TouchableOpacity
+                  onPress={() => onToggle(u)}
+                  style={[sheet.row, { borderBottomColor: bdr }]}
+                  activeOpacity={0.7}
+                >
+                  <View style={[sheet.avatar, { backgroundColor: avatarColor }]}>
+                    <Text style={sheet.avatarText}>{initials(u)}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[sheet.rowName, { color: txt }]}>{displayName(u)}</Text>
+                    {u.role && <Text style={[sheet.rowRole, { color: sub }]}>{u.role}</Text>}
+                  </View>
+                  <View style={[
+                    sheet.checkbox,
+                    selected
+                      ? { backgroundColor: accent, borderColor: accent }
+                      : { backgroundColor: 'transparent', borderColor: bdr },
+                  ]}>
+                    {selected && <Text style={sheet.checkmark}>✓</Text>}
+                  </View>
+                </TouchableOpacity>
+              );
+            }}
+            ListEmptyComponent={
+              <Text style={[sheet.empty, { color: sub }]}>No members found</Text>
+            }
+          />
+        </View>
       </View>
-
-      {/* Remove button */}
-      {index > 0 && (
-        <TouchableOpacity onPress={onRemove} style={styles.removeBtn}>
-          <Text style={{ color: '#EF4444', fontSize: 18, fontWeight: '700' }}>×</Text>
-        </TouchableOpacity>
-      )}
-    </View>
+    </Modal>
   );
 }
+
+const sheet = StyleSheet.create({
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
+  container: { borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '80%', minHeight: 360 },
+  handle: { width: 40, height: 4, borderRadius: 2, alignSelf: 'center', marginTop: 10, marginBottom: 4 },
+  titleRow: {
+    flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 14,
+  },
+  title: { fontSize: 17, fontWeight: '700' },
+  doneBtn: { borderRadius: 10, paddingHorizontal: 16, paddingVertical: 7 },
+  doneBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  searchWrap: {
+    flexDirection: 'row', alignItems: 'center',
+    marginHorizontal: 16, borderRadius: 12, borderWidth: 1,
+    paddingHorizontal: 12, paddingVertical: 8, marginBottom: 8,
+  },
+  searchInput: { flex: 1, fontSize: 14, paddingVertical: 0 },
+  row: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 20, paddingVertical: 12, borderBottomWidth: 1,
+  },
+  avatar: { width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
+  avatarText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+  rowName: { fontSize: 14, fontWeight: '600' },
+  rowRole: { fontSize: 12, marginTop: 1 },
+  checkbox: {
+    width: 24, height: 24, borderRadius: 12, borderWidth: 2,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  checkmark: { color: '#fff', fontSize: 12, fontWeight: '800' },
+  empty: { textAlign: 'center', paddingVertical: 24, fontSize: 14 },
+});
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 export default function CreateProjectScreen() {
@@ -143,40 +199,44 @@ export default function CreateProjectScreen() {
   const { addNotification } = useContext(NotificationsContext);
   const isDark = theme === 'Dark';
 
-  // Theme
-  const bgColor   = isDark ? '#0D0D14' : '#F5F5FA';
-  const cardBg    = isDark ? '#1A1A28' : '#FFFFFF';
-  const inputBg   = isDark ? '#252538' : '#F5F5F7';
-  const bdr       = isDark ? '#303048' : '#E0E0EC';
-  const txt       = isDark ? '#F0F0F8' : '#18182E';
-  const sub       = isDark ? '#8080A0' : '#7070A0';
-  const accent    = '#4ECDC4';
+  // Theme tokens
+  const bgColor  = isDark ? '#0D0D14' : '#FFFFFF';
+  const cardBg   = isDark ? '#1A1A28' : '#FFFFFF';
+  const inputBg  = isDark ? '#252538' : '#F0F0F0';
+  const bdr      = isDark ? '#303048' : 'transparent';
+  const txt      = isDark ? '#F0F0F8' : '#111827';
+  const sub      = isDark ? '#8080A0' : '#9CA3AF';
+  const accent   = '#3B72EE';
 
   // Form state
-  const [projectName,   setProjectName]   = useState('');
-  const [description,   setDescription]   = useState('');
-  const [taskType,      setTaskType]      = useState(null);
-  const [color,         setColor]         = useState(PROJECT_COLORS[0]);
-  const [members,       setMembers]       = useState([{ user: null, role: null }]);
-  const [users,         setUsers]         = useState([]);
-  const [saving,        setSaving]        = useState(false);
-  const [typeDropOpen,  setTypeDropOpen]  = useState(false);
+  const [projectName, setProjectName]   = useState('');
+  const [description, setDescription]   = useState('');
+  const [taskType,    setTaskType]      = useState(null);
+  const [color,       setColor]         = useState(PROJECT_COLORS[0]);
+  const [privacy,     setPrivacy]       = useState('workspace');
+  const [selectedMembers, setSelectedMembers] = useState([]);
+  const [users,       setUsers]         = useState([]);
+  const [saving,      setSaving]        = useState(false);
+  const [memberSheetOpen, setMemberSheetOpen] = useState(false);
   const [projectImages, setProjectImages] = useState([]);
 
-  // Fade-in animation
+  // Fade-in
   const fadeAnim = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     getUsers().then(setUsers).catch(() => {});
     Animated.timing(fadeAnim, { toValue: 1, duration: 280, useNativeDriver: true }).start();
   }, []);
 
-  // Member helpers
-  const addMemberRow    = () => setMembers(m => [...m, { user: null, role: null }]);
-  const removeMemberRow = (i) => setMembers(m => m.filter((_, idx) => idx !== i));
-  const setMemberUser   = (i, user) => setMembers(m => m.map((r, idx) => idx === i ? { ...r, user } : r));
-  const setMemberRole   = (i, role) => setMembers(m => m.map((r, idx) => idx === i ? { ...r, role } : r));
+  const toggleMember = (user) => {
+    setSelectedMembers(prev =>
+      prev.find(m => m.id === user.id)
+        ? prev.filter(m => m.id !== user.id)
+        : [...prev, user]
+    );
+  };
 
-  // Camera / gallery for attach images
+  const selectedIds = selectedMembers.map(m => m.id);
+
   const openCamera = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') { Alert.alert('Permission Denied', 'Camera access is needed.'); return; }
@@ -193,18 +253,16 @@ export default function CreateProjectScreen() {
       setProjectImages(p => [...p, ...result.assets.map(a => a.uri)]);
   };
 
-  // Submit — same body shape as ProjectsScreen.addProject
   const handleCreate = async () => {
     if (!projectName.trim()) { Alert.alert('Required', 'Enter a project name.'); return; }
-    if (!taskType)           { Alert.alert('Required', 'Select a task type.'); return; }
+    if (!taskType)            { Alert.alert('Required', 'Select a task type.'); return; }
 
-    const validMembers = members.filter(m => m.user && m.role);
     const body = {
       name:             projectName.trim(),
       task_type:        taskType,
       description:      description.trim() || undefined,
-      assigned_members: validMembers.map(m => ({ user_id: m.user.id, role: m.role })),
-      project_settings: { priority: 'high' },
+      assigned_members: selectedMembers.map(m => ({ user_id: m.id, role: 'viewer' })),
+      project_settings: { priority: 'high', privacy },
     };
 
     setSaving(true);
@@ -223,7 +281,7 @@ export default function CreateProjectScreen() {
     }
   };
 
-  const initials = (projectName.trim()[0] || 'P').toUpperCase();
+  const projectInitials = (projectName.trim()[0] || 'P').toUpperCase();
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: bgColor }]} edges={['top', 'left', 'right']}>
@@ -232,157 +290,200 @@ export default function CreateProjectScreen() {
       {/* ── Header ── */}
       <View style={[styles.header, { backgroundColor: cardBg, borderBottomColor: bdr }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} activeOpacity={0.7}>
-          <Text style={[styles.backText, { color: txt }]}>‹</Text>
+          <Text style={[styles.backChevron, { color: txt }]}>‹</Text>
         </TouchableOpacity>
         <Text style={[styles.headerTitle, { color: txt }]}>New Project</Text>
-        <TouchableOpacity
-          onPress={handleCreate}
-          disabled={saving}
-          style={[styles.saveBtn, { backgroundColor: saving ? '#9090B0' : '#1A1A2E' }]}
-          activeOpacity={0.8}
-        >
+        <TouchableOpacity onPress={handleCreate} disabled={saving} activeOpacity={0.8}>
           {saving
-            ? <ActivityIndicator size="small" color="#fff" />
-            : <Text style={styles.saveBtnText}>Create</Text>
+            ? <ActivityIndicator size="small" color={accent} />
+            : <Text style={[styles.saveText, { color: accent }]}>Save</Text>
           }
         </TouchableOpacity>
       </View>
 
       <Animated.ScrollView
         style={{ flex: 1, opacity: fadeAnim }}
-        contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 40 }]}
+        contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 32 }]}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
+
         {/* ── Project icon preview ── */}
-        <View style={styles.iconPreviewWrap}>
-          <View style={[styles.iconPreview, { backgroundColor: color + '22' }]}>
-            <Text style={[styles.iconPreviewText, { color }]}>{initials}</Text>
+        <View style={styles.iconWrap}>
+          <View style={[styles.iconBox, { backgroundColor: color + '22' }]}>
+            <Text style={[styles.iconLetter, { color }]}>{projectInitials}</Text>
           </View>
-          <Text style={[styles.iconHint, { color: sub }]}>
-            Pick a colour below
-          </Text>
+          <View style={[styles.cameraBadge, { backgroundColor: cardBg, borderColor: bdr }]}>
+            <Text style={{ fontSize: 13 }}>+</Text>
+          </View>
         </View>
 
-        {/* ── Colour swatches ── */}
+        {/* ── Color swatches ── */}
         <View style={styles.colorRow}>
           {PROJECT_COLORS.map(c => (
             <TouchableOpacity
               key={c}
               onPress={() => setColor(c)}
-              style={[
-                styles.colorSwatch,
-                { backgroundColor: c },
-                color === c && styles.colorSwatchActive,
-              ]}
-            >
-              {color === c && <Text style={styles.colorCheck}>✓</Text>}
-            </TouchableOpacity>
+              style={[styles.swatch, { backgroundColor: c }, color === c && styles.swatchActive]}
+              activeOpacity={0.85}
+            />
           ))}
         </View>
 
-        {/* ── Project name ── */}
-        <View style={[styles.card, { backgroundColor: cardBg, borderColor: bdr }]}>
-          <Text style={[styles.fieldLabel, { color: sub }]}>PROJECT NAME *</Text>
-          <TextInput
-            value={projectName}
-            onChangeText={setProjectName}
-            placeholder="Enter project name"
-            placeholderTextColor={sub}
-            style={[styles.input, { backgroundColor: inputBg, borderColor: bdr, color: txt }]}
-          />
+        {/* ── Project Name ── */}
+        <View style={styles.fieldGroup}>
+          <Text style={[styles.fieldLabel, { color: sub }]}>Project name</Text>
+          <View style={[styles.inputWrap, { backgroundColor: inputBg, borderColor: bdr }]}>
+            <TextInput
+              value={projectName}
+              onChangeText={setProjectName}
+              placeholderTextColor={sub}
+              style={[styles.inputField, { color: txt }]}
+            />
+          </View>
+        </View>
 
-          <Text style={[styles.fieldLabel, { color: sub, marginTop: 4 }]}>DESCRIPTION</Text>
+        {/* ── Description ── */}
+        <View style={[styles.textareaWrap, { backgroundColor: inputBg, borderColor: bdr }]}>
+          <Text style={[styles.textareaLabel, { color: sub }]}>Description</Text>
           <TextInput
             value={description}
             onChangeText={setDescription}
             placeholder="What's this project about?"
             placeholderTextColor={sub}
             multiline
-            style={[styles.textarea, { backgroundColor: inputBg, borderColor: bdr, color: txt }]}
+            style={[styles.textarea, { color: txt }]}
           />
         </View>
 
-        {/* ── Task type ── */}
-        <View style={[styles.card, { backgroundColor: cardBg, borderColor: bdr }]}>
-          <Text style={[styles.fieldLabel, { color: sub }]}>TASK TYPE *</Text>
-          <TouchableOpacity
-            style={[styles.dropTrigger, { backgroundColor: inputBg, borderColor: typeDropOpen ? accent : bdr }]}
-            onPress={() => setTypeDropOpen(o => !o)}
-          >
-            <Text style={[styles.dropTriggerText, { color: taskType ? txt : sub }]}>
-              {taskType ? TASK_TYPE_LABELS[taskType] : 'Select task type'}
-            </Text>
-            <Text style={{ color: sub, fontSize: 11 }}>{typeDropOpen ? '▲' : '▾'}</Text>
-          </TouchableOpacity>
-          {typeDropOpen && (
-            <View style={[styles.dropList, { backgroundColor: cardBg, borderColor: accent, position: 'relative', marginTop: 4 }]}>
-              {TASK_TYPES.map(t => (
-                <TouchableOpacity
-                  key={t}
-                  style={[styles.dropItem, { borderBottomColor: bdr }]}
-                  onPress={() => { setTaskType(t); setTypeDropOpen(false); }}
-                >
-                  <Text style={[styles.dropItemText, { color: taskType === t ? accent : txt, fontWeight: taskType === t ? '700' : '500' }]}>
-                    {TASK_TYPE_LABELS[t]}
-                  </Text>
-                  {taskType === t && <Text style={{ color: accent }}>✓</Text>}
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
-        </View>
-
-        {/* ── Members ── */}
-        <View style={[styles.card, { backgroundColor: cardBg, borderColor: bdr }]}>
-          <View style={styles.sectionHeader}>
-            <Text style={[styles.fieldLabel, { color: sub, marginBottom: 0 }]}>MEMBERS</Text>
-            <TouchableOpacity onPress={addMemberRow} style={[styles.addMemberBtn, { borderColor: accent }]}>
-              <Text style={[styles.addMemberText, { color: accent }]}>+ Add</Text>
-            </TouchableOpacity>
-          </View>
-
-          {members.map((member, i) => (
-            <MemberRow
-              key={i}
-              index={i}
-              member={member}
-              users={users}
-              isDark={isDark}
-              onChangeUser={(u) => setMemberUser(i, u)}
-              onChangeRole={(r) => setMemberRole(i, r)}
-              onRemove={() => removeMemberRow(i)}
-            />
-          ))}
-
-          {members.length === 0 && (
-            <Text style={[styles.emptyHint, { color: sub }]}>No members added yet</Text>
-          )}
-        </View>
-
-        {/* ── Attach Images ── */}
-        <View style={[styles.card, { backgroundColor: cardBg, borderColor: bdr }]}>
-          <Text style={[styles.fieldLabel, { color: sub }]}>ATTACH IMAGES</Text>
-          <View style={styles.attachRow}>
-            {[
-              { icon: '📷', label: 'Camera',  sub2: 'Take a photo',     onPress: openCamera },
-              { icon: '🖼️', label: 'Gallery', sub2: 'Pick from photos', onPress: openGallery },
-            ].map((btn, i) => (
+        {/* ── Task Type — chips ── */}
+        <View style={styles.fieldGroup}>
+          <Text style={[styles.fieldLabel, { color: sub }]}>
+            Task type <Text style={{ color: '#EF4444' }}>*</Text>
+          </Text>
+          <View style={styles.typeChipsRow}>
+            {TASK_TYPES.map(t => (
               <TouchableOpacity
-                key={i}
-                style={[styles.attachBtn, { backgroundColor: isDark ? '#252538' : '#F5F5F7', borderColor: bdr }]}
-                onPress={btn.onPress}
+                key={t}
+                onPress={() => setTaskType(t)}
+                style={[
+                  styles.typeChip,
+                  {
+                    borderColor: taskType === t ? accent : inputBg,
+                    backgroundColor: taskType === t ? accent + '15' : inputBg,
+                  },
+                ]}
+                activeOpacity={0.75}
               >
-                <View style={[styles.attachIconWrap, { backgroundColor: cardBg, borderColor: bdr }]}>
-                  <Text style={{ fontSize: 22 }}>{btn.icon}</Text>
-                </View>
-                <Text style={[styles.attachLabel, { color: txt }]}>{btn.label}</Text>
-                <Text style={[styles.attachSub, { color: sub }]}>{btn.sub2}</Text>
+                <Text style={[styles.typeChipText, { color: taskType === t ? accent : sub }]}>
+                  {TASK_TYPE_LABELS[t]}
+                </Text>
               </TouchableOpacity>
             ))}
           </View>
+        </View>
+
+        {/* ── Members ── */}
+        <View style={styles.membersSection}>
+          <View style={styles.membersTitleRow}>
+            <Text style={[styles.sectionTitle, { color: txt }]}>Members</Text>
+            <TouchableOpacity onPress={() => setMemberSheetOpen(true)} activeOpacity={0.7}>
+              <Text style={[styles.addText, { color: accent }]}>+ Add</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={[styles.membersCard, { backgroundColor: inputBg, borderColor: bdr }]}>
+            {selectedMembers.length > 0 ? (
+              <View style={styles.memberChipsWrap}>
+                {selectedMembers.map((m, idx) => {
+                  const avatarColor = AVATAR_COLORS[idx % AVATAR_COLORS.length];
+                  return (
+                    <View key={m.id} style={styles.memberChip}>
+                      <View style={[styles.chipAvatar, { backgroundColor: avatarColor }]}>
+                        <Text style={styles.chipAvatarText}>{initials(m)}</Text>
+                      </View>
+                      <Text style={[styles.chipName, { color: txt }]}>
+                        {displayName(m).split(' ')[0]}
+                      </Text>
+                    </View>
+                  );
+                })}
+                <TouchableOpacity
+                  onPress={() => setMemberSheetOpen(true)}
+                  style={[styles.inviteBtn, { borderColor: bdr }]}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.inviteBtnText, { color: sub }]}>+ Invite</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <TouchableOpacity
+                onPress={() => setMemberSheetOpen(true)}
+                style={styles.emptyMembersBtn}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.emptyMembersText, { color: sub }]}>Tap + Add to invite team members</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+
+        {/* ── Privacy ── */}
+        <View style={styles.privacySection}>
+          <Text style={[styles.sectionTitle, { color: txt }]}>Privacy</Text>
+
+          <View style={[styles.privacyCard, { backgroundColor: inputBg, borderColor: bdr }]}>
+            <TouchableOpacity
+              onPress={() => setPrivacy('workspace')}
+              style={[styles.privacyRow, { borderBottomColor: bdr }]}
+              activeOpacity={0.75}
+            >
+              <View style={[styles.radio, { borderColor: privacy === 'workspace' ? accent : bdr }]}>
+                {privacy === 'workspace' && <View style={[styles.radioDot, { backgroundColor: accent }]} />}
+              </View>
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={[styles.privacyTitle, { color: txt }]}>Workspace</Text>
+                <Text style={[styles.privacySub, { color: sub }]}>Everyone in Dyuksa can see and join</Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => setPrivacy('private')}
+              style={styles.privacyRow}
+              activeOpacity={0.75}
+            >
+              <View style={[styles.radio, { borderColor: privacy === 'private' ? accent : bdr }]}>
+                {privacy === 'private' && <View style={[styles.radioDot, { backgroundColor: accent }]} />}
+              </View>
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={[styles.privacyTitle, { color: txt }]}>Private</Text>
+                <Text style={[styles.privacySub, { color: sub }]}>Only invited members have access</Text>
+              </View>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* ── Attachments ── */}
+        <View style={styles.attachSection}>
+          <Text style={[styles.sectionTitle, { color: txt }]}>Attachments</Text>
+
+          <TouchableOpacity
+            onPress={openGallery}
+            style={[styles.uploadBox, { borderColor: '#D8DBEA', backgroundColor: inputBg }]}
+            activeOpacity={0.7}
+          >
+            {/* Upload icon SVG-style using Text */}
+            <View style={styles.uploadIconWrap}>
+              <Text style={[styles.uploadArrow, { color: sub }]}>↑</Text>
+              <View style={[styles.uploadTray, { borderColor: sub }]} />
+            </View>
+            <Text style={[styles.uploadTitle, { color: txt }]}>Upload files</Text>
+            <Text style={[styles.uploadSub, { color: sub }]}>PNG, PDF, DOCX up to 20MB</Text>
+          </TouchableOpacity>
+
+          {/* Previews */}
           {projectImages.length > 0 && (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 10 }}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 12 }}>
               {projectImages.map((uri, i) => (
                 <View key={i} style={{ position: 'relative', marginRight: 10 }}>
                   <Image source={{ uri }} style={[styles.previewImg, { borderColor: bdr }]} />
@@ -398,19 +499,12 @@ export default function CreateProjectScreen() {
           )}
         </View>
 
-        {/* ── Privacy note ── */}
-        <View style={[styles.infoBox, { backgroundColor: isDark ? 'rgba(78,205,196,0.08)' : 'rgba(78,205,196,0.06)', borderColor: 'rgba(78,205,196,0.25)' }]}>
-          <Text style={{ fontSize: 12, color: accent, lineHeight: 18 }}>
-            ✦  Project will be visible to all assigned members. You can update settings after creation.
-          </Text>
-        </View>
-
         {/* ── Create button ── */}
         <TouchableOpacity
           onPress={handleCreate}
           disabled={saving}
           activeOpacity={0.85}
-          style={[styles.createBtn, { backgroundColor: saving ? '#9090B0' : '#1A1A2E' }]}
+          style={[styles.createBtn, { backgroundColor: saving ? '#9090B0' : accent }]}
         >
           {saving
             ? <ActivityIndicator color="#fff" />
@@ -418,6 +512,16 @@ export default function CreateProjectScreen() {
           }
         </TouchableOpacity>
       </Animated.ScrollView>
+
+      {/* ── Member picker sheet ── */}
+      <MemberPickerSheet
+        visible={memberSheetOpen}
+        users={users}
+        selectedIds={selectedIds}
+        onToggle={toggleMember}
+        onDone={() => setMemberSheetOpen(false)}
+        isDark={isDark}
+      />
     </SafeAreaView>
   );
 }
@@ -430,151 +534,131 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16, paddingVertical: 12,
-    borderBottomWidth: 1,
+    borderBottomWidth: 0,
   },
-  backBtn: { width: 36, height: 36, justifyContent: 'center' },
-  backText: { fontSize: 32, fontWeight: '300', marginTop: -4 },
+  backBtn:     { width: 36, height: 36, justifyContent: 'center' },
+  backChevron: { fontSize: 32, fontWeight: '300', marginTop: -4 },
   headerTitle: { fontSize: 17, fontWeight: '700', letterSpacing: -0.3 },
-  saveBtn: {
-    paddingHorizontal: 16, paddingVertical: 8,
-    borderRadius: 10, minWidth: 72, alignItems: 'center',
-  },
-  saveBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
+  saveText:    { fontSize: 15, fontWeight: '600' },
 
-  scroll: { padding: 16 },
+  scroll: { paddingHorizontal: 20, paddingTop: 16 },
 
   // Icon preview
-  iconPreviewWrap: { alignItems: 'center', marginBottom: 16 },
-  iconPreview: {
+  iconWrap: { alignItems: 'center', marginBottom: 20, alignSelf: 'center' },
+  iconBox: {
     width: 88, height: 88, borderRadius: 22,
-    justifyContent: 'center', alignItems: 'center', marginBottom: 8,
+    justifyContent: 'center', alignItems: 'center',
   },
-  iconPreviewText: { fontSize: 38, fontWeight: '800' },
-  iconHint: { fontSize: 12, fontWeight: '500' },
+  iconLetter: { fontSize: 38, fontWeight: '800' },
+  cameraBadge: {
+    position: 'absolute', bottom: -4, right: -4,
+    width: 26, height: 26, borderRadius: 13,
+    justifyContent: 'center', alignItems: 'center',
+    borderWidth: 1,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08, shadowRadius: 3, elevation: 2,
+  },
 
   // Color swatches
-  colorRow: {
-    flexDirection: 'row', justifyContent: 'center',
-    flexWrap: 'wrap', gap: 10, marginBottom: 20,
-  },
-  colorSwatch: {
-    width: 32, height: 32, borderRadius: 16,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  colorSwatchActive: {
-    borderWidth: 2.5, borderColor: '#fff',
+  colorRow: { flexDirection: 'row', justifyContent: 'center', gap: 12, marginBottom: 28 },
+  swatch: { width: 34, height: 34, borderRadius: 17 },
+  swatchActive: {
+    borderWidth: 3, borderColor: '#fff',
     shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3, shadowRadius: 4, elevation: 4,
-  },
-  colorCheck: { color: '#fff', fontSize: 14, fontWeight: '800' },
-
-  // Cards
-  card: {
-    borderRadius: 16, borderWidth: 1,
-    padding: 16, marginBottom: 14,
-  },
-  fieldLabel: {
-    fontSize: 10, fontWeight: '700',
-    letterSpacing: 1, marginBottom: 8,
-  },
-  input: {
-    borderRadius: 10, borderWidth: 1.5,
-    paddingHorizontal: 14, height: 48,
-    fontSize: 14, marginBottom: 14,
-  },
-  textarea: {
-    borderRadius: 10, borderWidth: 1.5,
-    paddingHorizontal: 14, paddingVertical: 12,
-    fontSize: 14, minHeight: 80, textAlignVertical: 'top',
+    shadowOpacity: 0.22, shadowRadius: 4, elevation: 5,
   },
 
-  // Dropdowns
-  dropTrigger: {
+  // Fields
+  fieldGroup: { marginBottom: 14 },
+  fieldLabel: { fontSize: 13, fontWeight: '500', marginBottom: 7, color: '#8A8FAB' },
+
+  inputWrap: {
+    borderRadius: 14, borderWidth: 0,
+    paddingHorizontal: 16, height: 52, justifyContent: 'center',
+  },
+  inputField: { fontSize: 15, paddingVertical: 0 },
+
+  textareaWrap: {
+    borderRadius: 14, borderWidth: 0,
+    paddingHorizontal: 16, paddingTop: 14, paddingBottom: 14,
+    marginBottom: 14, minHeight: 110,
+  },
+  textareaLabel: { fontSize: 13, fontWeight: '500', marginBottom: 8, color: '#8A8FAB' },
+  textarea: { fontSize: 15, minHeight: 70, textAlignVertical: 'top', paddingVertical: 0 },
+
+  // Task type chips
+  typeChipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  typeChip: {
+    borderWidth: 1.5, borderRadius: 20,
+    paddingHorizontal: 14, paddingVertical: 7,
+  },
+  typeChipText: { fontSize: 13, fontWeight: '600' },
+
+  // Members
+  membersSection: { marginBottom: 22 },
+  membersTitleRow: {
     flexDirection: 'row', alignItems: 'center',
-    justifyContent: 'space-between',
-    borderRadius: 10, borderWidth: 1.5,
-    paddingHorizontal: 12, height: 46,
+    justifyContent: 'space-between', marginBottom: 10,
   },
-  dropTriggerText: { fontSize: 13, flex: 1 },
-  dropList: {
-    borderRadius: 10, borderWidth: 1.5,
-    marginTop: 4, zIndex: 100,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1, shadowRadius: 8, elevation: 8,
+  sectionTitle: { fontSize: 16, fontWeight: '700' },
+  addText: { fontSize: 14, fontWeight: '600' },
+  membersCard: { borderRadius: 16, borderWidth: 0, padding: 16, minHeight: 54 },
+  memberChipsWrap: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 10 },
+  memberChip: { alignItems: 'center', gap: 4 },
+  chipAvatar: { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' },
+  chipAvatarText: { color: '#fff', fontSize: 13, fontWeight: '700' },
+  chipName: { fontSize: 11, fontWeight: '500', textAlign: 'center' },
+  inviteBtn: {
+    borderWidth: 0, borderRadius: 20,
+    paddingHorizontal: 12, paddingVertical: 6, marginTop: 8,
   },
-  dropSearch: {
-    margin: 8, borderRadius: 8, borderWidth: 1,
-    paddingHorizontal: 10, height: 36, fontSize: 13,
-  },
-  dropItem: {
+  inviteBtnText: { fontSize: 13, fontWeight: '600' },
+  emptyMembersBtn: { paddingVertical: 8, alignItems: 'center' },
+  emptyMembersText: { fontSize: 14 },
+
+  // Privacy
+  privacySection: { marginBottom: 22 },
+  privacyCard: { borderRadius: 16, borderWidth: 0, overflow: 'hidden', marginTop: 10 },
+  privacyRow: {
     flexDirection: 'row', alignItems: 'center',
-    gap: 10, paddingHorizontal: 14, paddingVertical: 11,
-    borderBottomWidth: 1,
+    paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 0,
   },
-  dropItemText: { fontSize: 13, fontWeight: '500', flex: 1 },
-  dropEmpty: { fontSize: 12, fontStyle: 'italic', padding: 12, textAlign: 'center' },
+  radio: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, justifyContent: 'center', alignItems: 'center' },
+  radioDot: { width: 10, height: 10, borderRadius: 5 },
+  privacyTitle: { fontSize: 15, fontWeight: '600', marginBottom: 2 },
+  privacySub: { fontSize: 12 },
 
-  // Member row
-  memberRow: {
-    flexDirection: 'row', alignItems: 'flex-end',
-    borderRadius: 12, borderWidth: 1,
-    padding: 12, marginTop: 10,
+  // Attachments
+  attachSection: { marginBottom: 22 },
+  uploadBox: {
+    marginTop: 10, borderWidth: 1.5, borderRadius: 16,
+    borderStyle: 'dashed', paddingVertical: 32,
+    alignItems: 'center', gap: 6,
   },
-  miniAvatar: {
-    width: 28, height: 28, borderRadius: 14,
-    justifyContent: 'center', alignItems: 'center',
+  uploadIconWrap: { alignItems: 'center', marginBottom: 4 },
+  uploadArrow: { fontSize: 26, lineHeight: 28, fontWeight: '300' },
+  uploadTray: {
+    width: 28, height: 6, borderWidth: 1.5,
+    borderTopWidth: 0, borderRadius: 2,
+    marginTop: -4,
   },
-  miniAvatarText: { fontSize: 11, fontWeight: '700' },
-  removeBtn: {
-    width: 32, height: 32, marginLeft: 8,
-    justifyContent: 'center', alignItems: 'center',
-  },
-
-  // Section header
-  sectionHeader: {
-    flexDirection: 'row', alignItems: 'center',
-    justifyContent: 'space-between', marginBottom: 4,
-  },
-  addMemberBtn: {
-    borderWidth: 1, borderRadius: 8,
-    paddingHorizontal: 10, paddingVertical: 4,
-  },
-  addMemberText: { fontSize: 12, fontWeight: '700' },
-  emptyHint: { fontSize: 13, textAlign: 'center', paddingVertical: 12 },
-
-  // Info box
-  infoBox: {
-    borderWidth: 1, borderRadius: 12,
-    padding: 12, marginBottom: 20,
-  },
-
-  // Create button
-  createBtn: {
-    height: 54, borderRadius: 14,
-    justifyContent: 'center', alignItems: 'center',
-    shadowColor: '#1A1A2E', shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.3, shadowRadius: 10, elevation: 8,
-  },
-  createBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
-
-  // Attach images
-  attachRow: { flexDirection: 'row', gap: 12 },
-  attachBtn: {
-    flex: 1, borderRadius: 12, borderWidth: 1.5,
-    paddingVertical: 12, alignItems: 'center', gap: 3,
-  },
-  attachIconWrap: {
-    width: 44, height: 44, borderRadius: 22,
-    justifyContent: 'center', alignItems: 'center',
-    marginBottom: 2, borderWidth: 1,
-  },
-  attachLabel: { fontSize: 12, fontWeight: '700' },
-  attachSub:   { fontSize: 10, color: '#AAAABC' },
+  uploadTitle: { fontSize: 16, fontWeight: '700' },
+  uploadSub:   { fontSize: 13 },
   previewImg:  { width: 80, height: 80, borderRadius: 10, borderWidth: 1 },
   removeImg: {
     position: 'absolute', top: -6, right: -6,
     width: 20, height: 20, borderRadius: 10,
-    backgroundColor: '#F87171', justifyContent: 'center', alignItems: 'center',
+    backgroundColor: '#EF4444', justifyContent: 'center', alignItems: 'center',
     borderWidth: 1.5, borderColor: '#fff',
   },
+
+  // Create button
+  createBtn: {
+    height: 54, borderRadius: 16,
+    justifyContent: 'center', alignItems: 'center',
+    shadowColor: '#3B72EE', shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35, shadowRadius: 12, elevation: 8,
+    marginBottom: 8,
+  },
+  createBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
 });

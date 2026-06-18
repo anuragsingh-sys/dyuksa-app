@@ -6,14 +6,13 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { getAccessToken, getUsers } from '../services/ApiService';
+import { getAccessToken, getUsers, getWorkspaceId } from '../services/ApiService';
+import { BASE_URL } from '../config';
 
 // Optional dependency: file upload via DocumentPicker. Loaded lazily so that
 // if `expo-document-picker` isn't installed, the rest of the modal still runs.
 let DocumentPicker = null;
 try { DocumentPicker = require('expo-document-picker'); } catch {}
-
-const BASE_URL = 'http://192.168.1.188:8000/api/v1';
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
 const STATUS_LABELS = { pending: 'Pending', in_progress: 'In Progress', completed: 'Completed', backlog: 'Backlog', deployed: 'Deployed', deferred: 'Deferred', review: 'Review' };
@@ -24,6 +23,7 @@ const PRIORITY_COLORS = { low: '#4ADE80', medium: '#FBBF24', high: '#F97316', ur
 export default function TaskDetailModal({ visible, task, onClose, onUpdated }) {
   const slideAnim = useRef(new Animated.Value(0)).current;
   const scrollViewRef = useRef(null);
+  const justSaved = useRef(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving]   = useState(false);
 
@@ -72,6 +72,8 @@ export default function TaskDetailModal({ visible, task, onClose, onUpdated }) {
 
   useEffect(() => {
     if (visible && task) {
+      // Skip re-init if this update was triggered by our own save (prevents reverting local state)
+      if (justSaved.current) { justSaved.current = false; return; }
       // Initialize state from task
       setStatus(task.status || 'pending');
       setPriority(task.priority || 'medium');
@@ -132,11 +134,21 @@ export default function TaskDetailModal({ visible, task, onClose, onUpdated }) {
 
   const markDirty = () => setDirty(true);
 
+  // Shared auth headers helper (includes X-Workspace-ID)
+  const authHeaders = async (isMultipart = false) => {
+    const token = await getAccessToken();
+    const wsId  = await getWorkspaceId();
+    const h = { 'Authorization': `Bearer ${token}` };
+    if (!isMultipart) h['Content-Type'] = 'application/json';
+    if (wsId) h['X-Workspace-ID'] = wsId;
+    return h;
+  };
+
   const saveChanges = async () => {
     if (!task?.id) return;
     setSaving(true);
     try {
-      const token = await getAccessToken();
+      const headers = await authHeaders();
       const body = {
         status,
         priority,
@@ -147,10 +159,7 @@ export default function TaskDetailModal({ visible, task, onClose, onUpdated }) {
       };
       const res = await fetch(`${BASE_URL}/tasksite/${task.id}/`, {
         method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify(body),
       });
       if (!res.ok) {
@@ -164,6 +173,7 @@ export default function TaskDetailModal({ visible, task, onClose, onUpdated }) {
       }
       setDirty(false);
       setEditingDesc(false);
+      justSaved.current = true;
       onUpdated?.(updated);
       Alert.alert('Saved', 'Task updated successfully.');
     } catch (e) {
@@ -198,13 +208,10 @@ export default function TaskDetailModal({ visible, task, onClose, onUpdated }) {
     }
     setAddingLink(true);
     try {
-      const token = await getAccessToken();
+      const headers = await authHeaders();
       const res = await fetch(`${BASE_URL}/tasksite/${task.id}/links/`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({ url }),
       });
       const data = await res.json().catch(() => ({}));
@@ -224,10 +231,10 @@ export default function TaskDetailModal({ visible, task, onClose, onUpdated }) {
     if (!task?.id || linkId == null) return;
     setDeletingLinkId(linkId);
     try {
-      const token = await getAccessToken();
+      const headers = await authHeaders();
       const res = await fetch(`${BASE_URL}/tasksite/${task.id}/links/${linkId}/`, {
         method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` },
+        headers,
       });
       if (!res.ok && res.status !== 204) {
         const data = await res.json().catch(() => ({}));
@@ -271,9 +278,8 @@ export default function TaskDetailModal({ visible, task, onClose, onUpdated }) {
       if (!picked || !picked.uri) return;
 
       setUploading(true);
-      const token = await getAccessToken();
+      const headers = await authHeaders(true); // multipart — no Content-Type
       const form = new FormData();
-      // Field name MUST be `uploaded_files` — matches the DRF serializer
       form.append('uploaded_files', {
         uri:  picked.uri,
         name: picked.name || 'upload',
@@ -281,10 +287,7 @@ export default function TaskDetailModal({ visible, task, onClose, onUpdated }) {
       });
       const res = await fetch(`${BASE_URL}/tasksite/${task.id}/`, {
         method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          // Don't set Content-Type — let fetch set the correct multipart boundary
-        },
+        headers,
         body: form,
       });
       const data = await res.json().catch(() => ({}));
@@ -314,13 +317,10 @@ export default function TaskDetailModal({ visible, task, onClose, onUpdated }) {
     if (!newComment.trim() || !task?.id) return;
     setPostingComment(true);
     try {
-      const token = await getAccessToken();
+      const headers = await authHeaders();
       const res = await fetch(`${BASE_URL}/tasksite/${task.id}/comments/`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({ text: newComment.trim() }),
       });
       if (!res.ok) {
