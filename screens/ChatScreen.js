@@ -1,8 +1,9 @@
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   TextInput, StatusBar, KeyboardAvoidingView, Platform,
-  ActivityIndicator, RefreshControl, Alert, Image,
+  ActivityIndicator, RefreshControl, Alert, Image, Modal, ScrollView,
 } from 'react-native';
+import Svg, { Path, G, Circle } from 'react-native-svg';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useState, useContext, useEffect, useCallback, useRef } from 'react';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -24,7 +25,47 @@ const authHeaders = async () => {
   return h;
 };
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── SVG Icons ─────────────────────────────────────────────────────────────────
+// Pin icon — rounded pushpin matching the uploaded image (diagonal, rounded head)
+function PinIcon({ size = 20, color = '#888', filled = false }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M20 4L4 20"
+        stroke={color} strokeWidth={1.8} strokeLinecap="round"
+      />
+      <Path
+        d="M17.657 6.343C19.22 7.905 19.47 10.28 18.192 12.12L11.88 18.433C10.04 19.71 7.665 19.46 6.103 17.898C4.54 16.335 4.29 13.96 5.568 12.12L11.88 5.808C13.72 4.53 16.095 4.78 17.657 6.343Z"
+        stroke={color} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"
+        fill={filled ? color : 'none'}
+      />
+      <Path
+        d="M10 14L14 10"
+        stroke={filled ? (color === '#6366F1' ? '#fff' : '#fff') : color}
+        strokeWidth={1.5} strokeLinecap="round"
+      />
+    </Svg>
+  );
+}
+
+// Users / group icon — two people silhouette
+function UsersIcon({ size = 20, color = '#fff' }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"
+        stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"
+      />
+      <Circle cx="9" cy="7" r="4" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+      <Path
+        d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"
+        stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+
 const stripHtml = (str) => (str || '').replace(/<[^>]*>/g, '').trim();
 
 const fmtTime = (iso) => {
@@ -32,6 +73,22 @@ const fmtTime = (iso) => {
   try {
     const d = new Date(iso);
     return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+  } catch { return ''; }
+};
+
+const fmtCompact = (iso) => {
+  if (!iso) return '';
+  try {
+    const diff = Date.now() - new Date(iso).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1)  return 'now';
+    if (mins < 60) return `${mins}m`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24)  return `${hrs}h`;
+    const days = Math.floor(hrs / 24);
+    if (days === 1) return 'Yest';
+    if (days < 7)  return `${days}d`;
+    return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
   } catch { return ''; }
 };
 
@@ -54,6 +111,25 @@ const getInitials = (name = '') => {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 };
 
+// Get clean display name — for private chats show other person's name only
+const getRoomDisplayName = (room, myUsername) => {
+  if (!room) return '';
+  const name = room.name || '';
+
+  // Private chat: "Chat: harshit & ravi" or "Chat: shifalig & harshit" → show the other person
+  if (room.room_type === 'private') {
+    if (name.toLowerCase().startsWith('chat:')) {
+      const parts = name.replace(/^Chat:\s*/i, '').split(/\s*&\s*/);
+      const other = parts.find(p => p.trim().toLowerCase() !== (myUsername || '').toLowerCase());
+      if (other) return other.trim();
+    }
+    return name;
+  }
+
+  // All other types: strip trailing " Chat" suffix
+  return name.replace(/\s+Chat$/i, '').trim() || name;
+};
+
 const ROOM_COLORS = {
   private: '#4ECDC4',
   project: '#6366F1',
@@ -73,49 +149,79 @@ const ROOM_ICONS = {
 };
 
 // ── Room List Item ────────────────────────────────────────────────────────────
-function RoomItem({ room, onPress, isDark, card, txt, sub, bdr }) {
-  const color   = ROOM_COLORS[room.room_type] || '#9898A6';
-  const icon    = ROOM_ICONS[room.room_type] || '💬';
-  const preview = stripHtml(room.last_message?.content_preview || '');
-  const initial = getInitials(room.name);
+const CHANNEL_COLORS = ['#6366F1', '#8B5CF6', '#10B981', '#F59E0B', '#EF4444', '#3B82F6'];
+const AVATAR_COLORS  = ['#3B82F6', '#8B5CF6', '#22A06B', '#F59E0B', '#E5484D', '#0EA5E9', '#EC4899'];
+
+function RoomItem({ room, onPress, isDark, card, txt, sub, bdr, myUsername }) {
+  const isDirect  = room.room_type === 'private';
+  const isChannel = room.room_type === 'project' || room.room_type === 'thread';
+  const isAiBot   = room.room_type === 'ai_bot';
+
+  const displayName = getRoomDisplayName(room, myUsername);
+  const preview     = stripHtml(room.last_message?.content_preview || '');
+  const rawSender   = room.last_message?.sender_username;
+  const senderUser  = typeof rawSender === 'object' ? (rawSender?.username || '') : (rawSender || '');
+  const isMe        = senderUser === myUsername;
+  const senderLabel = isMe ? 'You' : senderUser;
+  const timeLabel   = fmtCompact(room.last_message?.created_at);
+
+  // Channel color based on name hash
+  const colorIdx = (displayName || '').split('').reduce((a, c) => a + c.charCodeAt(0), 0);
+  const channelColor = CHANNEL_COLORS[colorIdx % CHANNEL_COLORS.length];
+  const avatarColor  = AVATAR_COLORS[colorIdx % AVATAR_COLORS.length];
 
   return (
     <TouchableOpacity
-      style={[styles.roomRow, { backgroundColor: card, borderBottomColor: bdr }]}
+      style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 13, gap: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: bdr, backgroundColor: card }}
       onPress={() => onPress(room)}
       activeOpacity={0.7}
     >
       {/* Avatar */}
-      <View style={[styles.roomAvatar, { backgroundColor: color }]}>
-        {room.room_type === 'ai_bot'
-          ? <Text style={{ fontSize: 20 }}>🤖</Text>
-          : <Text style={styles.roomAvatarTxt}>{initial}</Text>
-        }
-        <View style={[styles.roomTypeBadge, { backgroundColor: isDark ? '#1A1A20' : '#fff' }]}>
-          <Text style={{ fontSize: 8 }}>{icon}</Text>
+      {isAiBot ? (
+        <View style={{ width: 46, height: 46, borderRadius: 23, backgroundColor: '#8B5CF6', justifyContent: 'center', alignItems: 'center' }}>
+          <Text style={{ fontSize: 22 }}>🤖</Text>
         </View>
-      </View>
+      ) : room.room_type === 'team' ? (
+        /* Team — rounded square with users icon, indigo bg */
+        <View style={{ width: 46, height: 46, borderRadius: 14, backgroundColor: '#6366F1', justifyContent: 'center', alignItems: 'center' }}>
+          <UsersIcon size={22} color="#fff" />
+        </View>
+      ) : isChannel ? (
+        /* Channel — colored square with # */
+        <View style={{ width: 46, height: 46, borderRadius: 12, backgroundColor: channelColor + '22', justifyContent: 'center', alignItems: 'center' }}>
+          <Text style={{ fontSize: 20, fontWeight: '700', color: channelColor }}>#</Text>
+        </View>
+      ) : (
+        /* Direct — colored circle with initials + online dot */
+        <View style={{ position: 'relative' }}>
+          <View style={{ width: 46, height: 46, borderRadius: 23, backgroundColor: avatarColor, justifyContent: 'center', alignItems: 'center' }}>
+            <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }}>{getInitials(displayName)}</Text>
+          </View>
+          {isDirect && (
+            <View style={{ position: 'absolute', bottom: 1, right: 1, width: 11, height: 11, borderRadius: 6, backgroundColor: '#22C55E', borderWidth: 2, borderColor: card }} />
+          )}
+        </View>
+      )}
 
       {/* Content */}
       <View style={{ flex: 1 }}>
-        <View style={styles.roomNameRow}>
-          <Text style={[styles.roomName, { color: txt }]} numberOfLines={1}>{room.name}</Text>
-          {room.last_message?.created_at && (
-            <Text style={[styles.roomTime, { color: sub }]}>
-              {fmtTime(room.last_message.created_at)}
-            </Text>
-          )}
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 }}>
+          <Text style={{ fontSize: 14, fontWeight: '600', color: txt, flex: 1, marginRight: 8 }} numberOfLines={1}>
+            {displayName || room.name}
+          </Text>
+          {timeLabel ? <Text style={{ fontSize: 11, color: sub }}>{timeLabel}</Text> : null}
         </View>
-        <View style={styles.roomPreviewRow}>
-          <Text style={[styles.roomPreview, { color: sub }]} numberOfLines={1}>
-            {preview || 'No messages yet'}
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Text style={{ fontSize: 13, color: sub, flex: 1, marginRight: 8 }} numberOfLines={1}>
+            {preview
+              ? (senderLabel ? `${senderLabel}: ${preview}` : preview)
+              : 'No messages yet'}
           </Text>
           {room.unread_count > 0 && (
-            <View style={styles.unreadBadge}>
-              <Text style={styles.unreadBadgeTxt}>{room.unread_count}</Text>
+            <View style={{ backgroundColor: '#3B82F6', borderRadius: 10, minWidth: 20, height: 20, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 5 }}>
+              <Text style={{ color: '#fff', fontSize: 10, fontWeight: '800' }}>{room.unread_count > 99 ? '99+' : room.unread_count}</Text>
             </View>
           )}
-          {room.is_favourite && <Text style={{ fontSize: 11 }}>⭐</Text>}
         </View>
       </View>
     </TouchableOpacity>
@@ -123,6 +229,22 @@ function RoomItem({ room, onPress, isDark, card, txt, sub, bdr }) {
 }
 
 // ── Message Bubble ────────────────────────────────────────────────────────────
+// sender can be string OR object {id, username, full_name}
+const getSenderName = (msg) => {
+  // Try all possible sender fields
+  const s = msg.sender_username || msg.sender || msg.sender_name || msg.created_by;
+  if (!s) return '?';
+  if (typeof s === 'object') return s.full_name || s.username || '?';
+  return String(s);
+};
+
+const getSenderUsername = (msg) => {
+  const s = msg.sender_username || msg.sender || msg.created_by;
+  if (!s) return '';
+  if (typeof s === 'object') return s.username || '';
+  return String(s);
+};
+
 function MessageBubble({ msg, isMine, isDark, sub }) {
   const bg       = isMine ? '#4ECDC4' : (isDark ? '#252530' : '#F3F4F6');
   const txtColor = isMine ? '#fff' : (isDark ? '#fff' : '#1A1A2E');
@@ -132,13 +254,13 @@ function MessageBubble({ msg, isMine, isDark, sub }) {
     <View style={[styles.bubbleWrap, isMine && styles.bubbleWrapMine]}>
       {!isMine && (
         <View style={[styles.bubbleAvatar, { backgroundColor: '#6366F1' }]}>
-          <Text style={styles.bubbleAvatarTxt}>{getInitials(msg.sender_name || msg.sender_username || '?')}</Text>
+          <Text style={styles.bubbleAvatarTxt}>{getInitials(getSenderName(msg))}</Text>
         </View>
       )}
       <View style={{ maxWidth: '75%' }}>
-        {!isMine && (
+        {!isMine && getSenderName(msg) !== '?' && (
           <Text style={[styles.bubbleSender, { color: sub }]}>
-            {msg.sender_name || msg.sender_username}
+            {getSenderName(msg)}
           </Text>
         )}
         <View style={[styles.bubble, { backgroundColor: bg }]}>
@@ -220,8 +342,19 @@ export default function ChatScreen({ route }) {
       const res = await fetch(`${BASE_URL}/chat/rooms/${roomId}/messages/`, { headers });
       if (!res.ok) return;
       const data = await res.json();
-      const list = Array.isArray(data) ? data : (data.results || data.messages || []);
-      // Oldest first
+      const raw = Array.isArray(data) ? data : (data.results || data.messages || []);
+      const myUser = user?.username || user?.name || '';
+      // Mark is_mine and reverse to oldest first
+      const list = raw.map(m => {
+        const senderUser = typeof m.sender_username === 'object'
+          ? m.sender_username?.username
+          : (m.sender_username || m.sender || '');
+        return {
+          ...m,
+          is_mine: senderUser === myUser || m.sender_id === user?.id ||
+            (typeof m.sender_username === 'object' && m.sender_username?.id === user?.id),
+        };
+      });
       setMessages(list.reverse ? list.reverse() : list);
       setTimeout(() => flatRef.current?.scrollToEnd({ animated: false }), 100);
     } catch (e) {
@@ -242,11 +375,18 @@ export default function ChatScreen({ route }) {
     setRooms(prev => prev.map(r => r.id === room.id ? { ...r, unread_count: 0 } : r));
   };
 
-  // ── Send message ───────────────────────────────────────────────────
-  const sendMessage = async () => {
+  // ── Send message via WebSocket ────────────────────────────────────
+  const sendMessage = () => {
     const text = input.trim();
     if (!text || !activeRoom || sending) return;
-    setSending(true);
+
+    // Check WebSocket is connected
+    if (!WebSocketService.isConnected) {
+      Alert.alert('Not connected', 'Reconnecting… please try again in a moment.');
+      return;
+    }
+
+    // Optimistic UI — show immediately
     const optimisticId = `opt_${Date.now()}`;
     const optimistic = {
       id: optimisticId,
@@ -261,99 +401,214 @@ export default function ChatScreen({ route }) {
     setInput('');
     setTimeout(() => flatRef.current?.scrollToEnd({ animated: true }), 50);
 
-    try {
-      const headers = await authHeaders();
-      const res = await fetch(`${BASE_URL}/chat/rooms/${activeRoom.id}/messages/`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ content: text }),
-      });
-      if (!res.ok) {
-        const e = await res.json().catch(() => ({}));
-        throw new Error(e.detail || e.message || `Send failed (${res.status})`);
-      }
-      const sent = await res.json();
-      // Replace optimistic with real message
-      setMessages(prev => prev.map(m => m.id === optimisticId ? { ...sent, is_mine: true } : m));
-      // Update room preview
-      setRooms(prev => prev.map(r => r.id === activeRoom.id
-        ? { ...r, last_message: { content_preview: text, created_at: sent.created_at } }
-        : r
-      ));
-    } catch (e) {
-      Alert.alert('Send failed', e.message || 'Try again.');
-      setMessages(prev => prev.filter(m => m.id !== optimisticId));
-      setInput(text);
-    } finally {
-      setSending(false);
-    }
+    // Send via WebSocket
+    WebSocketService.send({
+      command: 'send_message',
+      room_id: activeRoom.id,
+      content: text,
+    });
+
+    // Update room preview optimistically
+    setRooms(prev => prev.map(r => r.id === activeRoom.id
+      ? { ...r, last_message: { content_preview: text, created_at: new Date().toISOString() } }
+      : r
+    ));
   };
 
   // ── WebSocket — real-time chat messages ────────────────────────────
   useEffect(() => {
     const unsubscribe = WebSocketService.subscribe((message) => {
+      // Accept chat_message, new_message, or any payload with room_id
       const isChat = message?.type === 'chat_message' ||
                      message?.type === 'new_message' ||
                      message?.type === 'message' ||
-                     (message?.data?.room_id || message?.room_id);
+                     message?.data?.room_id || message?.room_id;
       if (!isChat) return;
 
       const d       = message?.data || message;
       const roomId  = d?.room_id || d?.room;
       const content = d?.content || d?.message || '';
       const sender  = d?.sender_username || d?.sender || '';
-      const msgId   = d?.id || d?.message_id;
+      const msgId   = String(d?.id || d?.message_id || `ws_${Date.now()}`);
+      const myUser  = user?.username || user?.name || '';
+      const getUserStr = (s) => typeof s === 'object' ? (s?.username || '') : String(s || '');
 
       if (!roomId || !content) return;
 
-      // Update room list preview
+      // Update room list preview + unread count
       setRooms(prev => prev.map(r => r.id === roomId
         ? {
             ...r,
-            last_message: { content_preview: content, created_at: d?.created_at || new Date().toISOString() },
+            last_message: {
+              content_preview: content,
+              created_at: d?.created_at || new Date().toISOString(),
+              sender_username: sender,
+            },
             unread_count: r.id !== activeRoom?.id ? (r.unread_count || 0) + 1 : 0,
           }
         : r
       ));
 
-      // Add to messages if in that room
-      if (activeRoom?.id === roomId && sender !== (user?.username || user?.name)) {
+      // Add to messages if viewing this room
+      if (activeRoom?.id === roomId) {
+        const isMine = getUserStr(sender) === myUser || sender?.id === user?.id;
         const newMsg = {
-          id: msgId || `ws_${Date.now()}`,
+          id: msgId,
           content,
           sender_username: sender,
-          sender_name: d?.sender_name || sender,
+          sender_name: d?.sender_name || d?.sender_full_name || sender,
           created_at: d?.created_at || new Date().toISOString(),
-          is_mine: false,
+          is_mine: isMine,
         };
+
         setMessages(prev => {
-          if (prev.some(m => m.id === newMsg.id)) return prev;
+          // Deduplicate — skip if id already exists
+          if (prev.some(m => m.id === msgId)) return prev;
+          // Replace matching optimistic message (same content + mine)
+          const optIdx = prev.findIndex(m => m._optimistic && m.content === content && isMine);
+          if (optIdx !== -1) {
+            const next = [...prev];
+            next[optIdx] = newMsg;
+            return next;
+          }
           return [...prev, newMsg];
         });
+
         setTimeout(() => flatRef.current?.scrollToEnd({ animated: true }), 50);
       }
     });
     return () => unsubscribe();
   }, [activeRoom, user]);
 
-  const [activeTab, setActiveTab] = useState('chats'); // 'chats' | 'projects' | 'teams' | 'unread'
+  const [activeTab, setActiveTab] = useState('all'); // 'all' | 'channels' | 'teams' | 'direct'
+
+  // ── New Group Chat Modal state ─────────────────────────────────────
+  const [showNewChat,    setShowNewChat]    = useState(false);
+  const [allUsers,       setAllUsers]       = useState([]);
+  const [selectedUsers,  setSelectedUsers]  = useState([]);
+  const [groupName,      setGroupName]      = useState('');
+  const [userSearch,     setUserSearch]     = useState('');
+  const [loadingUsers,   setLoadingUsers]   = useState(false);
+  const [creating,       setCreating]       = useState(false);
+
+  const fetchUsersForModal = useCallback(async () => {
+    setLoadingUsers(true);
+    try {
+      const headers = await authHeaders();
+      const res = await fetch(`${BASE_URL}/auth/users/`, { headers });
+      if (!res.ok) return;
+      const data = await res.json();
+      const list = Array.isArray(data) ? data : (data.results || []);
+      // Exclude self
+      setAllUsers(list.filter(u => u.username !== myUsername && u.id !== user?.id));
+    } catch (e) {
+      console.warn('fetchUsersForModal:', e.message);
+    } finally {
+      setLoadingUsers(false);
+    }
+  }, [myUsername, user]);
+
+  const openNewChatModal = () => {
+    setSelectedUsers([]);
+    setGroupName('');
+    setUserSearch('');
+    setShowNewChat(true);
+    fetchUsersForModal();
+  };
+
+  const toggleSelectUser = (u) => {
+    setSelectedUsers(prev =>
+      prev.some(x => x.id === u.id) ? prev.filter(x => x.id !== u.id) : [...prev, u]
+    );
+  };
+
+  const createGroupChat = async () => {
+    if (selectedUsers.length < 2) {
+      Alert.alert('Add more members', 'A group chat needs at least 2 other members.');
+      return;
+    }
+    const name = groupName.trim() || selectedUsers.map(u => u.username || u.full_name).join(', ');
+    setCreating(true);
+    try {
+      const headers = await authHeaders();
+      const body = {
+        name,
+        room_type: 'team',
+        participants: selectedUsers.map(u => u.id),
+      };
+      const res = await fetch(`${BASE_URL}/chat/rooms/`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        Alert.alert('Could not create group', err?.detail || err?.name?.[0] || 'Please try again.');
+        return;
+      }
+      const newRoom = await res.json();
+      setShowNewChat(false);
+      await fetchRooms();
+      openRoom(newRoom);
+    } catch (e) {
+      Alert.alert('Error', e.message);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  // ── Pin / Unpin current room ───────────────────────────────────────
+  const [pinLoading, setPinLoading] = useState(false);
+
+  const togglePin = async () => {
+    if (!activeRoom || pinLoading) return;
+    const isPinned = activeRoom.is_favourite;
+    setPinLoading(true);
+    try {
+      const headers = await authHeaders();
+      const res = await fetch(`${BASE_URL}/chat/rooms/${activeRoom.id}/settings/`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ is_favourite: !isPinned }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const updated = { ...activeRoom, is_favourite: data.is_favourite ?? !isPinned };
+        setActiveRoom(updated);
+        setRooms(prev => prev.map(r => r.id === activeRoom.id ? updated : r));
+      } else {
+        const err = await res.json().catch(() => ({}));
+        Alert.alert(isPinned ? 'Unpin failed' : 'Pin failed', err?.detail || 'Could not update pin status.');
+      }
+    } catch (e) {
+      Alert.alert('Error', e.message);
+    } finally {
+      setPinLoading(false);
+    }
+  };
 
   // ── Filter rooms by tab ────────────────────────────────────────────
   const tabRooms = useCallback((tab) => {
     const base = search.trim()
-      ? rooms.filter(r => r.name.toLowerCase().includes(search.toLowerCase()))
+      ? rooms.filter(r => (r.name || '').toLowerCase().includes(search.toLowerCase()))
       : rooms;
     switch (tab) {
-      case 'projects': return base.filter(r => r.room_type === 'project' || r.room_type === 'thread');
+      case 'channels': return base.filter(r => r.room_type === 'project' || r.room_type === 'thread');
       case 'teams':    return base.filter(r => r.room_type === 'team');
-      case 'unread':   return base.filter(r => r.unread_count > 0);
-      default:         return base.filter(r => r.room_type === 'private' || r.room_type === 'global' || r.room_type === 'ai_bot');
+      case 'direct':   return base.filter(r => r.room_type === 'private');
+      default:         return base;
     }
   }, [rooms, search]);
 
+  const myUsername    = user?.username || user?.name || '';
   const favourites    = rooms.filter(r => r.is_favourite);
   const displayedRooms = tabRooms(activeTab);
-  const totalUnread    = rooms.reduce((s, r) => s + (r.unread_count || 0), 0);
+  const totalUnread   = rooms.reduce((s, r) => s + (r.unread_count || 0), 0);
+
+  const allCount      = rooms.length;
+  const channelsCount = rooms.filter(r => r.room_type === 'project' || r.room_type === 'thread').length;
+  const teamsCount    = rooms.filter(r => r.room_type === 'team').length;
+  const directCount   = rooms.filter(r => r.room_type === 'private').length;
 
   // ── Group messages by date ─────────────────────────────────────────
   const groupedMessages = messages.reduce((acc, msg) => {
@@ -366,7 +621,6 @@ export default function ChatScreen({ route }) {
     return acc;
   }, []);
 
-  const myUsername = user?.username || user?.name || '';
 
   // ── MESSAGES VIEW ──────────────────────────────────────────────────
   if (view === 'messages' && activeRoom) {
@@ -384,16 +638,26 @@ export default function ChatScreen({ route }) {
             <Text style={styles.chatHeaderAvatarTxt}>{getInitials(activeRoom.name)}</Text>
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={[styles.chatHeaderName, { color: txt }]} numberOfLines={1}>{activeRoom.name}</Text>
+            <Text style={[styles.chatHeaderName, { color: txt }]} numberOfLines={1}>{getRoomDisplayName(activeRoom, myUsername) || activeRoom.name}</Text>
             <Text style={[styles.chatHeaderMeta, { color: sub }]}>
               {activeRoom.participant_count} participant{activeRoom.participant_count !== 1 ? 's' : ''}
             </Text>
           </View>
           <TouchableOpacity
-            style={[styles.chatHeaderBtn, { backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
+            style={{ padding: 6 }}
+            onPress={togglePin}
+            disabled={pinLoading}
+          >
+            {pinLoading
+              ? <ActivityIndicator size="small" color="#6366F1" />
+              : <PinIcon size={22} color={activeRoom.is_favourite ? '#6366F1' : sub} filled={activeRoom.is_favourite} />
+            }
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={{ padding: 6 }}
             onPress={() => fetchMessages(activeRoom.id)}
           >
-            <Text style={{ fontSize: 16 }}>↻</Text>
+            <Text style={{ fontSize: 18, color: sub }}>↻</Text>
           </TouchableOpacity>
         </View>
 
@@ -430,9 +694,11 @@ export default function ChatScreen({ route }) {
                     <View style={[styles.dateSepLine, { backgroundColor: bdr }]} />
                   </View>
                   {group.messages.map(msg => {
-                    const isMine = msg.is_mine ||
-                      msg.sender_username === myUsername ||
-                      msg.sender_id === user?.id;
+                    const isMine = msg.is_mine === true ||
+                      getSenderUsername(msg) === myUsername ||
+                      msg.sender_id === user?.id ||
+                      (typeof msg.sender_username === 'object' && msg.sender_username?.id === user?.id) ||
+                      (typeof msg.sender === 'object' && msg.sender?.id === user?.id);
                     return (
                       <MessageBubble
                         key={msg.id}
@@ -487,15 +753,17 @@ export default function ChatScreen({ route }) {
       <View style={[styles.navbar, { backgroundColor: card, borderBottomColor: bdr }]}>
         <View style={styles.navLeft}>
           <SidebarMenu activeScreen="Chat" />
-          <TouchableOpacity
-            style={styles.logoBox}
-            onPress={() => { try { navigation.jumpTo('Dashboard'); } catch { navigation.navigate('Main', { screen: 'Dashboard' }); } }}
-          >
-            <Text style={styles.logoText}>D</Text>
-          </TouchableOpacity>
-          <Text style={[styles.brandName, { color: txt }]}>Team Chat</Text>
+          <View>
+            <Text style={[styles.brandName, { color: txt }]}>Chats</Text>
+            <Text style={{ fontSize: 11, color: sub, marginTop: 1 }}>
+              {totalUnread > 0 ? `${totalUnread} unread message${totalUnread !== 1 ? 's' : ''}` : `${rooms.length} conversations`}
+            </Text>
+          </View>
         </View>
         <View style={styles.navRight}>
+          <TouchableOpacity style={{ padding: 6 }} onPress={openNewChatModal}>
+            <Text style={{ fontSize: 32, color: '#3B82F6', fontWeight: '300' }}>+</Text>
+          </TouchableOpacity>
           <NotificationBell />
         </View>
       </View>
@@ -519,51 +787,70 @@ export default function ChatScreen({ route }) {
         </View>
       </View>
 
-      {/* Tabs: Chats | Projects | Teams | Unread */}
-      <View style={[styles.tabs, { backgroundColor: card, borderBottomColor: bdr }]}>
-        {[
-          { key: 'chats',    label: 'Chats' },
-          { key: 'projects', label: 'Projects' },
-          { key: 'teams',    label: 'Teams' },
-          { key: 'unread',   label: 'Unread', badge: totalUnread },
-        ].map(tab => (
-          <TouchableOpacity
-            key={tab.key}
-            style={[styles.tab, activeTab === tab.key && styles.tabActive]}
-            onPress={() => setActiveTab(tab.key)}
-          >
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-              <Text style={[styles.tabTxt, { color: activeTab === tab.key ? '#4ECDC4' : sub }]}>
-                {tab.label}
-              </Text>
-              {tab.badge > 0 && (
-                <View style={styles.tabBadge}>
-                  <Text style={styles.tabBadgeTxt}>{tab.badge > 99 ? '99+' : tab.badge}</Text>
-                </View>
-              )}
-            </View>
-            {activeTab === tab.key && <View style={styles.tabUnderline} />}
-          </TouchableOpacity>
-        ))}
+      {/* Tabs — segmented control style matching mockup */}
+      <View style={{ paddingHorizontal: 12, paddingVertical: 10, backgroundColor: isDark ? '#0D0D0F' : '#F2F3F7', borderBottomWidth: 1, borderBottomColor: bdr }}>
+        <View style={{ flexDirection: 'row', backgroundColor: isDark ? '#252530' : '#E8E8EE', borderRadius: 22, padding: 3 }}>
+          {[
+            { key: 'all',      label: 'All',      count: allCount },
+            { key: 'channels', label: 'Channels', count: null },
+            { key: 'teams',    label: 'Teams',    count: null },
+            { key: 'direct',   label: 'Direct',   count: null },
+          ].map(tab => {
+            const isActive = activeTab === tab.key;
+            return (
+              <TouchableOpacity
+                key={tab.key}
+                onPress={() => setActiveTab(tab.key)}
+                style={{
+                  flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+                  gap: 5, paddingVertical: 8, borderRadius: 20,
+                  backgroundColor: isActive ? (isDark ? '#1A1A20' : '#fff') : 'transparent',
+                  shadowColor: isActive ? '#000' : 'transparent',
+                  shadowOffset: { width: 0, height: 1 },
+                  shadowOpacity: isActive ? 0.08 : 0,
+                  shadowRadius: 2,
+                  elevation: isActive ? 2 : 0,
+                }}
+              >
+                <Text style={{ fontSize: 13, fontWeight: isActive ? '700' : '500', color: isActive ? (isDark ? '#fff' : '#1A1A2E') : sub }}>
+                  {tab.label}
+                </Text>
+                {tab.count > 0 && (
+                  <Text style={{ fontSize: 12, fontWeight: '500', color: isActive ? (isDark ? '#9898A6' : '#888') : sub }}>
+                    {tab.count}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            );
+          })}
+        </View>
       </View>
 
-      {/* Rooms */}
+      {/* Rooms list + FAB */}
+      <View style={{ flex: 1 }}>
       {loading ? (
         <View style={styles.centerState}>
-          <ActivityIndicator color="#4ECDC4" size="large" />
+          <ActivityIndicator color="#3B82F6" size="large" />
           <Text style={[{ color: sub, marginTop: 10 }]}>Loading chats…</Text>
         </View>
       ) : (
         <FlatList
-          data={[
-            // Favourites section (always shown if any, regardless of tab)
-            ...(favourites.length > 0 ? [{ _type: 'section', label: '⭐ Favourites' }, ...favourites.map(r => ({ ...r, _type: 'room' }))] : []),
-            // Tab section header
-            { _type: 'section', label: activeTab === 'chats' ? '💬 Direct Messages' : activeTab === 'projects' ? '📁 Projects & Threads' : activeTab === 'teams' ? '👥 Teams' : '🔴 Unread' },
-            // Tab rooms
-            ...displayedRooms.map(r => ({ ...r, _type: 'room' })),
-          ]}
-          keyExtractor={(item, i) => item._type === 'section' ? `s_${i}` : item.id}
+          data={(() => {
+            const favouriteIds = new Set(favourites.map(r => r.id));
+            const nonFavTabRooms = displayedRooms.filter(r => !favouriteIds.has(r.id));
+            const pinnedInTab    = displayedRooms.filter(r => favouriteIds.has(r.id));
+            return [
+              ...(pinnedInTab.length > 0 ? [
+                { _type: 'section', label: 'PINNED', _key: 'sec_fav' },
+                ...pinnedInTab.map(r => ({ ...r, _type: 'room' })),
+              ] : []),
+              ...(nonFavTabRooms.length > 0 ? [
+                { _type: 'section', label: activeTab === 'all' ? 'RECENT' : activeTab === 'channels' ? 'ALL CHANNELS' : activeTab === 'teams' ? 'ALL TEAMS' : 'ALL DIRECT', _key: `sec_${activeTab}` },
+                ...nonFavTabRooms.map(r => ({ ...r, _type: 'room' })),
+              ] : []),
+            ];
+          })()}
+          keyExtractor={(item) => item._type === 'section' ? item._key : item.id}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchRooms(); }} tintColor="#4ECDC4" />}
           ListEmptyComponent={
             <View style={styles.centerState}>
@@ -576,7 +863,11 @@ export default function ChatScreen({ route }) {
           }
           renderItem={({ item }) => {
             if (item._type === 'section') {
-              return <Text style={[styles.sectionHeader, { color: sub, backgroundColor: bg }]}>{item.label}</Text>;
+              return (
+                <View style={{ backgroundColor: isDark ? '#141418' : '#F2F3F7', paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: bdr }}>
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: sub, letterSpacing: 0.3 }}>{item.label}</Text>
+                </View>
+              );
             }
             return (
               <RoomItem
@@ -587,11 +878,158 @@ export default function ChatScreen({ route }) {
                 txt={txt}
                 sub={sub}
                 bdr={bdr}
+                myUsername={myUsername}
               />
             );
           }}
         />
       )}
+      {/* FAB */}
+      <TouchableOpacity
+        style={{ position: 'absolute', right: 18, bottom: 24, width: 62, height: 62, borderRadius: 31, backgroundColor: '#3B82F6', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.25, shadowRadius: 10, elevation: 8 }}
+        onPress={openNewChatModal}
+      >
+        <Text style={{ color: '#fff', fontSize: 36, fontWeight: '300', lineHeight: 42, marginTop: -2 }}>+</Text>
+      </TouchableOpacity>
+      </View>
+
+      {/* ── New Team Chat Modal ──────────────────────────────────────── */}
+      <Modal
+        visible={showNewChat}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowNewChat(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' }}>
+          <View style={{ backgroundColor: card, borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingBottom: 30, maxHeight: '85%' }}>
+
+            {/* Header */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 18, paddingVertical: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: bdr }}>
+              <Text style={{ fontSize: 17, fontWeight: '700', color: txt }}>New Group Chat</Text>
+              <TouchableOpacity onPress={() => setShowNewChat(false)}>
+                <Text style={{ fontSize: 20, color: sub }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Group name input */}
+            <View style={{ paddingHorizontal: 14, paddingTop: 12, paddingBottom: 6 }}>
+              <TextInput
+                style={{ backgroundColor: isDark ? '#252530' : '#F2F3F7', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10, fontSize: 14, color: txt, borderWidth: StyleSheet.hairlineWidth, borderColor: bdr }}
+                placeholder="Group name (optional)"
+                placeholderTextColor={sub}
+                value={groupName}
+                onChangeText={setGroupName}
+              />
+            </View>
+
+            {/* Selected members chips */}
+            {selectedUsers.length > 0 && (
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 14, paddingVertical: 8, gap: 8 }}>
+                {selectedUsers.map(u => {
+                  const colorIdx = (u.username || '').split('').reduce((a, c) => a + c.charCodeAt(0), 0);
+                  const chipColor = AVATAR_COLORS[colorIdx % AVATAR_COLORS.length];
+                  return (
+                    <TouchableOpacity
+                      key={u.id}
+                      onPress={() => toggleSelectUser(u)}
+                      style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: chipColor, borderRadius: 20, paddingHorizontal: 10, paddingVertical: 6, gap: 6 }}
+                    >
+                      <View style={{ width: 18, height: 18, borderRadius: 9, backgroundColor: 'rgba(255,255,255,0.3)', justifyContent: 'center', alignItems: 'center' }}>
+                        <Text style={{ fontSize: 9, fontWeight: '700', color: '#fff' }}>{getInitials(u.full_name || u.username)}</Text>
+                      </View>
+                      <Text style={{ fontSize: 12, fontWeight: '600', color: '#fff' }}>{u.full_name || u.username}</Text>
+                      <Text style={{ fontSize: 11, color: 'rgba(255,255,255,0.8)', fontWeight: '700' }}>✕</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+
+            {/* User search */}
+            <View style={{ paddingHorizontal: 14, paddingBottom: 8 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: isDark ? '#252530' : '#F2F3F7', borderRadius: 10, paddingHorizontal: 12, height: 40, borderWidth: StyleSheet.hairlineWidth, borderColor: bdr }}>
+                <Text style={{ fontSize: 14, marginRight: 6 }}>🔍</Text>
+                <TextInput
+                  style={{ flex: 1, fontSize: 13, color: txt }}
+                  placeholder="Search people…"
+                  placeholderTextColor={sub}
+                  value={userSearch}
+                  onChangeText={setUserSearch}
+                />
+                {userSearch.length > 0 && (
+                  <TouchableOpacity onPress={() => setUserSearch('')}>
+                    <Text style={{ color: sub, paddingHorizontal: 4 }}>✕</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
+
+            {/* User list */}
+            {loadingUsers ? (
+              <View style={{ padding: 30, alignItems: 'center' }}>
+                <ActivityIndicator color="#3B82F6" size="large" />
+                <Text style={{ color: sub, marginTop: 10, fontSize: 13 }}>Loading people…</Text>
+              </View>
+            ) : (
+              <ScrollView keyboardShouldPersistTaps="handled" style={{ paddingHorizontal: 14 }}>
+                {allUsers
+                  .filter(u => !userSearch.trim() ||
+                    (u.full_name || '').toLowerCase().includes(userSearch.toLowerCase()) ||
+                    (u.username  || '').toLowerCase().includes(userSearch.toLowerCase()))
+                  .map(u => {
+                    const isSelected = selectedUsers.some(x => x.id === u.id);
+                    const colorIdx   = (u.username || '').split('').reduce((a, c) => a + c.charCodeAt(0), 0);
+                    const avatarColor = AVATAR_COLORS[colorIdx % AVATAR_COLORS.length];
+                    return (
+                      <TouchableOpacity
+                        key={u.id}
+                        style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 11, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: bdr, gap: 12 }}
+                        onPress={() => toggleSelectUser(u)}
+                        activeOpacity={0.7}
+                      >
+                        <View style={{ width: 42, height: 42, borderRadius: 21, backgroundColor: avatarColor, justifyContent: 'center', alignItems: 'center' }}>
+                          <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700' }}>{getInitials(u.full_name || u.username)}</Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ fontSize: 14, fontWeight: '600', color: txt }}>{u.full_name || u.username}</Text>
+                          {u.full_name ? <Text style={{ fontSize: 12, color: sub, marginTop: 1 }}>@{u.username}</Text> : null}
+                        </View>
+                        <View style={{ width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: isSelected ? '#3B82F6' : bdr, backgroundColor: isSelected ? '#3B82F6' : 'transparent', justifyContent: 'center', alignItems: 'center' }}>
+                          {isSelected && <Text style={{ color: '#fff', fontSize: 13, fontWeight: '700' }}>✓</Text>}
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                {allUsers.filter(u => !userSearch.trim() ||
+                  (u.full_name || '').toLowerCase().includes(userSearch.toLowerCase()) ||
+                  (u.username  || '').toLowerCase().includes(userSearch.toLowerCase())).length === 0 && (
+                  <View style={{ paddingVertical: 30, alignItems: 'center' }}>
+                    <Text style={{ fontSize: 32, opacity: 0.2 }}>👤</Text>
+                    <Text style={{ color: sub, marginTop: 8, fontSize: 13 }}>No people found</Text>
+                  </View>
+                )}
+              </ScrollView>
+            )}
+
+            {/* Create button */}
+            <View style={{ paddingHorizontal: 14, paddingTop: 12 }}>
+              <TouchableOpacity
+                style={{ backgroundColor: selectedUsers.length >= 2 ? '#3B82F6' : bdr, borderRadius: 12, paddingVertical: 14, alignItems: 'center' }}
+                onPress={createGroupChat}
+                disabled={selectedUsers.length < 2 || creating}
+              >
+                {creating
+                  ? <ActivityIndicator color="#fff" size="small" />
+                  : <Text style={{ color: selectedUsers.length >= 2 ? '#fff' : sub, fontSize: 15, fontWeight: '700' }}>
+                      {selectedUsers.length < 2 ? `Select at least 2 people (${selectedUsers.length} selected)` : `Create Group · ${selectedUsers.length} members`}
+                    </Text>
+                }
+              </TouchableOpacity>
+            </View>
+
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -623,15 +1061,14 @@ const styles = StyleSheet.create({
   // Section header
   sectionHeader: { fontSize: 11, fontWeight: '700', letterSpacing: 0.5, paddingHorizontal: 16, paddingVertical: 8 },
 
-  // Room row
-  roomRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, gap: 12, borderBottomWidth: StyleSheet.hairlineWidth },
-  roomAvatar: { width: 46, height: 46, borderRadius: 23, justifyContent: 'center', alignItems: 'center', position: 'relative', flexShrink: 0 },
-  roomAvatarTxt: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  roomTypeBadge: { position: 'absolute', bottom: -2, right: -2, width: 16, height: 16, borderRadius: 8, justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: 'transparent' },
-  roomNameRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 },
+  roomRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, gap: 12, borderBottomWidth: StyleSheet.hairlineWidth },
+  roomAvatar: { width: 50, height: 50, borderRadius: 25, justifyContent: 'center', alignItems: 'center', position: 'relative', flexShrink: 0 },
+  roomAvatarTxt: { color: '#fff', fontSize: 17, fontWeight: '700' },
+  roomTypeBadge: { position: 'absolute', bottom: -1, right: -1, width: 17, height: 17, borderRadius: 9, justifyContent: 'center', alignItems: 'center', borderWidth: 1.5 },
+  roomNameRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
   roomName: { fontSize: 14, fontWeight: '600', flex: 1, marginRight: 8 },
   roomTime: { fontSize: 11 },
-  roomPreviewRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  roomPreviewRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   roomPreview: { fontSize: 12, flex: 1 },
   unreadBadge: { backgroundColor: '#4ECDC4', borderRadius: 10, minWidth: 18, height: 18, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 4 },
   unreadBadgeTxt: { color: '#fff', fontSize: 10, fontWeight: '800' },

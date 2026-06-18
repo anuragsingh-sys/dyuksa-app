@@ -1,5 +1,5 @@
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity,
+  View, Text, StyleSheet, FlatList, TouchableOpacity, Pressable,
   Modal, TextInput, StatusBar, Platform,
   ScrollView, Image, Alert, Animated, ActivityIndicator,
   Keyboard, Dimensions,
@@ -17,8 +17,11 @@ import SidebarMenu from '../components/SidebarMenu';
 import TaskDetailModal from '../components/TaskDetailModal';
 import { ThemeContext } from '../context/ThemeContext';
 import NotificationBell from '../components/NotificationBell';
+import Svg, { Path, Circle } from 'react-native-svg';
 
 import { API_BASE, BASE_URL, WS_BASE } from '../config';
+import { Feather } from '@expo/vector-icons';
+import { useTasksCache, invalidateTasksCache } from '../hooks/useTasksCache';
 // const BASE_URL → imported from config
 
 // Always includes X-Workspace-ID so every request is workspace-aware
@@ -40,10 +43,10 @@ const authHeadersMultipart = async () => {
 
 const STATUS_OPTIONS = ['pending', 'in_progress', 'completed', 'backlog', 'deployed', 'deferred', 'review'];
 const STATUS_LABELS  = { pending: 'Pending', in_progress: 'In Progress', completed: 'Completed', backlog: 'Backlog', deployed: 'Deployed', deferred: 'Deferred', review: 'Review' };
-const STATUS_COLORS  = { pending: '#F59E0B', in_progress: '#3B82F6', completed: '#22C55E', backlog: '#F472B6', deployed: '#3B82F6', deferred: '#FBBF24', review: '#A78BFA' };
+const STATUS_COLORS  = { pending: '#D97706', in_progress: '#3B72EE', completed: '#22C55E', backlog: '#F472B6', deployed: '#3B72EE', deferred: '#FBBF24', review: '#A78BFA' };
 const STATUS_BG      = { pending: '#FEF3C7', in_progress: '#EFF6FF', completed: '#F0FDF4', backlog: '#FDF2F8', deployed: '#EFF6FF', deferred: '#FFFBEB', review: '#F5F3FF' };
 const PRIORITY_OPTIONS = ['low', 'medium', 'high', 'urgent'];
-const PRIORITY_COLORS  = { low: '#22C55E', medium: '#F59E0B', high: '#F97316', urgent: '#EF4444' };
+const PRIORITY_COLORS  = { low: '#22C55E', medium: '#3B72EE', high: '#F97316', urgent: '#EF4444', critical: '#EF4444' };
 
 // ── Inline Dropdown ──────────────────────────────────────────────────────────
 function InlineDropdown({ options, selected, onSelect, placeholder }) {
@@ -58,7 +61,7 @@ function InlineDropdown({ options, selected, onSelect, placeholder }) {
   return (
     <View>
       <TouchableOpacity
-        style={[dd.trigger, { backgroundColor: bg, borderColor: bdr }, open && { borderColor: '#4ECDC4', backgroundColor: bgOpen }]}
+        style={[dd.trigger, { backgroundColor: bg, borderColor: bdr }, open && { borderColor: '#3B72EE', backgroundColor: bgOpen }]}
         onPress={() => setOpen(o => !o)}
       >
         <Text style={[dd.triggerText, { color: txt }, !selected && { color: sub }]} numberOfLines={1}>
@@ -67,7 +70,7 @@ function InlineDropdown({ options, selected, onSelect, placeholder }) {
         <Text style={[dd.arrow, { color: sub }]}>{open ? '▲' : '▾'}</Text>
       </TouchableOpacity>
       {open && (
-        <View style={[dd.list, { backgroundColor: bgOpen, borderColor: '#4ECDC4' }]}>
+        <View style={[dd.list, { backgroundColor: bgOpen, borderColor: '#3B72EE' }]}>
           <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled" style={{ maxHeight: 180 }}>
             {options.map((opt, i) => (
               <TouchableOpacity
@@ -75,7 +78,7 @@ function InlineDropdown({ options, selected, onSelect, placeholder }) {
                 style={[dd.item, { borderBottomColor: isDark ? '#2F2F3D' : '#F0F0F5' }, i === options.length - 1 && { borderBottomWidth: 0 }]}
                 onPress={() => { onSelect(opt); setOpen(false); }}
               >
-                <Text style={[dd.itemText, { color: txt }, selected === opt.label && { color: '#4ECDC4', fontWeight: '700' }]}>
+                <Text style={[dd.itemText, { color: txt }, selected === opt.label && { color: '#3B72EE', fontWeight: '700' }]}>
                   {opt.label}
                 </Text>
               </TouchableOpacity>
@@ -96,60 +99,48 @@ const dd = StyleSheet.create({
   itemText: { fontSize: 13 },
 });
 
-// ── Task Card ────────────────────────────────────────────────────────────────
+// ── Task Card ─────────────────────────────────────────────────────────────────
 function TaskCard({ item, card, txt, sub, bdr, isDark, onPress, onStatusPress, formatDate }) {
   const statusColor = STATUS_COLORS[item.status] || '#888';
   const statusBg    = STATUS_BG[item.status]    || '#F5F5F7';
-
-  // Creator name
-  const createdBy = item.assigned_by_user_details || item.created_by || null;
-  const creatorName = createdBy
-    ? ([createdBy.first_name, createdBy.last_name].filter(Boolean).join(' ') || createdBy.full_name || createdBy.username || null)
-    : null;
-
-  // Assignees
+  const priorityColor = PRIORITY_COLORS[item.priority] || '#888';
   const assignees = Array.isArray(item.assigned_to_user_details) ? item.assigned_to_user_details : [];
-  const MAX_VISIBLE = 3;
-  const visibleAssignees = assignees.slice(0, MAX_VISIBLE);
-  const overflow = Math.max(0, assignees.length - MAX_VISIBLE);
+  const AVATAR_COLORS = ['#6B9FED','#9B7EF5','#4DB88A','#F0A843','#E87070','#42B3D5'];
+  const isDone = ['completed', 'deployed', 'done'].includes((item.status || '').toLowerCase());
+  const projName = item.project_details?.name || '';
 
-  const initialOf = (u) => {
-    const raw = u.first_name || u.full_name || u.username || '';
-    return raw ? raw.trim().charAt(0).toUpperCase() : 'U';
-  };
-
-  // Duration: start_date → end_date in days
-  const getDuration = () => {
-    if (!item.start_date || !item.end_date) return null;
-    try {
-      const diff = new Date(item.end_date) - new Date(item.start_date);
-      const days = Math.round(diff / (1000 * 60 * 60 * 24));
-      if (days <= 0) return null;
-      return `${days}d`;
-    } catch { return null; }
-  };
-  const duration = getDuration();
+  // Format date — just day + month + year
+  const dueFmt = item.end_date ? formatDate(item.end_date) : null;
 
   return (
     <TouchableOpacity
-      style={[styles.taskCard, { backgroundColor: card, borderColor: bdr }]}
+      style={[styles.taskCard, { backgroundColor: card, borderColor: bdr, borderLeftColor: priorityColor, borderLeftWidth: 3 }]}
       onPress={onPress}
       activeOpacity={0.75}
     >
-      {/* Row 1: Icon + Title + Status */}
-      <View style={styles.cardRow1}>
-        <View style={[styles.typeIcon, { backgroundColor: statusColor + '18' }]}>
-          <Text style={{ fontSize: 17 }}>📋</Text>
+      {/* Top row: checkbox + title + status pill */}
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
+        {/* Circle checkbox */}
+        <View style={{
+          width: 22, height: 22, borderRadius: 11, marginTop: 2, flexShrink: 0,
+          borderWidth: 2, borderColor: isDone ? '#22C55E' : (isDark ? '#505060' : '#CDCFDA'),
+          backgroundColor: isDone ? '#22C55E' : 'transparent',
+          alignItems: 'center', justifyContent: 'center',
+        }}>
+          {isDone && <Text style={{ color: '#fff', fontSize: 11, fontWeight: '800' }}>✓</Text>}
         </View>
-        <View style={{ flex: 1, marginRight: 8 }}>
-          <Text style={[styles.taskName, { color: txt }]} numberOfLines={1}>{item.heading}</Text>
-          {item.project_details?.name && (
-            <Text style={[styles.taskProject, { color: sub }]} numberOfLines={1}>
-              🗂 {item.project_details.name}
-            </Text>
-          )}
-        </View>
-        {/* Tappable status badge */}
+
+        {/* Title */}
+        <Text style={{
+          flex: 1, fontSize: 15, fontWeight: '600',
+          color: isDone ? sub : txt,
+          textDecorationLine: isDone ? 'line-through' : 'none',
+          lineHeight: 21,
+        }} numberOfLines={2}>
+          {item.heading}
+        </Text>
+
+        {/* Status pill — tappable */}
         <TouchableOpacity
           style={[styles.statusBadge, { backgroundColor: statusBg }]}
           onPress={onStatusPress}
@@ -158,71 +149,68 @@ function TaskCard({ item, card, txt, sub, bdr, isDark, onPress, onStatusPress, f
           <Text style={[styles.statusText, { color: statusColor }]}>
             {STATUS_LABELS[item.status] || item.status}
           </Text>
-          <Text style={[styles.statusCaret, { color: statusColor }]}>▾</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Row 2: Created by + Due date */}
-      <View style={styles.cardRow2}>
-        {creatorName ? (
-          <Text style={[styles.createdBy, { color: sub }]} numberOfLines={1}>
-            Created by {creatorName}
-          </Text>
-        ) : (
-          <View />
-        )}
-        {item.end_date ? (
-          <Text style={[styles.dueDate, { color: sub }]}>{formatDate(item.end_date)}</Text>
+      {/* Bottom row: project chip + date + priority dot + assignee avatar */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10, gap: 8 }}>
+        {/* Project name — plain text */}
+        {projName ? (
+          <Text style={{ fontSize: 12, fontWeight: '600', color: sub }}>{projName}</Text>
         ) : null}
-      </View>
 
-      {/* Row 3: Priority + Duration + Assignees */}
-      <View style={styles.cardRow3}>
-        <View style={styles.cardRow3Left}>
-          {/* Priority */}
-          {item.priority && (
-            <View style={styles.priorityPill}>
-              <View style={[styles.priorityDot, { backgroundColor: PRIORITY_COLORS[item.priority] || '#888' }]} />
-              <Text style={[styles.priorityText, { color: sub }]}>
-                {item.priority.toUpperCase()}
-              </Text>
-            </View>
-          )}
-          {/* Duration */}
-          {duration && (
-            <View style={[styles.durationPill, { backgroundColor: isDark ? '#252530' : '#F0F0F5', borderColor: bdr }]}>
-              <Text style={{ fontSize: 10, color: sub, fontWeight: '600' }}>⏱ {duration}</Text>
-            </View>
-          )}
-        </View>
-
-        {/* Assignee avatars */}
-        {assignees.length > 0 && (
-          <View style={styles.avatarStack}>
-            {visibleAssignees.map((u, idx) => (
-              <View
-                key={u.id ?? idx}
-                style={[
-                  styles.miniAvatar,
-                  { borderColor: card, marginLeft: idx === 0 ? 0 : -7 },
-                ]}
-              >
-                <Text style={styles.miniAvatarText}>{initialOf(u)}</Text>
-              </View>
-            ))}
-            {overflow > 0 && (
-              <View style={[styles.miniAvatar, styles.miniAvatarOverflow, { borderColor: card, marginLeft: -7 }]}>
-                <Text style={[styles.miniAvatarText, { color: sub }]}>+{overflow}</Text>
-              </View>
-            )}
+        {/* Due date */}
+        {dueFmt && (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <Feather name="calendar" size={11} color={sub} />
+            <Text style={{ fontSize: 12, color: sub }}>{dueFmt}</Text>
           </View>
         )}
+
+        {/* Priority dot + label */}
+        {item.priority && (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: priorityColor }} />
+            <Text style={{ fontSize: 12, color: sub, fontWeight: '500' }}>
+              {item.priority.charAt(0).toUpperCase() + item.priority.slice(1)}
+            </Text>
+          </View>
+        )}
+
+        <View style={{ flex: 1 }} />
+
+        {/* Assignee avatar — colored initials */}
+        {assignees.length > 0 && (() => {
+          const u = assignees[0];
+          const first = (u.first_name || u.full_name || u.username || 'U').trim();
+          const last  = (u.last_name || '').trim();
+          const initials = last
+            ? (first.charAt(0) + last.charAt(0)).toUpperCase()
+            : first.slice(0, 2).toUpperCase();
+          const avatarColor = AVATAR_COLORS[
+            (u.id ? u.id % AVATAR_COLORS.length : 0)
+          ];
+          return (
+            <View style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: avatarColor, alignItems: 'center', justifyContent: 'center' }}>
+              <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }}>{initials}</Text>
+            </View>
+          );
+        })()}
       </View>
     </TouchableOpacity>
   );
 }
 
 // ── Main Screen ──────────────────────────────────────────────────────────────
+
+// ── Reusable SVG search icon ─────────────────────────────────────────────────
+const SearchIcon = ({ size = 20, color = '#3B72EE' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Path d="M11 19C15.4183 19 19 15.4183 19 11C19 6.58172 15.4183 3 11 3C6.58172 3 3 6.58172 3 11C3 15.4183 6.58172 19 11 19Z" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+    <Path d="M21 21L16.65 16.65" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+  </Svg>
+);
+
 export default function TasksScreen() {
   const navigation = useNavigation();
   const route = useRoute();
@@ -236,11 +224,28 @@ export default function TasksScreen() {
   const sub  = isDark ? '#9898A6' : '#888899';
   const bdr  = isDark ? '#252530' : '#EBEBF0';
 
-  const [tasks,    setTasks]    = useState([]);
+  // Tasks from shared cache — no duplicate fetches
+  const { tasks: cachedTasks, loading: tasksLoading, refresh: refreshTasks } = useTasksCache();
+  // Local override for optimistic status updates (resets when cache refreshes)
+  const [localTaskOverrides, setLocalTaskOverrides] = useState({});
+  const tasks = cachedTasks.map(t => localTaskOverrides[t.id] ? { ...t, ...localTaskOverrides[t.id] } : t);
+  const setTasks = useCallback((updater) => {
+    // Support functional update form: setTasks(prev => ...)
+    setLocalTaskOverrides(prev => {
+      const current = cachedTasks.map(t => prev[t.id] ? { ...t, ...prev[t.id] } : t);
+      const updated = typeof updater === 'function' ? updater(current) : updater;
+      // Build override map from the diff
+      const overrides = {};
+      updated.forEach(t => { overrides[t.id] = t; });
+      return overrides;
+    });
+  }, [cachedTasks]);
   const [projects, setProjects] = useState([]);
   const [users,    setUsers]    = useState([]);
-  const [loading,  setLoading]  = useState(true);
-  const [filter,   setFilter]   = useState('All');
+  const [loading,  setLoading]  = useState(false);
+  const [filter,   setFilter]   = useState('upcoming');
+  const [priorityFilter, setPriorityFilter] = useState('All');
+  const flatListRef = useRef(null);
   const [search,   setSearch]   = useState('');
 
   const [statusPickerTaskId, setStatusPickerTaskId] = useState(null);
@@ -263,7 +268,6 @@ export default function TasksScreen() {
     });
   }, [user]);
 
-  const [modalVisible,   setModalVisible]   = useState(false);
   const [saving,         setSaving]         = useState(false);
   const [detailTask,     setDetailTask]     = useState(null);
   const slideAnim = useRef(new Animated.Value(-700)).current;
@@ -306,8 +310,6 @@ export default function TasksScreen() {
   const [images,        setImages]        = useState([]);
   const [projectSearch, setProjectSearch] = useState('');
 
-  useFocusEffect(useCallback(() => { fetchTasks(); }, []));
-
   useEffect(() => {
     getProjects().then(setProjects).catch(() => {});
     getUsers().then(setUsers).catch(() => {});
@@ -316,8 +318,8 @@ export default function TasksScreen() {
   useFocusEffect(
     useCallback(() => {
       if (route.params?.openCreateModal) {
-        openModal();
         const presetId = route.params?.presetProjectId;
+        navigation.navigate('CreateTask', presetId ? { projectId: String(presetId) } : {});
         if (presetId) {
           returnToProjectIdRef.current = presetId;
           const found = projects.find(p => String(p.id) === String(presetId));
@@ -346,47 +348,35 @@ export default function TasksScreen() {
     }, [route.params?.openCreateModal, route.params?.openCreateModalAI, route.params?.presetProjectId, route.params?.presetFilter, projects])
   );
 
-  const fetchTasks = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(`${BASE_URL}/tasksite/`, {
-        headers: await authHeaders(),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setTasks(data.results || (Array.isArray(data) ? data : []));
-      }
-    } catch (e) {
-      console.error('fetchTasks error:', e.message);
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Pull-to-refresh: just refresh the cache, don't clear it first
+  const fetchTasks = useCallback(() => {
+    refreshTasks();
+  }, [refreshTasks]);
 
-  const openModal = () => {
-    setModalVisible(true);
-    Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, tension: 80, friction: 12 }).start();
+  // After creating/editing a task: clear cache so fresh data loads
+  const refetchAfterMutation = useCallback(() => {
+    invalidateTasksCache();
+    refreshTasks();
+  }, [refreshTasks]);
+
+  const openModal = (params = {}) => {
+    navigation.navigate('CreateTask', {
+      projectId: params?.projectId || null,
+    });
   };
 
   const closeModal = (fromCancel) => {
-    const returnId = fromCancel ? returnToProjectIdRef.current : null;
-    if (fromCancel) returnToProjectIdRef.current = null;
-    Animated.timing(slideAnim, { toValue: -700, duration: 250, useNativeDriver: true }).start(() => {
-      setModalVisible(false);
-      setHeading(''); setDescription(''); setProject(null); setStatus('backlog');
-      setPriority('medium'); setStartDate(todayISO()); setEndDate('');
-      setStartTime(''); setEndTime('');
-      setAssignedTo([]); setLinks(''); setImages([]); setProjectSearch('');
-      if (returnId) {
-        navigation.navigate('Projects', { reopenProjectId: returnId });
-        return;
-      }
-      const returnTo = route.params?.returnTo;
-      if (returnTo && returnTo !== 'Tasks') {
-        navigation.setParams({ returnTo: null });
-        try { navigation.jumpTo(returnTo); } catch {}
-      }
-    });
+    if (fromCancel && returnToProjectIdRef.current) {
+      const returnId = returnToProjectIdRef.current;
+      returnToProjectIdRef.current = null;
+      navigation.navigate('Projects', { reopenProjectId: returnId });
+      return;
+    }
+    const returnTo = route.params?.returnTo;
+    if (returnTo && returnTo !== 'Tasks') {
+      navigation.setParams({ returnTo: null });
+      try { navigation.jumpTo(returnTo); } catch {}
+    }
   };
 
   const openCamera = async () => {
@@ -423,7 +413,7 @@ export default function TasksScreen() {
       images.forEach((uri, i) => {
         formData.append('uploaded_files', { uri, name: `image_${i}.jpg`, type: 'image/jpeg' });
       });
-      const res  = await fetch(`${BASE_URL}/tasksite/`, {
+      const res  = await fetch(`${BASE_URL}/tasksite/?page=1`, {
         method: 'POST',
         headers: await authHeadersMultipart(),
         body: formData,
@@ -431,7 +421,7 @@ export default function TasksScreen() {
       const data = await res.json();
       if (res.ok) {
         addNotification({ type: 'task', icon: '📋', title: 'Task Created', body: `"${heading.trim()}" added successfully.` });
-        await fetchTasks();
+        refetchAfterMutation();
         closeModal();
         const returnId = returnToProjectIdRef.current;
         if (returnId) {
@@ -638,19 +628,38 @@ export default function TasksScreen() {
     p.name?.toLowerCase().includes(projectSearch.toLowerCase())
   );
 
-  const myTaskCount = tasks.filter(isTaskMine).length;
+  const today = new Date().toISOString().slice(0, 10);
   const baseFiltered =
-    filter === 'All' ? tasks :
-                       tasks.filter(t => t.status === filter);
+    filter === 'upcoming'
+      // Upcoming: pending (always) + in_progress (always)
+      ? tasks.filter(t => {
+          const s = (t.status||'').toLowerCase();
+          return s === 'pending' || s === 'in_progress';
+        })
+      : filter === 'overdue'
+      // Overdue: any task (except completed/deployed) with a past due date
+      // pending + backlog + review + deferred — all show here if past due
+      ? tasks.filter(t => {
+          const s = (t.status||'').toLowerCase();
+          const due = t.end_date || t.due_date;
+          return !['completed','deployed','done','in_progress'].includes(s) && due && due < today;
+        })
+      : filter === 'completed'
+      ? tasks.filter(t => ['completed','done','deployed'].includes(t.status))
+      : tasks;
+
+  const priorityFiltered = priorityFilter === 'All'
+    ? baseFiltered
+    : baseFiltered.filter(t => (t.priority || '').toLowerCase() === priorityFilter.toLowerCase());
 
   const q = search.trim().toLowerCase();
   const filtered = q
-    ? baseFiltered.filter(t => {
+    ? priorityFiltered.filter(t => {
         const heading = String(t.heading || '').toLowerCase();
         const proj    = String(t.project_details?.name || '').toLowerCase();
         return heading.includes(q) || proj.includes(q);
       })
-    : baseFiltered;
+    : priorityFiltered;
 
   const formatDate = iso => {
     try { return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: '2-digit' }); }
@@ -698,21 +707,22 @@ export default function TasksScreen() {
       <View style={[styles.navbar, { backgroundColor: card, borderBottomColor: bdr }]}>
         <View style={styles.navLeft}>
           <SidebarMenu activeScreen="Tasks" />
-          <TouchableOpacity
-            style={styles.logoBox}
-            onPress={() => { try { navigation.jumpTo('Dashboard'); } catch { navigation.navigate('Main', { screen: 'Dashboard' }); } }}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.logoText}>D</Text>
-          </TouchableOpacity>
-          <Text style={[styles.brandName, { color: txt }]}>Task Board</Text>
+          <View>
+            <Text style={[styles.brandName, { color: txt }]}>Tasks</Text>
+            <Text style={{ fontSize: 11, color: sub, marginTop: 1 }}>
+              {tasks.length} total{tasks.filter(t => {
+                const s = (t.status||'').toLowerCase(); const due = t.end_date || t.due_date;
+                return !['completed','deployed','done','in_progress'].includes(s) && due && due < new Date().toISOString().slice(0,10);
+              }).length > 0 ? ` · ${tasks.filter(t => {
+                const s = (t.status||'').toLowerCase(); const due = t.end_date || t.due_date;
+                return !['completed','deployed','done','in_progress'].includes(s) && due && due < new Date().toISOString().slice(0,10);
+              }).length} overdue` : ''}
+            </Text>
+          </View>
         </View>
         <View style={styles.navRight}>
-          <TouchableOpacity
-            style={[styles.navIconBtn, { backgroundColor: isDark ? '#252530' : '#FAFAFA', borderColor: bdr }]}
-            onPress={() => navigation.navigate('Chat')}
-          >
-            <Text style={styles.navIcon}>💬</Text>
+          <TouchableOpacity onPress={() => navigation.navigate('Search')} style={{ padding: 6 }}>
+            <SearchIcon size={20} color='#3B72EE' />
           </TouchableOpacity>
           <NotificationBell />
         </View>
@@ -721,7 +731,7 @@ export default function TasksScreen() {
       {/* Sub header */}
       <View style={[styles.subHeader, { backgroundColor: card, borderBottomColor: bdr }]}>
         <View style={[styles.searchWrap, { backgroundColor: bg, borderColor: bdr }]}>
-          <Text style={{ fontSize: 14 }}>🔍</Text>
+          <SearchIcon size={16} color='#3B72EE' />
           <TextInput
             style={[styles.searchInput, { color: txt }]}
             placeholder="Search tasks…"
@@ -736,53 +746,65 @@ export default function TasksScreen() {
             </TouchableOpacity>
           )}
         </View>
-        <Text style={[styles.taskCount, { color: sub }]}>
-          {filtered.length} task{filtered.length !== 1 ? 's' : ''}
-        </Text>
-        <View style={{ flexDirection: 'row', gap: 8, marginLeft: 8 }}>
-          <TouchableOpacity style={styles.aiBtn} onPress={openGenModal}>
-            <Text style={styles.aiBtnText}>✦ AI</Text>
+        <View style={{ flexDirection: 'row', gap: 12, marginLeft: 8, alignItems: 'center' }}>
+          <TouchableOpacity onPress={openGenModal}>
+            <Text style={{ fontSize: 13, fontWeight: '600', color: '#2D6AE3' }}>✦ AI</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.newBtn} onPress={openModal}>
-            <Text style={styles.newBtnText}>+ Create</Text>
+          <TouchableOpacity onPress={openModal}>
+            <Text style={{ fontSize: 13, fontWeight: '700', color: isDark ? '#fff' : '#1A1A2E' }}>+ Create</Text>
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* Filter chips */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={[styles.filtersWrap, { backgroundColor: card, borderBottomColor: bdr }]} contentContainerStyle={[styles.filters, { paddingRight: 12 }]}>
+      {/* Tab bar — Upcoming / Overdue / Completed underline style */}
+      <View style={[{ backgroundColor: card, borderBottomWidth: 1, borderBottomColor: bdr, paddingHorizontal: 16 }]}>
+        <View style={{ flexDirection: 'row' }}>
+          {[
+            { key: 'upcoming',  label: 'Upcoming',  count: tasks.filter(t => { const s = (t.status||'').toLowerCase(); return s === 'pending' || s === 'in_progress'; }).length },
+            { key: 'overdue',   label: 'Overdue',   count: tasks.filter(t => { const s = (t.status||'').toLowerCase(); const due = t.end_date||t.due_date; return !['completed','deployed','done','in_progress'].includes(s) && due && due < new Date().toISOString().slice(0,10); }).length },
+            { key: 'completed', label: 'Completed', count: tasks.filter(t => ['completed','done','deployed'].includes(t.status)).length },
+          ].map(({ key, label, count }) => {
+            const isActive = filter === key;
+            return (
+              <TouchableOpacity
+                key={key}
+                onPress={() => setFilter(key)}
+                style={{ paddingVertical: 11, paddingHorizontal: 4, marginRight: 20, borderBottomWidth: 2, borderBottomColor: isActive ? '#3B72EE' : 'transparent', flexDirection: 'row', alignItems: 'center', gap: 5 }}
+              >
+                <Text style={{ fontSize: 13, fontWeight: '600', color: isActive ? '#3B72EE' : sub }}>{label}</Text>
+                <View style={{ backgroundColor: isActive ? '#3B72EE' : (isDark ? '#252530' : '#F0F0F5'), borderRadius: 10, paddingHorizontal: 6, paddingVertical: 1 }}>
+                  <Text style={{ fontSize: 10, fontWeight: '700', color: isActive ? '#fff' : sub }}>{count}</Text>
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </View>
+
+      {/* Priority filter chips */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ backgroundColor: isDark ? '#0D0D0F' : '#F5F5FA', flexGrow: 0 }} contentContainerStyle={{ flexDirection: 'row', gap: 10, paddingHorizontal: 14, paddingVertical: 10, alignItems: 'center' }}>
         {[
-          { key: 'All',         label: 'All' },
-          { key: 'pending',     label: 'Pending' },
-          { key: 'in_progress', label: 'In Progress' },
-          { key: 'completed',   label: 'Completed' },
-          { key: 'backlog',     label: 'Backlog' },
-          { key: 'deployed',    label: 'Deployed' },
-          { key: 'deferred',    label: 'Deferred' },
-          { key: 'review',      label: 'Review' },
-        ].map(({ key, label }) => {
-          const isActive = filter === key;
-          const showCount = key === 'All' && tasks.length > 0;
+          { key: 'All',    label: 'All',    color: null },
+          { key: 'urgent', label: 'Critical', color: '#EF4444' },
+          { key: 'high',   label: 'High',   color: '#F97316' },
+          { key: 'medium', label: 'Medium', color: '#3B72EE' },
+          { key: 'low',    label: 'Low',    color: '#22C55E' },
+        ].map(({ key, label, color }) => {
+          const isActive = (priorityFilter || 'All') === key;
           return (
             <TouchableOpacity
               key={key}
-              style={[
-                styles.chip,
-                { backgroundColor: card, borderColor: bdr },
-                isActive && { backgroundColor: isDark ? '#4ECDC4' : '#1A1A2E', borderColor: isDark ? '#4ECDC4' : '#1A1A2E' },
-              ]}
-              onPress={() => setFilter(key)}
+              onPress={() => setPriorityFilter(key)}
+              style={{
+                flexDirection: 'row', alignItems: 'center', gap: 5,
+                paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20, height: 34,
+                backgroundColor: isActive ? (isDark ? '#fff' : '#1A1A2E') : (isDark ? '#252530' : '#fff'),
+                borderWidth: isActive ? 0 : 1,
+                borderColor: bdr,
+              }}
             >
-              <Text style={[styles.chipText, { color: sub }, isActive && { color: isDark ? '#0D0D0F' : '#fff', fontWeight: '700' }]}>
-                {label}
-              </Text>
-              {showCount && (
-                <View style={[styles.chipBadge, isActive ? { backgroundColor: isDark ? '#1A1A2E' : '#fff' } : { backgroundColor: '#4ECDC4' }]}>
-                  <Text style={[styles.chipBadgeText, { color: isActive ? (isDark ? '#4ECDC4' : '#1A1A2E') : '#fff' }]}>
-                    {key === 'All' ? tasks.length : myTaskCount}
-                  </Text>
-                </View>
-              )}
+              {color && <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: color }} />}
+              <Text style={{ fontSize: 13, fontWeight: '600', color: isActive ? (isDark ? '#1A1A2E' : '#fff') : (isDark ? '#9898A6' : '#555') }}>{label}</Text>
             </TouchableOpacity>
           );
         })}
@@ -791,7 +813,7 @@ export default function TasksScreen() {
       {/* Task list */}
       {loading ? (
         <View style={styles.emptyState}>
-          <ActivityIndicator size="large" color="#4ECDC4" />
+          <ActivityIndicator size="large" color="#3B72EE" />
           <Text style={[styles.emptySub, { color: sub }]}>Loading tasks...</Text>
         </View>
       ) : filtered.length === 0 ? (
@@ -806,6 +828,7 @@ export default function TasksScreen() {
         </View>
       ) : (
         <FlatList
+          ref={flatListRef}
           data={filtered}
           keyExtractor={i => String(i.id)}
           contentContainerStyle={{ padding: 12, paddingBottom: 110 }}
@@ -819,7 +842,7 @@ export default function TasksScreen() {
               sub={sub}
               bdr={bdr}
               isDark={isDark}
-              onPress={() => setDetailTask(item)}
+              onPress={() => navigation.navigate('TaskDetail', { taskId: item.id })}
               onStatusPress={canEditItem(user?.role, item, user?.id)
                 ? () => setStatusPickerTaskId(item.id)
                 : null}
@@ -829,316 +852,6 @@ export default function TasksScreen() {
         />
       )}
 
-      {/* ── Create Task Modal ── */}
-      {modalVisible && (
-        <Modal transparent visible animationType="none" onRequestClose={closeModal}>
-          <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => closeModal(true)} />
-          <Animated.View
-            style={[
-              styles.topModal,
-              { backgroundColor: card, transform: [{ translateY: slideAnim }], maxHeight: Dimensions.get('window').height - kbHeight },
-            ]}
-          >
-            <SafeAreaView style={{ flexShrink: 1 }}>
-              <View style={[styles.handle, { backgroundColor: isDark ? '#3A3A48' : '#DEDEE8' }]} />
-              <ScrollView
-                style={styles.modalScroll}
-                contentContainerStyle={{ paddingBottom: kbHeight > 0 ? 24 : 40 }}
-                keyboardShouldPersistTaps="handled"
-                showsVerticalScrollIndicator={false}
-              >
-                <View style={styles.modalHeader}>
-                  <Text style={[styles.modalTitle, { color: txt }]}>Create Task</Text>
-                  <TouchableOpacity style={[styles.closeCircle, { backgroundColor: isDark ? '#252530' : '#F5F5F7' }]} onPress={() => closeModal(true)}>
-                    <Text style={[styles.closeCircleText, { color: sub }]}>✕</Text>
-                  </TouchableOpacity>
-                </View>
-
-                {/* Project */}
-                <Text style={[styles.fieldLabel, { color: sub }]}>Project *</Text>
-                <TextInput
-                  style={[styles.input, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr, color: txt }, project && { borderColor: '#4ECDC4', backgroundColor: card }]}
-                  placeholder="Search project..."
-                  placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
-                  value={project ? project.name : projectSearch}
-                  onChangeText={t => { setProjectSearch(t); setProject(null); }}
-                />
-                {!project && projectSearch.length > 0 && filteredProjects.length > 0 && (
-                  <View style={[styles.searchList, { backgroundColor: card }]}>
-                    {filteredProjects.slice(0, 5).map((p, i) => (
-                      <TouchableOpacity
-                        key={p.id}
-                        style={[styles.searchItem, { borderBottomColor: bdr }, i === Math.min(filteredProjects.length, 5) - 1 && { borderBottomWidth: 0 }]}
-                        onPress={() => { setProject(p); setProjectSearch(''); }}
-                      >
-                        <Text style={[styles.searchItemText, { color: txt }]}>{p.name}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                )}
-
-                {/* Task Title */}
-                <Text style={[styles.fieldLabel, { color: sub }]}>Task Title *</Text>
-                <View style={styles.enhanceWrap}>
-                  <TextInput
-                    style={[styles.input, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr, color: txt, flex: 1, marginBottom: 0 }]}
-                    placeholder="Enter a concise task title"
-                    placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
-                    value={heading}
-                    onChangeText={setHeading}
-                  />
-                  <TouchableOpacity style={styles.enhanceBtn} onPress={enhanceTitle} disabled={enhancingTitle}>
-                    {enhancingTitle ? <ActivityIndicator size="small" color="#A78BFA" /> : <Text style={styles.enhanceIcon}>✨</Text>}
-                  </TouchableOpacity>
-                </View>
-                <Text style={styles.enhanceHint}>✨ Optimize title with Nova AI</Text>
-
-                {/* Description */}
-                <Text style={[styles.fieldLabel, { marginTop: 10, color: sub }]}>Description</Text>
-                <View style={styles.enhanceWrap}>
-                  <TextInput
-                    style={[styles.input, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr, color: txt, flex: 1, height: 90, paddingTop: 12, marginBottom: 0 }]}
-                    placeholder="Add task details..."
-                    placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
-                    value={description}
-                    onChangeText={setDescription}
-                    multiline
-                    textAlignVertical="top"
-                  />
-                  <View style={{ gap: 6 }}>
-                    <TouchableOpacity style={styles.enhanceBtn} onPress={refineDescription} disabled={enhancingDesc}>
-                      {enhancingDesc ? <ActivityIndicator size="small" color="#A78BFA" /> : <Text style={styles.enhanceIcon}>✨</Text>}
-                    </TouchableOpacity>
-                    <TouchableOpacity style={[styles.enhanceBtn, { backgroundColor: 'rgba(78,205,196,0.1)', borderColor: 'rgba(78,205,196,0.3)' }]} onPress={generateDescription} disabled={generatingDesc}>
-                      {generatingDesc ? <ActivityIndicator size="small" color="#4ECDC4" /> : <Text style={styles.enhanceIcon}>⚡</Text>}
-                    </TouchableOpacity>
-                  </View>
-                </View>
-                <Text style={styles.enhanceHint}>✨ Refine · ⚡ Generate from title</Text>
-
-                {/* Status + Priority */}
-                <View style={{ flexDirection: 'row', gap: 10, marginBottom: 14 }}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.fieldLabel, { color: sub }]}>Status</Text>
-                    <InlineDropdown
-                      placeholder="Select status"
-                      options={STATUS_OPTIONS.map(s => ({ label: STATUS_LABELS[s], value: s }))}
-                      selected={status ? STATUS_LABELS[status] : null}
-                      onSelect={o => setStatus(o.value)}
-                    />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.fieldLabel, { color: sub }]}>Priority</Text>
-                    <InlineDropdown
-                      placeholder="Priority"
-                      options={PRIORITY_OPTIONS.map(p => ({ label: p.charAt(0).toUpperCase() + p.slice(1), value: p }))}
-                      selected={priority ? priority.charAt(0).toUpperCase() + priority.slice(1) : null}
-                      onSelect={o => setPriority(o.value)}
-                    />
-                  </View>
-                </View>
-
-                {/* Start + End Date */}
-                <View style={{ flexDirection: 'row', gap: 10, marginBottom: 14 }}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.fieldLabel, { color: sub }]}>Start Date</Text>
-                    <TouchableOpacity
-                      style={[styles.input, styles.dateBtn, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}
-                      onPress={() => { const next = !showStartDatePicker; setShowEndDatePicker(false); setShowStartTimePicker(false); setShowEndTimePicker(false); setShowStartDatePicker(next); }}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={{ color: startDate ? txt : (isDark ? '#6C6C80' : '#AAAABC'), fontSize: 14 }}>{startDate || 'Select date'}</Text>
-                      <Text style={{ color: sub, fontSize: 12 }}>📅</Text>
-                    </TouchableOpacity>
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.fieldLabel, { color: sub }]}>Due Date</Text>
-                    <TouchableOpacity
-                      style={[styles.input, styles.dateBtn, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}
-                      onPress={() => { const next = !showEndDatePicker; setShowStartDatePicker(false); setShowStartTimePicker(false); setShowEndTimePicker(false); setShowEndDatePicker(next); }}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={{ color: endDate ? txt : (isDark ? '#6C6C80' : '#AAAABC'), fontSize: 14 }}>{endDate || 'Select date'}</Text>
-                      <Text style={{ color: sub, fontSize: 12 }}>📅</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-
-                {/* Start + End Time */}
-                <View style={{ flexDirection: 'row', gap: 10, marginBottom: 14 }}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.fieldLabel, { color: sub }]}>Start Time</Text>
-                    <TouchableOpacity
-                      style={[styles.input, styles.dateBtn, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}
-                      onPress={() => { const next = !showStartTimePicker; setShowStartDatePicker(false); setShowEndDatePicker(false); setShowEndTimePicker(false); setShowStartTimePicker(next); }}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={{ color: startTime ? txt : (isDark ? '#6C6C80' : '#AAAABC'), fontSize: 14 }}>{startTime || 'Select time'}</Text>
-                      <Text style={{ color: sub, fontSize: 12 }}>🕐</Text>
-                    </TouchableOpacity>
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.fieldLabel, { color: sub }]}>End Time</Text>
-                    <TouchableOpacity
-                      style={[styles.input, styles.dateBtn, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}
-                      onPress={() => { const next = !showEndTimePicker; setShowStartDatePicker(false); setShowEndDatePicker(false); setShowStartTimePicker(false); setShowEndTimePicker(next); }}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={{ color: endTime ? txt : (isDark ? '#6C6C80' : '#AAAABC'), fontSize: 14 }}>{endTime || 'Select time'}</Text>
-                      <Text style={{ color: sub, fontSize: 12 }}>🕐</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-
-                {/* Date/Time pickers */}
-                {showStartDatePicker && (
-                  <View>
-                    {Platform.OS === 'ios' && (<View style={[styles.pickerToolbar, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}><TouchableOpacity onPress={() => setShowStartDatePicker(false)}><Text style={styles.pickerDone}>Done</Text></TouchableOpacity></View>)}
-                    <DateTimePicker value={startDate ? new Date(startDate + 'T00:00:00') : new Date()} mode="date" display={Platform.OS === 'ios' ? 'inline' : 'default'} onChange={(event, selected) => { if (Platform.OS !== 'ios') setShowStartDatePicker(false); if (event.type === 'set' && selected) { const yyyy = selected.getFullYear(); const mm = String(selected.getMonth()+1).padStart(2,'0'); const dd = String(selected.getDate()).padStart(2,'0'); setStartDate(`${yyyy}-${mm}-${dd}`); } }} />
-                  </View>
-                )}
-                {showEndDatePicker && (
-                  <View>
-                    {Platform.OS === 'ios' && (<View style={[styles.pickerToolbar, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}><TouchableOpacity onPress={() => setShowEndDatePicker(false)}><Text style={styles.pickerDone}>Done</Text></TouchableOpacity></View>)}
-                    <DateTimePicker value={endDate ? new Date(endDate + 'T00:00:00') : (startDate ? new Date(startDate + 'T00:00:00') : new Date())} mode="date" display={Platform.OS === 'ios' ? 'inline' : 'default'} minimumDate={startDate ? new Date(startDate + 'T00:00:00') : undefined} onChange={(event, selected) => { if (Platform.OS !== 'ios') setShowEndDatePicker(false); if (event.type === 'set' && selected) { const yyyy = selected.getFullYear(); const mm = String(selected.getMonth()+1).padStart(2,'0'); const dd = String(selected.getDate()).padStart(2,'0'); setEndDate(`${yyyy}-${mm}-${dd}`); } }} />
-                  </View>
-                )}
-                {showStartTimePicker && (
-                  <View>
-                    {Platform.OS === 'ios' && (<View style={[styles.pickerToolbar, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}><TouchableOpacity onPress={() => setShowStartTimePicker(false)}><Text style={styles.pickerDone}>Done</Text></TouchableOpacity></View>)}
-                    <DateTimePicker value={startTime ? new Date(`1970-01-01T${startTime}:00`) : new Date()} mode="time" is24Hour={false} display={Platform.OS === 'ios' ? 'spinner' : 'default'} onChange={(event, selected) => { if (Platform.OS !== 'ios') setShowStartTimePicker(false); if (event.type === 'set' && selected) { const hh = String(selected.getHours()).padStart(2,'0'); const mm = String(selected.getMinutes()).padStart(2,'0'); setStartTime(`${hh}:${mm}`); } }} />
-                  </View>
-                )}
-                {showEndTimePicker && (
-                  <View>
-                    {Platform.OS === 'ios' && (<View style={[styles.pickerToolbar, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}><TouchableOpacity onPress={() => setShowEndTimePicker(false)}><Text style={styles.pickerDone}>Done</Text></TouchableOpacity></View>)}
-                    <DateTimePicker value={endTime ? new Date(`1970-01-01T${endTime}:00`) : new Date()} mode="time" is24Hour={false} display={Platform.OS === 'ios' ? 'spinner' : 'default'} onChange={(event, selected) => { if (Platform.OS !== 'ios') setShowEndTimePicker(false); if (event.type === 'set' && selected) { const hh = String(selected.getHours()).padStart(2,'0'); const mm = String(selected.getMinutes()).padStart(2,'0'); setEndTime(`${hh}:${mm}`); } }} />
-                  </View>
-                )}
-
-                {/* Assignees */}
-                <Text style={[styles.fieldLabel, { color: sub }]}>Assignees</Text>
-                <View style={[styles.assigneePickerBox, { backgroundColor: card, borderColor: assigneeDropdownOpen ? '#4ECDC4' : bdr }]}>
-                  <TouchableOpacity activeOpacity={1} onPress={() => setAssigneeDropdownOpen(true)} style={styles.assigneePickerInner}>
-                    {assignedTo.map(uid => {
-                      const u = users.find(x => x.id === uid);
-                      if (!u) return null;
-                      const name = u.first_name || u.username || 'User';
-                      return (
-                        <View key={uid} style={styles.pickerChip}>
-                          <Text style={styles.pickerChipText}>{name}</Text>
-                          <TouchableOpacity onPress={() => toggleAssignee(uid)} hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}>
-                            <Text style={styles.pickerChipX}>×</Text>
-                          </TouchableOpacity>
-                        </View>
-                      );
-                    })}
-                    <TextInput
-                      style={[styles.pickerInput, { color: txt, minWidth: assignedTo.length === 0 ? 180 : 80 }]}
-                      placeholder={assignedTo.length === 0 ? 'Search and select assignees…' : 'Add more…'}
-                      placeholderTextColor={sub}
-                      value={assigneeSearch}
-                      onChangeText={t => { setAssigneeSearch(t); setAssigneeDropdownOpen(true); }}
-                      onFocus={() => setAssigneeDropdownOpen(true)}
-                      autoCapitalize="none"
-                    />
-                  </TouchableOpacity>
-                  {assigneeDropdownOpen && (
-                    <TouchableOpacity style={styles.pickerCloseBtn} onPress={() => { setAssigneeDropdownOpen(false); setAssigneeSearch(''); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                      <Text style={[styles.pickerCloseBtnText, { color: sub }]}>✕</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-
-                {assigneeDropdownOpen && (() => {
-                  const aq = assigneeSearch.trim().toLowerCase();
-                  const matches = users.filter(u => !assignedTo.includes(u.id)).filter(u => {
-                    if (!aq) return true;
-                    const name = `${u.first_name || ''} ${u.last_name || ''} ${u.username || ''} ${u.email || ''}`.toLowerCase();
-                    return name.includes(aq);
-                  });
-                  return (
-                    <View style={[styles.pickerDropdown, { backgroundColor: card, borderColor: bdr }]}>
-                      {matches.length === 0 ? (
-                        <Text style={[styles.pickerDropdownEmpty, { color: sub }]}>{assignedTo.length === users.length ? 'All users added' : 'No matches'}</Text>
-                      ) : (
-                        <ScrollView style={{ maxHeight: 220 }} nestedScrollEnabled keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator>
-                          {matches.map(u => {
-                            const name = [u.first_name, u.last_name].filter(Boolean).join(' ') || u.username || 'User';
-                            const initial = (name || 'U').charAt(0).toUpperCase();
-                            return (
-                              <TouchableOpacity key={u.id} style={[styles.pickerDropdownItem, { borderBottomColor: bdr }]} onPress={() => { toggleAssignee(u.id); setAssigneeSearch(''); }}>
-                                <View style={styles.pickerAvatar}><Text style={styles.pickerAvatarText}>{initial}</Text></View>
-                                <View style={{ flex: 1 }}>
-                                  <Text style={[styles.pickerDropdownName, { color: txt }]}>{name}</Text>
-                                  {!!u.email && <Text style={[styles.pickerDropdownEmail, { color: sub }]} numberOfLines={1}>{u.email}</Text>}
-                                </View>
-                              </TouchableOpacity>
-                            );
-                          })}
-                        </ScrollView>
-                      )}
-                      <TouchableOpacity style={[styles.pickerDropdownClose, { borderTopColor: bdr }]} onPress={() => { setAssigneeDropdownOpen(false); setAssigneeSearch(''); }}>
-                        <Text style={[styles.pickerDropdownCloseText, { color: '#4ECDC4' }]}>Done</Text>
-                      </TouchableOpacity>
-                    </View>
-                  );
-                })()}
-
-                {/* Links */}
-                <Text style={[styles.fieldLabel, { color: sub }]}>Links</Text>
-                <TextInput
-                  style={[styles.input, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr, color: txt, marginBottom: 14 }]}
-                  placeholder="Paste URL here..."
-                  placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
-                  value={links}
-                  onChangeText={setLinks}
-                  autoCapitalize="none"
-                />
-
-                {/* Attachments */}
-                <Text style={[styles.fieldLabel, { color: sub }]}>Attachments</Text>
-                <View style={styles.attachRow}>
-                  <TouchableOpacity style={[styles.attachBtn, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]} onPress={openCamera}>
-                    <View style={[styles.attachIconWrap, { backgroundColor: card, borderColor: bdr }]}><Text style={{ fontSize: 22 }}>📷</Text></View>
-                    <Text style={[styles.attachLabel, { color: txt }]}>Camera</Text>
-                    <Text style={[styles.attachSub, { color: isDark ? '#6C6C80' : '#AAAABC' }]}>Take a photo</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={[styles.attachBtn, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]} onPress={openGallery}>
-                    <View style={[styles.attachIconWrap, { backgroundColor: card, borderColor: bdr }]}><Text style={{ fontSize: 22 }}>🖼️</Text></View>
-                    <Text style={[styles.attachLabel, { color: txt }]}>Gallery</Text>
-                    <Text style={[styles.attachSub, { color: isDark ? '#6C6C80' : '#AAAABC' }]}>Pick from photos</Text>
-                  </TouchableOpacity>
-                </View>
-                {images.length > 0 && (
-                  <View style={{ marginBottom: 14 }}>
-                    <Text style={[styles.fieldLabel, { color: sub, marginBottom: 8 }]}>{images.length} image{images.length > 1 ? 's' : ''} attached</Text>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                      {images.map((uri, i) => (
-                        <View key={i} style={{ position: 'relative', marginRight: 10 }}>
-                          <Image source={{ uri }} style={[styles.previewImg, { borderColor: bdr }]} />
-                          <TouchableOpacity style={styles.removeImg} onPress={() => setImages(p => p.filter((_, idx) => idx !== i))}>
-                            <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700' }}>✕</Text>
-                          </TouchableOpacity>
-                        </View>
-                      ))}
-                    </ScrollView>
-                  </View>
-                )}
-
-                <View style={[styles.modalBtns, { marginBottom: 28 }]}>
-                  <TouchableOpacity style={[styles.cancelBtn, { borderColor: bdr, backgroundColor: card }]} onPress={() => closeModal(true)} disabled={saving}>
-                    <Text style={[styles.cancelBtnText, { color: sub }]}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={[styles.submitBtn, saving && { opacity: 0.7 }]} onPress={createTask} disabled={saving}>
-                    {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.submitBtnText}>Create Task</Text>}
-                  </TouchableOpacity>
-                </View>
-              </ScrollView>
-            </SafeAreaView>
-          </Animated.View>
-        </Modal>
-      )}
 
       {/* ── Generate Task by AI Modal ── */}
       {genModalVisible && (
@@ -1274,7 +987,7 @@ export default function TasksScreen() {
                 </TouchableOpacity>
               );
             })}
-            {updatingStatus && (<View style={styles.pickerLoadingOverlay}><ActivityIndicator size="small" color="#4ECDC4" /></View>)}
+            {updatingStatus && (<View style={styles.pickerLoadingOverlay}><ActivityIndicator size="small" color="#3B72EE" /></View>)}
           </View>
         </TouchableOpacity>
       </Modal>
@@ -1284,7 +997,7 @@ export default function TasksScreen() {
         visible={!!detailTask}
         task={detailTask}
         onClose={() => setDetailTask(null)}
-        onUpdated={(updatedTask) => { fetchTasks(); if (updatedTask) setDetailTask(updatedTask); }}
+        onUpdated={(updatedTask) => { refetchAfterMutation(); if (updatedTask) setDetailTask(updatedTask); }}
       />
 
       {/* Success toast */}
@@ -1308,7 +1021,7 @@ const styles = StyleSheet.create({
   navLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   navRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   logoBox: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center' },
-  logoText: { color: '#4ECDC4', fontSize: 15, fontWeight: '800' },
+  logoText: { color: '#3B72EE', fontSize: 15, fontWeight: '800' },
   brandName: { fontSize: 15, fontWeight: '700' },
   navIconBtn: { width: 36, height: 36, borderRadius: 8, borderWidth: 1, justifyContent: 'center', alignItems: 'center' },
   navIcon: { fontSize: 16 },
@@ -1397,6 +1110,20 @@ const styles = StyleSheet.create({
   pickerCheck: { fontSize: 14, fontWeight: '700' },
   pickerLoadingOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(255,255,255,0.55)', borderRadius: 14, justifyContent: 'center', alignItems: 'center' },
 
+  // Dev_1 tab bar
+  tabBar: { flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 8, gap: 8, borderBottomWidth: 1 },
+  tab: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999 },
+  tabText: { fontSize: 13, fontWeight: '600' },
+  tabBadge: { minWidth: 20, height: 20, borderRadius: 10, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
+  tabBadgeText: { fontSize: 11, fontWeight: '700' },
+
+  // Dev_1 task card — checkbox + left border
+  checkbox: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: '#DEDEE8', backgroundColor: 'transparent', alignItems: 'center', justifyContent: 'center', marginTop: 1, flexShrink: 0 },
+
+  // Due date meta pill
+  metaDatePill: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  metaDateText: { fontSize: 11, fontWeight: '500' },
+
   // Toast
   toastOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },
   toastCard: { minWidth: 240, maxWidth: 320, borderRadius: 14, borderWidth: 1, paddingHorizontal: 18, paddingVertical: 14, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12, elevation: 6 },
@@ -1416,8 +1143,8 @@ const styles = StyleSheet.create({
   input: { backgroundColor: '#F5F5F7', borderRadius: 10, borderWidth: 1.5, borderColor: '#EBEBF0', paddingHorizontal: 14, height: 46, fontSize: 14, color: '#1A1A2E', marginBottom: 14 },
   dateBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 0 },
   pickerToolbar: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, marginTop: 6 },
-  pickerDone: { color: '#4ECDC4', fontSize: 15, fontWeight: '700' },
-  searchList: { backgroundColor: '#fff', borderRadius: 10, borderWidth: 1.5, borderColor: '#4ECDC4', marginTop: -10, marginBottom: 14 },
+  pickerDone: { color: '#3B72EE', fontSize: 15, fontWeight: '700' },
+  searchList: { backgroundColor: '#fff', borderRadius: 10, borderWidth: 1.5, borderColor: '#3B72EE', marginTop: -10, marginBottom: 14 },
   searchItem: { paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F0F0F5' },
   searchItemText: { fontSize: 13, color: '#1A1A2E' },
   attachRow: { flexDirection: 'row', gap: 12, marginBottom: 14 },
@@ -1475,4 +1202,6 @@ const styles = StyleSheet.create({
   aiSlotChipActive: { backgroundColor: '#7C3AED', borderColor: '#7C3AED' },
   aiSlotChipText: { fontSize: 13, fontWeight: '600', color: '#15803D' },
   aiSlotChipTextActive: { color: '#FFFFFF' },
+
+
 });

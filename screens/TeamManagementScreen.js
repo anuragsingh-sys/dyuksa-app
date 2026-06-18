@@ -1,10 +1,12 @@
+import React, { useState, useEffect, useContext, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   ActivityIndicator, RefreshControl, StatusBar, Alert,
+  Modal, TextInput, KeyboardAvoidingView, Platform,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useState, useContext, useCallback } from 'react';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useNavigation, useFocusEffect, useRoute } from '@react-navigation/native';
+import Svg, { Path } from 'react-native-svg';
 import { ThemeContext } from '../context/ThemeContext';
 import { AuthContext } from '../context/AuthContext';
 import { getAccessToken, getWorkspaceId } from '../services/ApiService';
@@ -50,10 +52,10 @@ function AvatarStack({ members, max = 4, isDark }) {
           key={m.id}
           style={[
             styles.stackAvatar,
-            { marginLeft: i === 0 ? 0 : -8, zIndex: max - i, backgroundColor: '#4ECDC4' },
+            { marginLeft: i === 0 ? 0 : -8, zIndex: max - i, backgroundColor: '#3B72EE22' },
           ]}
         >
-          <Text style={styles.stackAvatarText}>{m.user?.initials || '?'}</Text>
+          <Text style={[styles.stackAvatarText, { color: '#3B72EE' }]}>{m.user?.initials || '?'}</Text>
         </View>
       ))}
       {extra > 0 && (
@@ -68,12 +70,13 @@ function AvatarStack({ members, max = 4, isDark }) {
 // ── Team Detail Modal ────────────────────────────────────────────────────────
 function TeamDetail({ team, onClose, isDark, card, txt, sub, bdr }) {
   const ts = typeStyle(team.team_type);
+  const insets = useSafeAreaInsets();
   return (
     <View style={[styles.detailPanel, { backgroundColor: card, borderLeftColor: bdr }]}>
       {/* Header */}
-      <View style={[styles.detailHeader, { borderBottomColor: bdr }]}>
+      <View style={[styles.detailHeader, { borderBottomColor: bdr, paddingTop: insets.top + 10 }]}>
         <TouchableOpacity onPress={onClose} style={styles.detailClose}>
-          <Text style={{ color: '#4ECDC4', fontSize: 14, fontWeight: '600' }}>← Back</Text>
+          <Text style={{ color: '#3B72EE', fontSize: 14, fontWeight: '600' }}>← Back</Text>
         </TouchableOpacity>
         <Text style={[styles.detailTitle, { color: txt }]} numberOfLines={1}>{team.name}</Text>
         <View style={{ width: 60 }} />
@@ -106,7 +109,7 @@ function TeamDetail({ team, onClose, isDark, card, txt, sub, bdr }) {
             </View>
             <View style={styles.detailMetaItem}>
               <Text style={[styles.detailMetaLabel, { color: sub }]}>My Role</Text>
-              <Text style={[styles.detailMetaValue, { color: '#4ECDC4' }]}>{team.my_role || '—'}</Text>
+              <Text style={[styles.detailMetaValue, { color: '#3B72EE' }]}>{team.my_role || '—'}</Text>
             </View>
             <View style={styles.detailMetaItem}>
               <Text style={[styles.detailMetaLabel, { color: sub }]}>Created</Text>
@@ -127,8 +130,8 @@ function TeamDetail({ team, onClose, isDark, card, txt, sub, bdr }) {
                 i === team.members.length - 1 && { borderBottomWidth: 0 },
               ]}
             >
-              <View style={[styles.memberAvatar, { backgroundColor: '#4ECDC4' }]}>
-                <Text style={styles.memberAvatarText}>{m.user?.initials || '?'}</Text>
+              <View style={[styles.memberAvatar, { backgroundColor: '#3B72EE22' }]}>
+                <Text style={[styles.memberAvatarText, { color: '#3B72EE' }]}>{m.user?.initials || '?'}</Text>
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={[styles.memberName, { color: txt }]}>{m.user?.full_name}</Text>
@@ -156,6 +159,7 @@ function TeamDetail({ team, onClose, isDark, card, txt, sub, bdr }) {
 // ── Main Screen ──────────────────────────────────────────────────────────────
 export default function TeamManagementScreen() {
   const navigation = useNavigation();
+  const route      = useRoute();
   const { theme, fontScale } = useContext(ThemeContext);
   const { user } = useContext(AuthContext);
   const isDark = theme === 'Dark';
@@ -167,9 +171,37 @@ export default function TeamManagementScreen() {
   const fs   = s => s * fontScale;
 
   const [teams,      setTeams]      = useState([]);
+  const [users,      setUsers]      = useState([]);
   const [loading,    setLoading]    = useState(true);
+  const [usersLoading, setUsersLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [selected,   setSelected]   = useState(null); // team detail
+  const [selected,   setSelected]   = useState(null);
+  const [activeTab,  setActiveTab]  = useState('teams');
+
+  // Sync tab from route params
+  useEffect(() => {
+    if (route.params?.initialTab) {
+      setActiveTab(route.params.initialTab);
+    }
+  }, [route.params?.initialTab]);
+
+  // ── Add New User modal state ──
+  const [showAddUser,    setShowAddUser]    = useState(false);
+  const [addFirstName,   setAddFirstName]   = useState('');
+  const [addLastName,    setAddLastName]    = useState('');
+  const [addUsername,    setAddUsername]    = useState('');
+  const [addEmail,       setAddEmail]       = useState('');
+  const [addRole,        setAddRole]        = useState('viewer');
+  const [addPassword,    setAddPassword]    = useState('');
+  const [addConfirmPass, setAddConfirmPass] = useState('');
+  const [addSaving,      setAddSaving]      = useState(false);
+
+  const ROLES = ['admin', 'manager', 'annotator', 'viewer', 'developer'];
+
+  const resetAddForm = () => {
+    setAddFirstName(''); setAddLastName(''); setAddUsername('');
+    setAddEmail(''); setAddRole('viewer'); setAddPassword(''); setAddConfirmPass('');
+  };
 
   // ── Fetch ─────────────────────────────────────────────────────────
   const fetchTeams = useCallback(async () => {
@@ -196,7 +228,77 @@ export default function TeamManagementScreen() {
 
   useFocusEffect(useCallback(() => { fetchTeams(); }, [fetchTeams]));
 
-  const onRefresh = () => { setRefreshing(true); fetchTeams(); };
+  const fetchUsers = useCallback(async () => {
+    setUsersLoading(true);
+    try {
+      const headers = await authHeaders();
+      let all = [];
+      let page = 1;
+      let hasNext = true;
+      while (hasNext && page <= 10) {
+        const res = await fetch(`${BASE_URL}/auth/users/?page=${page}`, { headers });
+        if (!res.ok) break;
+        const data = await res.json();
+        const results = Array.isArray(data) ? data : (data.results || []);
+        all = [...all, ...results];
+        hasNext = !!data.next;
+        page++;
+      }
+      // Sort by name
+      all.sort((a, b) => {
+        const nameA = [a.first_name, a.last_name].filter(Boolean).join(' ') || a.username;
+        const nameB = [b.first_name, b.last_name].filter(Boolean).join(' ') || b.username;
+        return nameA.localeCompare(nameB);
+      });
+      setUsers(all);
+    } catch (e) { console.warn('fetchUsers:', e.message); }
+    finally { setUsersLoading(false); }
+  }, []);
+
+  // Switch to Roles tab → fetch users
+  const handleTabSwitch = (tab) => {
+    setActiveTab(tab);
+    if (tab === 'roles' && users.length === 0) fetchUsers();
+  };
+
+  const handleAddUser = async () => {
+    if (!addFirstName.trim()) { Alert.alert('Required', 'Enter first name.'); return; }
+    if (!addUsername.trim())  { Alert.alert('Required', 'Enter username.'); return; }
+    if (!addEmail.trim())     { Alert.alert('Required', 'Enter email.'); return; }
+    if (!addPassword)         { Alert.alert('Required', 'Enter password.'); return; }
+    if (addPassword !== addConfirmPass) { Alert.alert('Error', 'Passwords do not match.'); return; }
+    setAddSaving(true);
+    try {
+      const headers = await authHeaders();
+      const res = await fetch(`${BASE_URL}/auth/users/`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          first_name: addFirstName.trim(),
+          last_name:  addLastName.trim(),
+          username:   addUsername.trim(),
+          email:      addEmail.trim(),
+          role:       addRole,
+          password:   addPassword,
+          password2:  addConfirmPass,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        const msg = data.detail || data.message || Object.values(data)[0]?.[0] || 'Failed to create user.';
+        Alert.alert('Error', msg); return;
+      }
+      Alert.alert('Success', `User ${addFirstName} created!`);
+      setShowAddUser(false); resetAddForm(); fetchUsers();
+    } catch (e) { Alert.alert('Error', e.message); }
+    finally { setAddSaving(false); }
+  };
+
+  const onRefresh = () => {
+    setRefreshing(true);
+    if (activeTab === 'roles') fetchUsers().then(() => setRefreshing(false));
+    else fetchTeams();
+  };
 
   // ── Render ─────────────────────────────────────────────────────────
   return (
@@ -207,20 +309,17 @@ export default function TeamManagementScreen() {
       <View style={[styles.navbar, { backgroundColor: card, borderBottomColor: bdr }]}>
         <View style={styles.navLeft}>
           <SidebarMenu activeScreen="TeamManagement" />
-          <TouchableOpacity
-            style={styles.logoBox}
-            onPress={() => { try { navigation.jumpTo('Dashboard'); } catch { navigation.navigate('Main', { screen: 'Dashboard' }); } }}
-          >
-            <Text style={styles.logoText}>D</Text>
-          </TouchableOpacity>
           <Text style={[styles.brandName, { color: txt, fontSize: fs(15) }]}>Team Management</Text>
         </View>
         <View style={styles.navRight}>
           <TouchableOpacity
-            style={[styles.navIconBtn, { backgroundColor: isDark ? '#252530' : '#FAFAFA', borderColor: bdr }]}
-            onPress={() => navigation.navigate('Chat')}
+            style={{ padding: 6 }}
+            onPress={() => navigation.navigate('Search')}
           >
-            <Text style={styles.navIcon}>💬</Text>
+            <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
+              <Path d="M11 19C15.4183 19 19 15.4183 19 11C19 6.58172 15.4183 3 11 3C6.58172 3 3 6.58172 3 11C3 15.4183 6.58172 19 11 19Z" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+              <Path d="M21 21L16.65 16.65" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+            </Svg>
           </TouchableOpacity>
           <NotificationBell />
         </View>
@@ -229,40 +328,207 @@ export default function TeamManagementScreen() {
       {/* Sub-tabs */}
       <View style={[styles.subTabs, { backgroundColor: card, borderBottomColor: bdr }]}>
         {[
-          { key: 'teams', label: 'Teams', active: true },
-          { key: 'roles', label: 'Roles', active: false },
-          { key: 'performance', label: 'Performance', active: false },
-        ].map(tab => (
-          <TouchableOpacity
-            key={tab.key}
-            style={[styles.subTab, tab.active && styles.subTabActive]}
-            onPress={() => !tab.active && Alert.alert('Coming soon', `${tab.label} will be available soon.`)}
-          >
-            <Text style={[styles.subTabTxt, { color: tab.active ? '#4ECDC4' : sub, fontSize: fs(13) }]}>
-              {tab.label}
-            </Text>
-            {tab.active && <View style={styles.subTabUnderline} />}
-          </TouchableOpacity>
-        ))}
+          { key: 'teams',       label: 'Teams' },
+          { key: 'roles',       label: 'Roles' },
+          { key: 'performance', label: 'Performance' },
+        ].map(tab => {
+          const isActive = activeTab === tab.key;
+          return (
+            <TouchableOpacity
+              key={tab.key}
+              style={[styles.subTab, isActive && styles.subTabActive]}
+              onPress={() => tab.key === 'performance'
+                ? Alert.alert('Coming soon', 'Performance will be available soon.')
+                : handleTabSwitch(tab.key)
+              }
+            >
+              <Text style={[styles.subTabTxt, { color: isActive ? '#3B72EE' : sub, fontSize: fs(13) }]}>
+                {tab.label}
+              </Text>
+              {isActive && <View style={styles.subTabUnderline} />}
+            </TouchableOpacity>
+          );
+        })}
       </View>
 
       {/* Body */}
-      {loading ? (
-        <View style={styles.centerState}>
-          <ActivityIndicator size="large" color="#4ECDC4" />
-          <Text style={[styles.loadingTxt, { color: sub }]}>Loading teams…</Text>
-        </View>
-      ) : teams.length === 0 ? (
-        <View style={styles.centerState}>
-          <Text style={{ fontSize: 40, opacity: 0.2 }}>👥</Text>
-          <Text style={[styles.emptyTitle, { color: txt }]}>No teams yet</Text>
-          <Text style={[styles.emptySub, { color: sub }]}>Teams you belong to will appear here</Text>
-        </View>
+      {activeTab === 'roles' ? (
+        <>
+          {/* Roles tab — User Management */}
+          <View style={[styles.rolesHeader, { backgroundColor: card, borderBottomColor: bdr }]}>
+            <View>
+              <Text style={[{ fontSize: 15, fontWeight: '700', color: txt }]}>User Management</Text>
+              <Text style={[{ fontSize: 11, color: sub, marginTop: 1 }]}>{users.length} members</Text>
+            </View>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <TouchableOpacity
+                style={[styles.rolesBtn, { backgroundColor: isDark ? '#252530' : '#F0F2F6', borderColor: bdr }]}
+                onPress={() => navigation.navigate('InviteUser')}
+              >
+                <Text style={{ fontSize: 12, fontWeight: '700', color: '#3B72EE' }}>✉ Invite</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.rolesBtn, { backgroundColor: '#1A1A2E', borderColor: '#1A1A2E' }]}
+                onPress={() => setShowAddUser(true)}
+              >
+                <Text style={{ fontSize: 12, fontWeight: '700', color: '#fff' }}>+ Add User</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {usersLoading ? (
+            <View style={styles.centerState}>
+              <ActivityIndicator size="large" color="#3B72EE" />
+            </View>
+          ) : (
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={{ paddingBottom: 40 }}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#3B72EE" />}
+            >
+              {/* Header row */}
+              <View style={[styles.userTableHeader, { backgroundColor: isDark ? '#252530' : '#F5F6F9', borderBottomColor: bdr }]}>
+                <Text style={[styles.userTableHeaderTxt, { color: sub, flex: 1 }]}>FULL NAME</Text>
+                <Text style={[styles.userTableHeaderTxt, { color: sub, width: 90 }]}>ROLE</Text>
+                <Text style={[styles.userTableHeaderTxt, { color: sub, width: 100 }]}>JOINED</Text>
+              </View>
+
+              {users.map((u, i) => {
+                const name = [u.first_name, u.last_name].filter(Boolean).join(' ') || u.username;
+                const initial = (name[0] || '?').toUpperCase();
+                const role = (u.role || 'member').toLowerCase();
+                const roleColor = '#3B72EE';
+                const roleBg   = '#3B72EE15';
+                const AVATAR_COLORS = ['#3B72EE22','#10B98122','#F59E0B22','#EF444422','#06B6D422','#EC489922','#8B5CF622'];
+                const avatarTextColors = ['#3B72EE','#10B981','#F59E0B','#EF4444','#06B6D4','#EC4899','#8B5CF6'];
+                const avatarBg = AVATAR_COLORS[i % AVATAR_COLORS.length];
+                const avatarTxt = avatarTextColors[i % avatarTextColors.length];
+                const joined = u.date_joined || u.created_at || '';
+                return (
+                  <View
+                    key={u.id}
+                    style={[styles.userRow, { borderBottomColor: bdr }, i === users.length - 1 && { borderBottomWidth: 0 }]}
+                  >
+                    <View style={[styles.userAvatar, { backgroundColor: avatarBg }]}>
+                      <Text style={[styles.userAvatarTxt, { color: avatarTxt }]}>{initial}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.userName2, { color: txt }]} numberOfLines={1}>{name}</Text>
+                      <Text style={[styles.userEmail, { color: sub }]} numberOfLines={1}>{u.email}</Text>
+                    </View>
+                    <View style={{ width: 90 }}>
+                      <View style={[styles.roleTag, { backgroundColor: isDark ? '#252530' : roleBg }]}>
+                        <Text style={[styles.roleTagTxt, { color: roleColor }]}>{role.toUpperCase()}</Text>
+                      </View>
+                    </View>
+                    <Text style={[styles.joinedTxt, { color: sub }]} numberOfLines={1}>
+                      {joined ? new Date(joined).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
+                    </Text>
+                  </View>
+                );
+              })}
+              {users.length === 0 && !usersLoading && (
+                <View style={styles.centerState}>
+                  <Text style={{ fontSize: 36, opacity: 0.2 }}>👥</Text>
+                  <Text style={[styles.emptyTitle, { color: txt }]}>No users found</Text>
+                </View>
+              )}
+            </ScrollView>
+          )}
+
+          {/* ── Add New User Modal ── */}
+          <Modal visible={showAddUser} animationType="slide" transparent onRequestClose={() => setShowAddUser(false)}>
+            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+              <View style={styles.modalOverlay}>
+                <View style={[styles.modalCard, { backgroundColor: card }]}>
+                  <View style={styles.modalHeader}>
+                    <Text style={[styles.modalTitle, { color: txt }]}>Add New User</Text>
+                    <TouchableOpacity onPress={() => { setShowAddUser(false); resetAddForm(); }}>
+                      <Text style={{ fontSize: 20, color: sub }}>✕</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <ScrollView showsVerticalScrollIndicator={false}>
+                    <View style={styles.modalRow}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.modalLabel, { color: sub }]}>First Name</Text>
+                        <TextInput value={addFirstName} onChangeText={setAddFirstName} placeholder="First Name" placeholderTextColor={sub} style={[styles.modalInput, { backgroundColor: isDark ? '#252530' : '#F5F6F9', borderColor: bdr, color: txt }]} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.modalLabel, { color: sub }]}>Last Name</Text>
+                        <TextInput value={addLastName} onChangeText={setAddLastName} placeholder="Last Name" placeholderTextColor={sub} style={[styles.modalInput, { backgroundColor: isDark ? '#252530' : '#F5F6F9', borderColor: bdr, color: txt }]} />
+                      </View>
+                    </View>
+                    <Text style={[styles.modalLabel, { color: sub }]}>Username</Text>
+                    <TextInput
+                      value={addUsername}
+                      onChangeText={setAddUsername}
+                      placeholder="unique_username"
+                      placeholderTextColor={sub}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      autoComplete="off"
+                      textContentType="none"
+                      style={[styles.modalInput, { backgroundColor: isDark ? '#252530' : '#F5F6F9', borderColor: bdr, color: txt }]}
+                    />
+                    <Text style={[styles.modalLabel, { color: sub }]}>Email</Text>
+                    <TextInput
+                      value={addEmail}
+                      onChangeText={setAddEmail}
+                      placeholder="user@example.com"
+                      placeholderTextColor={sub}
+                      keyboardType="email-address"
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      autoComplete="off"
+                      textContentType="none"
+                      style={[styles.modalInput, { backgroundColor: isDark ? '#252530' : '#F5F6F9', borderColor: bdr, color: txt }]}
+                    />
+                    <Text style={[styles.modalLabel, { color: sub }]}>Role</Text>
+                    <View style={styles.rolePillRow}>
+                      {ROLES.map(r => (
+                        <TouchableOpacity key={r} onPress={() => setAddRole(r)}
+                          style={[styles.rolePill, { backgroundColor: addRole === r ? '#1A1A2E' : (isDark ? '#252530' : '#F5F6F9'), borderColor: addRole === r ? '#1A1A2E' : bdr }]}>
+                          <Text style={{ fontSize: 11, fontWeight: '700', color: addRole === r ? '#fff' : sub, textTransform: 'capitalize' }}>{r}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                    <Text style={[styles.modalLabel, { color: sub }]}>Password</Text>
+                    <TextInput value={addPassword} onChangeText={setAddPassword} placeholder="••••••••" placeholderTextColor={sub} secureTextEntry style={[styles.modalInput, { backgroundColor: isDark ? '#252530' : '#F5F6F9', borderColor: bdr, color: txt }]} />
+                    <Text style={[styles.modalLabel, { color: sub }]}>Confirm Password</Text>
+                    <TextInput value={addConfirmPass} onChangeText={setAddConfirmPass} placeholder="••••••••" placeholderTextColor={sub} secureTextEntry style={[styles.modalInput, { backgroundColor: isDark ? '#252530' : '#F5F6F9', borderColor: bdr, color: txt }]} />
+                  </ScrollView>
+                  <View style={styles.modalFooter}>
+                    <TouchableOpacity style={[styles.modalCancelBtn, { borderColor: bdr }]} onPress={() => { setShowAddUser(false); resetAddForm(); }}>
+                      <Text style={{ color: sub, fontWeight: '600' }}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.modalConfirmBtn} onPress={handleAddUser} disabled={addSaving}>
+                      {addSaving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={{ color: '#fff', fontWeight: '700' }}>Create User</Text>}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+            </KeyboardAvoidingView>
+          </Modal>
+
+        </>
       ) : (
+        <>
+          {loading ? (
+            <View style={styles.centerState}>
+              <ActivityIndicator size="large" color="#3B72EE" />
+              <Text style={[styles.loadingTxt, { color: sub }]}>Loading teams…</Text>
+            </View>
+          ) : teams.length === 0 ? (
+            <View style={styles.centerState}>
+              <Text style={{ fontSize: 40, opacity: 0.2 }}>👥</Text>
+              <Text style={[styles.emptyTitle, { color: txt }]}>No teams yet</Text>
+              <Text style={[styles.emptySub, { color: sub }]}>Teams you belong to will appear here</Text>
+            </View>
+          ) : (
         <ScrollView
           showsVerticalScrollIndicator={false}
           contentContainerStyle={{ padding: 14, paddingBottom: 40 }}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#4ECDC4" />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#3B72EE" />}
         >
           {/* Stats bar */}
           <View style={[styles.statsRow, { backgroundColor: card, borderColor: bdr }]}>
@@ -272,7 +538,7 @@ export default function TeamManagementScreen() {
             </View>
             <View style={[styles.statDivider, { backgroundColor: bdr }]} />
             <View style={styles.statItem}>
-              <Text style={[styles.statNum, { color: '#4ECDC4', fontSize: fs(20) }]}>
+              <Text style={[styles.statNum, { color: '#3B72EE', fontSize: fs(20) }]}>
                 {teams.filter(t => t.my_role === 'owner').length}
               </Text>
               <Text style={[styles.statLabel, { color: sub, fontSize: fs(10) }]}>LEADING</Text>
@@ -286,7 +552,7 @@ export default function TeamManagementScreen() {
             </View>
             <View style={[styles.statDivider, { backgroundColor: bdr }]} />
             <View style={styles.statItem}>
-              <Text style={[styles.statNum, { color: '#A78BFA', fontSize: fs(20) }]}>
+              <Text style={[styles.statNum, { color: '#3B72EE', fontSize: fs(20) }]}>
                 {teams.reduce((s, t) => s + (t.member_count || 0), 0)}
               </Text>
               <Text style={[styles.statLabel, { color: sub, fontSize: fs(10) }]}>MEMBERS</Text>
@@ -305,7 +571,7 @@ export default function TeamManagementScreen() {
               >
                 {/* Card header */}
                 <View style={styles.teamCardHeader}>
-                  <View style={[styles.teamColorDot, { backgroundColor: team.color || '#4ECDC4' }]} />
+                  <View style={[styles.teamColorDot, { backgroundColor: team.color || '#3B72EE' }]} />
                   <Text style={[styles.teamName, { color: txt, fontSize: fs(15) }]} numberOfLines={1}>
                     {team.name}
                   </Text>
@@ -333,8 +599,8 @@ export default function TeamManagementScreen() {
                 {/* Footer: leader + avatars + member count */}
                 <View style={[styles.teamCardFooter, { borderTopColor: bdr }]}>
                   <View style={styles.leaderRow}>
-                    <View style={[styles.leaderAvatar, { backgroundColor: '#4ECDC4' }]}>
-                      <Text style={styles.leaderAvatarTxt}>
+                    <View style={[styles.leaderAvatar, { backgroundColor: '#3B72EE22' }]}>
+                      <Text style={[styles.leaderAvatarTxt, { color: '#3B72EE' }]}>
                         {team.leader_info?.initials || '?'}
                       </Text>
                     </View>
@@ -375,6 +641,8 @@ export default function TeamManagementScreen() {
             );
           })}
         </ScrollView>
+          )}
+        </>
       )}
 
       {/* Team detail panel — slides over */}
@@ -401,7 +669,7 @@ const styles = StyleSheet.create({
   navLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   navRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   logoBox: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center' },
-  logoText: { color: '#4ECDC4', fontSize: 15, fontWeight: '800' },
+  logoText: { color: '#3B72EE', fontSize: 15, fontWeight: '800' },
   brandName: { fontWeight: '700' },
   navIconBtn: { width: 36, height: 36, borderRadius: 8, borderWidth: 1, justifyContent: 'center', alignItems: 'center' },
   navIcon: { fontSize: 16 },
@@ -411,7 +679,7 @@ const styles = StyleSheet.create({
   subTab: { paddingVertical: 12, paddingHorizontal: 16, position: 'relative' },
   subTabActive: {},
   subTabTxt: { fontWeight: '600' },
-  subTabUnderline: { position: 'absolute', bottom: 0, left: 16, right: 16, height: 2, backgroundColor: '#4ECDC4', borderRadius: 1 },
+  subTabUnderline: { position: 'absolute', bottom: 0, left: 16, right: 16, height: 2, backgroundColor: '#3B72EE', borderRadius: 1 },
 
   // States
   centerState: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 10, padding: 20 },
@@ -481,4 +749,37 @@ const styles = StyleSheet.create({
   memberEmail: { fontSize: 11, marginTop: 1 },
   roleChip: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
   roleChipTxt: { fontSize: 10, fontWeight: '700' },
+
+  // ── Roles tab ──
+  rolesHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1 },
+  rolesBtn: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8, borderWidth: 1 },
+  userTableHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 8, borderBottomWidth: 1 },
+  userTableHeaderTxt: { fontSize: 9, fontWeight: '700', letterSpacing: 0.8 },
+  userRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 11, borderBottomWidth: StyleSheet.hairlineWidth, gap: 10 },
+  userAvatar: { width: 34, height: 34, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+  userAvatarTxt: { color: '#fff', fontSize: 12, fontWeight: '800' },
+  userName2: { fontSize: 13, fontWeight: '600' },
+  userEmail: { fontSize: 10, marginTop: 1 },
+  roleTag: { paddingHorizontal: 6, paddingVertical: 3, borderRadius: 5, alignSelf: 'flex-start' },
+  roleTagTxt: { fontSize: 9, fontWeight: '800', letterSpacing: 0.4 },
+  joinedTxt: { fontSize: 10, width: 80, textAlign: 'right' },
+
+  // ── Modals ──
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  modalCard: { borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: 34, maxHeight: '90%' },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 },
+  modalTitle: { fontSize: 17, fontWeight: '800' },
+  modalLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.5, marginBottom: 6, marginTop: 12 },
+  modalInput: { borderRadius: 10, borderWidth: 1.5, paddingHorizontal: 12, height: 44, fontSize: 14, marginBottom: 2 },
+  modalRow: { flexDirection: 'row', gap: 10 },
+  rolePillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  rolePill: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8, borderWidth: 1.5 },
+  modalFooter: { flexDirection: 'row', gap: 10, marginTop: 20 },
+  modalCancelBtn: { flex: 1, height: 46, borderRadius: 10, borderWidth: 1.5, justifyContent: 'center', alignItems: 'center' },
+  modalConfirmBtn: { flex: 2, height: 46, borderRadius: 10, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center' },
+
+  // Workspace picker in invite modal
+  wsPickerList: { borderRadius: 10, borderWidth: 1.5, marginTop: 4, overflow: 'hidden' },
+  wsPickerItem: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 11, borderBottomWidth: StyleSheet.hairlineWidth },
+  wsPickerItemTxt: { flex: 1, fontSize: 13 },
 });

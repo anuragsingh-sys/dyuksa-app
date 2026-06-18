@@ -4,17 +4,23 @@ import {
   KeyboardAvoidingView, Pressable, Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useState, useContext, useCallback, useRef } from 'react';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useState, useContext, useCallback, useRef, useEffect } from 'react';
+import { useNavigation, useFocusEffect, useRoute } from '@react-navigation/native';
 import { ThemeContext } from '../context/ThemeContext';
 import { AuthContext } from '../context/AuthContext';
 import SidebarMenu from '../components/SidebarMenu';
 import NotificationBell from '../components/NotificationBell';
-import { getAccessToken, getWorkspaceId } from '../services/ApiService';
+import { getAccessToken } from '../services/ApiService';
+import Svg, { Path } from 'react-native-svg';
+import { API_BASE } from '../config';
 
-import { API_BASE, BASE_URL, WS_BASE } from '../config';
-// const API_BASE → imported from config
+// ── Module-level cache ────────────────────────────────────────────────────────
+let _cachedFolders = [];
+let _cachedNotes   = [];
+let _notesFetchedAt = 0;
+const NOTES_STALE_MS = 30_000;
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
 const fmtDate = (iso) => {
   if (!iso) return '';
   try {
@@ -27,106 +33,123 @@ const fmtRelative = (iso) => {
   try {
     const diff = Date.now() - new Date(iso).getTime();
     const m = Math.floor(diff / 60000);
-    if (m < 1)   return 'just now';
-    if (m < 60)  return `${m}m ago`;
+    if (m < 1)  return 'just now';
+    if (m < 60) return `${m}m ago`;
     const h = Math.floor(m / 60);
-    if (h < 24)  return `${h}h ago`;
+    if (h < 24) return `${h}h ago`;
     return fmtDate(iso);
   } catch { return ''; }
 };
 
-// ── Note Detail — full screen slide-in ──────────────────────────────────────
-function NoteDetail({ note, onClose, isDark, card, txt, sub, bdr }) {
-  const slideAnim = useRef(new Animated.Value(400)).current;
+const ACCENT_COLORS = ['#3B72EE', '#F59E0B', '#10B981', '#EF4444', '#3B82F6', '#EC4899', '#8B5CF6'];
 
-  useState(() => {
-    Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, tension: 80, friction: 12 }).start();
-  });
+// ── Note Card ─────────────────────────────────────────────────────────────────
+function NoteCard({ note, idx, onPress, card, txt, sub, bdr, gridMode }) {
+  const accent = ACCENT_COLORS[idx % ACCENT_COLORS.length];
 
-  const handleClose = () => {
-    Animated.timing(slideAnim, { toValue: 400, duration: 220, useNativeDriver: true })
-      .start(() => onClose());
-  };
+  if (gridMode) {
+    return (
+      <TouchableOpacity
+        style={[styles.noteCardGrid, { backgroundColor: card, borderColor: bdr, borderTopColor: accent }]}
+        onPress={() => onPress(note)}
+        activeOpacity={0.75}
+      >
+        <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 6 }}>
+          <Text style={[styles.noteCardTitle, { color: txt, flex: 1, fontSize: 13 }]} numberOfLines={2}>
+            {note.title || 'Untitled note'}
+          </Text>
+        </View>
+        {!!note.content && (
+          <Text style={[styles.noteCardPreview, { color: sub, fontSize: 12 }]} numberOfLines={3}>{note.content}</Text>
+        )}
+        <Text style={[styles.noteCardTime, { color: sub, marginTop: 8 }]}>{fmtRelative(note.created_at)}</Text>
+      </TouchableOpacity>
+    );
+  }
 
   return (
-    <Animated.View style={[styles.detailOverlay, { backgroundColor: card, transform: [{ translateX: slideAnim }] }]}>
-      <SafeAreaView style={{ flex: 1 }} edges={['top', 'bottom']}>
-        {/* Header */}
-        <View style={[styles.detailHeader, { borderBottomColor: bdr }]}>
-          <TouchableOpacity onPress={handleClose} style={styles.detailBackBtn}>
-            <Text style={styles.detailBackText}>← Back</Text>
-          </TouchableOpacity>
-          <Text style={[styles.detailHeaderTitle, { color: txt }]} numberOfLines={1}>
-            {note?.title || 'Note'}
-          </Text>
-          <View style={{ width: 60 }} />
-        </View>
-        {/* Content */}
-        <ScrollView
-          contentContainerStyle={{ padding: 20, paddingBottom: 60 }}
-          showsVerticalScrollIndicator={false}
-        >
-          <Text style={[styles.detailTitle, { color: txt }]}>
-            {note?.title || 'Untitled note'}
-          </Text>
-          <Text style={[styles.detailTime, { color: sub }]}>
-            {fmtRelative(note?.created_at)}
-          </Text>
-          <View style={[styles.detailDivider, { backgroundColor: bdr }]} />
-          <Text style={[styles.detailContent, { color: txt }]}>
-            {note?.content || '(No content)'}
-          </Text>
-        </ScrollView>
-      </SafeAreaView>
-    </Animated.View>
+    <TouchableOpacity
+      style={[styles.noteCard, { backgroundColor: card, borderColor: bdr, borderLeftColor: accent }]}
+      onPress={() => onPress(note)}
+      activeOpacity={0.75}
+    >
+      <Text style={[styles.noteCardTitle, { color: txt }]} numberOfLines={1}>
+        {note.title || 'Untitled note'}
+      </Text>
+      {!!note.content && (
+        <Text style={[styles.noteCardPreview, { color: sub }]} numberOfLines={2}>{note.content}</Text>
+      )}
+      <Text style={[styles.noteCardTime, { color: sub }]}>{fmtRelative(note.created_at)}</Text>
+    </TouchableOpacity>
   );
 }
 
-// ── Main Screen ──────────────────────────────────────────────────────────────
+// ── Main Screen ───────────────────────────────────────────────────────────────
 export default function QuickNotesScreen() {
   const navigation = useNavigation();
-  const { theme, fontScale } = useContext(ThemeContext);
-  const { user } = useContext(AuthContext);
+  const route      = useRoute();
+  const { theme } = useContext(ThemeContext);
+  const { user }  = useContext(AuthContext);
   const isDark = theme === 'Dark';
   const bg   = isDark ? '#0D0D0F' : '#F5F5F7';
   const card = isDark ? '#1A1A20' : '#FFFFFF';
   const txt  = isDark ? '#FFFFFF' : '#1A1A2E';
   const sub  = isDark ? '#9898A6' : '#888899';
   const bdr  = isDark ? '#252530' : '#EBEBF0';
-  const fs   = s => s * fontScale;
 
-  // ── Data ──────────────────────────────────────────────────────────────
-  const [folders,  setFolders]  = useState([]);
-  const [notes,    setNotes]    = useState([]);
-  const [loading,  setLoading]  = useState(true);
+  // ── Data ──────────────────────────────────────────────────────────────────
+  const [folders,        setFolders]        = useState(_cachedFolders);
+  const [notes,          setNotes]          = useState(_cachedNotes);
+  const [projects,       setProjects]       = useState([]);
+  const [loading,        setLoading]        = useState(_cachedNotes.length === 0);
 
-  // ── Selection / detail ────────────────────────────────────────────────
-  const [selectedFolder, setSelectedFolder] = useState(null); // null = All Notes
-  const [detailNote,     setDetailNote]     = useState(null); // open note detail
+  // ── UI state ──────────────────────────────────────────────────────────────
+  const [selectedFolder, setSelectedFolder] = useState(null);
+  const [gridMode,       setGridMode]       = useState(false);
 
-  // ── Search ────────────────────────────────────────────────────────────
-  const [search, setSearch] = useState('');
+  const [activeTab,      setActiveTab]      = useState('all'); // 'all' | String(folder.id)
+  const [showDropdown,   setShowDropdown]   = useState(false);
 
-  // ── New Note modal ─────────────────────────────────────────────────────
-  const [noteModal,    setNoteModal]    = useState(false);
+  // ── New Note modal ────────────────────────────────────────────────────────
   const [draftContent, setDraftContent] = useState('');
   const [draftFolder,  setDraftFolder]  = useState(null);
   const [draftProject, setDraftProject] = useState(null);
-  const [projects,     setProjects]     = useState([]);
   const [savingNote,   setSavingNote]   = useState(false);
-  const [notePicker,   setNotePicker]   = useState(null); // 'folder'|'project'|null
+  const [notePicker,   setNotePicker]   = useState(null);
 
-  // ── New Folder modal ───────────────────────────────────────────────────
+  // ── Full-screen editor state ───────────────────────────────────────────────
+  const [editorView,   setEditorView]   = useState(false); // full screen editor
+  const [editorNote,   setEditorNote]   = useState(null);  // null = new note
+  const [draftTitle,   setDraftTitle]   = useState('');
+  const titleInputRef   = useRef(null);
+  const contentInputRef = useRef(null);
+  const [selection,     setSelection]     = useState({ start: 0, end: 0 });
+
+  // Insert text at cursor position or wrap selection
+  const insertAtCursor = (before, after = '') => {
+    const { start, end } = selection;
+    const selected = draftContent.slice(start, end);
+    const newText = draftContent.slice(0, start) + before + selected + after + draftContent.slice(end);
+    setDraftContent(newText);
+    // Move cursor after inserted text
+    const newPos = start + before.length + selected.length + after.length;
+    setTimeout(() => {
+      contentInputRef.current?.setNativeProps({ selection: { start: newPos, end: newPos } });
+    }, 10);
+  };
+
+
+  // ── New Folder modal ──────────────────────────────────────────────────────
   const [folderModal,  setFolderModal]  = useState(false);
   const [folderName,   setFolderName]   = useState('');
   const [savingFolder, setSavingFolder] = useState(false);
 
-  // ── Fetch ──────────────────────────────────────────────────────────────
+  // ── Fetch ─────────────────────────────────────────────────────────────────
   const fetchAll = useCallback(async () => {
+    if (_cachedNotes.length > 0 && Date.now() - _notesFetchedAt < NOTES_STALE_MS) return;
     setLoading(true);
     try {
       const token = await getAccessToken();
-      // quicknotes API does NOT use X-Workspace-ID
       const headers = { Authorization: `Bearer ${token}` };
       const [fRes, nRes, pRes] = await Promise.all([
         fetch(`${API_BASE}/api/v1/quicknotes/folders/`, { headers }),
@@ -135,15 +158,29 @@ export default function QuickNotesScreen() {
       ]);
       if (fRes.ok) {
         const fd = await fRes.json();
-        const fl = (Array.isArray(fd) ? fd : (fd.results || []));
+        const fl = Array.isArray(fd) ? fd : (fd.results || []);
         fl.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        _cachedFolders = fl;
         setFolders(fl);
         if (!draftFolder && fl[0]) setDraftFolder(fl[0].id);
       }
       if (nRes.ok) {
         const nd = await nRes.json();
-        const nl = (Array.isArray(nd) ? nd : (nd.results || []));
+        let nl = Array.isArray(nd) ? nd : (nd.results || []);
+        // Fetch remaining pages if paginated
+        let nextUrl = nd.next || null;
+        while (nextUrl) {
+          try {
+            const pageRes = await fetch(nextUrl, { headers });
+            if (!pageRes.ok) break;
+            const pageData = await pageRes.json();
+            nl = [...nl, ...(pageData.results || [])];
+            nextUrl = pageData.next || null;
+          } catch { break; }
+        }
         nl.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+        _cachedNotes    = nl;
+        _notesFetchedAt = Date.now();
         setNotes(nl);
       }
       if (pRes.ok) {
@@ -161,40 +198,53 @@ export default function QuickNotesScreen() {
 
   useFocusEffect(useCallback(() => { fetchAll(); }, [fetchAll]));
 
-  // ── Filtered notes ─────────────────────────────────────────────────────
-  const visibleNotes = notes.filter(n => {
-    if (selectedFolder !== null && n.folder !== selectedFolder) return false;
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      if (!(n.title || '').toLowerCase().includes(q) && !(n.content || '').toLowerCase().includes(q)) return false;
+  // Auto-open editor if navigated with openCreate param
+  useEffect(() => {
+    if (route?.params?.openCreate) {
+      setTimeout(() => openNoteModal(), 350);
     }
-    return true;
+  }, [route?.params?.openCreate]);
+
+  // ── Filtered notes ────────────────────────────────────────────────────────
+  const visibleNotes = notes.filter(n => {
+    return activeTab === 'all' ? true : String(n.folder) === String(activeTab);
   });
 
-  const folderCount = (fId) => notes.filter(n => n.folder === fId).length;
+  const folderCount = (fId) => notes.filter(n => String(n.folder) === String(fId)).length;
 
-  // ── Save Note ──────────────────────────────────────────────────────────
+  // ── Save Note ─────────────────────────────────────────────────────────────
   const saveNote = async () => {
-    const content = draftContent.trim();
-    if (!content)      { Alert.alert('Empty', 'Type something to save.'); return; }
+    const body = draftContent.trim();
+    if (!body)         { Alert.alert('Empty', 'Type something to save.'); return; }
     if (!draftFolder)  { Alert.alert('Missing', 'Select a folder.'); return; }
     if (!draftProject) { Alert.alert('Missing', 'Select a project.'); return; }
     setSavingNote(true);
     try {
       const token = await getAccessToken();
-      const res = await fetch(`${API_BASE}/api/v1/quicknotes/notes/`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content, folder: draftFolder, project: draftProject }),
-      });
-      if (!res.ok) {
-        const e = await res.json().catch(() => ({}));
-        throw new Error(e.detail || JSON.stringify(e));
+      if (editorNote) {
+        // Edit existing
+        const res = await fetch(`${API_BASE}/api/v1/quicknotes/notes/${editorNote.id}/`, {
+          method: 'PATCH',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: body, folder: draftFolder, project: draftProject }),
+        });
+        if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || JSON.stringify(e)); }
+        const updated_note = await res.json();
+        const updated = notes.map(n => n.id === updated_note.id ? updated_note : n);
+        _cachedNotes = updated; _notesFetchedAt = Date.now(); setNotes(updated);
+      } else {
+        // Create new
+        const res = await fetch(`${API_BASE}/api/v1/quicknotes/notes/`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: body, folder: draftFolder, project: draftProject }),
+        });
+        if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || JSON.stringify(e)); }
+        const created = await res.json();
+        const updated = [created, ...notes];
+        _cachedNotes = updated; _notesFetchedAt = Date.now(); setNotes(updated);
       }
-      const created = await res.json();
-      setNotes(prev => [created, ...prev]);
-      setNoteModal(false);
-      setDraftContent('');
+      closeEditor();
     } catch (e) {
       Alert.alert('Could not save', e.message || 'Try again.');
     } finally {
@@ -202,7 +252,7 @@ export default function QuickNotesScreen() {
     }
   };
 
-  // ── Save Folder ────────────────────────────────────────────────────────
+  // ── Save Folder ───────────────────────────────────────────────────────────
   const saveFolder = async () => {
     const name = folderName.trim();
     if (!name) { Alert.alert('Empty', 'Enter a folder name.'); return; }
@@ -219,7 +269,9 @@ export default function QuickNotesScreen() {
         throw new Error(e.detail || JSON.stringify(e));
       }
       const created = await res.json();
-      setFolders(prev => [...prev, created].sort((a, b) => (a.name || '').localeCompare(b.name || '')));
+      const updated = [...folders, created].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      _cachedFolders = updated;
+      setFolders(updated);
       setFolderModal(false);
       setFolderName('');
     } catch (e) {
@@ -231,326 +283,364 @@ export default function QuickNotesScreen() {
 
   const openNoteModal = () => {
     setDraftContent('');
+    setDraftTitle('');
     setNotePicker(null);
-    setNoteModal(true);
+    setEditorNote(null);
+    setEditorView(true);
+    setTimeout(() => contentInputRef.current?.focus(), 200);
   };
 
-  // ── Render ─────────────────────────────────────────────────────────────
+  const openNoteEditor = (note) => {
+    setEditorNote(note);
+    setDraftContent(note.content || '');
+    setDraftTitle(note.title || '');
+    setDraftFolder(note.folder || draftFolder);
+    setDraftProject(note.project || draftProject);
+    setNotePicker(null);
+    setEditorView(true);
+  };
+
+  const closeEditor = () => {
+    setEditorView(false);
+    setEditorNote(null);
+    setDraftTitle('');
+    setDraftContent('');
+    setNotePicker(null);
+  };
+
+  // ── Tabs: All + each folder ───────────────────────────────────────────────
+  // Use whichever is populated — cached or state
+  const folderList = folders.length > 0 ? folders : _cachedFolders;
+  const tabs = [
+    { key: 'all', label: 'All notes', count: notes.length },
+    ...folderList.map(f => ({ key: String(f.id), label: f.name, count: folderCount(f.id) })),
+  ];
+
+  // ── RENDER ────────────────────────────────────────────────────────────────
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: bg }]} edges={['top', 'left', 'right']}>
-      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={card} translucent={false} />
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={card} />
 
-      {/* Navbar only */}
+      {/* Navbar */}
       <View style={[styles.navbar, { backgroundColor: card, borderBottomColor: bdr }]}>
-        <View style={styles.navLeft}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
           <SidebarMenu activeScreen="QuickNotes" />
-          <TouchableOpacity
-            style={styles.logoBox}
-            onPress={() => { try { navigation.jumpTo('Dashboard'); } catch { navigation.navigate('Main', { screen: 'Dashboard' }); } }}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.logoText}>D</Text>
-          </TouchableOpacity>
-          <Text style={[styles.brandName, { color: txt }]}>Quick Notes</Text>
+          <View>
+            <Text style={[styles.navTitle, { color: txt }]}>Notes</Text>
+            <Text style={{ fontSize: 11, color: sub, marginTop: 1 }}>
+              {notes.length} note{notes.length !== 1 ? 's' : ''}{notes[0] ? ` · last updated ${fmtRelative(notes[0].created_at)}` : ''}
+            </Text>
+          </View>
         </View>
-        <View style={styles.navRight}>
-          <TouchableOpacity
-            style={[styles.navIconBtn, { backgroundColor: isDark ? '#252530' : '#FAFAFA', borderColor: bdr }]}
-            onPress={() => navigation.navigate('Chat')}
-          >
-            <Text style={styles.navIcon}>💬</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <TouchableOpacity style={{ padding: 6 }} onPress={() => navigation.navigate('Search')}>
+            <Svg width={22} height={22} viewBox="0 0 24 24" fill="none">
+              <Path d="M11 19C15.4183 19 19 15.4183 19 11C19 6.58172 15.4183 3 11 3C6.58172 3 3 6.58172 3 11C3 15.4183 6.58172 19 11 19Z" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+              <Path d="M21 21L16.65 16.65" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+            </Svg>
           </TouchableOpacity>
           <NotificationBell />
         </View>
       </View>
 
-      {/* Body: folders + notes side by side, full height */}
+      {/* Quick note banner */}
+      <TouchableOpacity
+        style={[styles.quickBanner, { backgroundColor: '#3B72EE' }]}
+        onPress={openNoteModal}
+        activeOpacity={0.85}
+      >
+        <View style={styles.quickBannerIcon}>
+          <Svg width={22} height={22} viewBox="0 0 24 24" fill="none">
+            <Path d="M14 2H6C5.46957 2 4.96086 2.21071 4.58579 2.58579C4.21071 2.96086 4 3.46957 4 4V20C4 20.5304 4.21071 21.0391 4.58579 21.4142C4.96086 21.7893 5.46957 22 6 22H18C18.5304 22 19.0391 21.7893 19.4142 21.4142C19.7893 21.0391 20 20.5304 20 20V8L14 2Z" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            <Path d="M14 2V8H20" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            <Path d="M16 13H8" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            <Path d="M16 17H8" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            <Path d="M10 9H9H8" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+          </Svg>
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={{ color: '#fff', fontWeight: '700', fontSize: 15 }}>Quick note</Text>
+          <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, marginTop: 2 }}>Capture a thought in one tap</Text>
+        </View>
+        <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 22 }}>›</Text>
+      </TouchableOpacity>
+
+
+
+      {/* Section header with folder dropdown */}
+      <View style={{ paddingHorizontal: 16, paddingTop: 14, paddingBottom: 4, zIndex: 20 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          {/* Folder dropdown trigger */}
+          <TouchableOpacity
+            onPress={() => setShowDropdown(v => !v)}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}
+            activeOpacity={0.7}
+          >
+            <Text style={{ fontSize: 19, fontWeight: '700', color: txt }}>
+              {tabs.find(t => t.key === String(activeTab))?.label || 'All notes'}
+            </Text>
+            <Text style={{ fontSize: 11, color: sub, marginTop: 1 }}>
+              ({tabs.find(t => t.key === String(activeTab))?.count ?? visibleNotes.length})
+            </Text>
+            <Svg width={20} height={20} viewBox="0 0 24 24" fill="none" style={{ marginTop: 2 }}>
+              <Path
+                d={showDropdown ? "M18 15L12 9L6 15" : "M6 9L12 15L18 9"}
+                stroke="#3B72EE"
+                strokeWidth={2.5}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </Svg>
+          </TouchableOpacity>
+
+          {/* + and Grid/list toggle */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+            <TouchableOpacity onPress={() => { setFolderName(''); setFolderModal(true); }} style={{ padding: 4 }}>
+              <Text style={{ fontSize: 31, color: '#3B72EE', fontWeight: '300', lineHeight: 34 }}>+</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setGridMode(v => !v)} style={{ padding: 4, marginTop: 4 }}>
+              <Text style={{ fontSize: 30, color: sub, lineHeight: 30 }}>{gridMode ? '☰' : '⊞'}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Dropdown menu */}
+        {showDropdown && (
+          <View style={{ marginTop: 8, backgroundColor: card, borderRadius: 12, borderWidth: 1, borderColor: bdr, overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 20, zIndex: 50 }}>
+            {tabs.map((tab, idx) => {
+              const isActive = String(activeTab) === String(tab.key);
+              return (
+                <TouchableOpacity
+                  key={String(tab.key)}
+                  onPress={() => { setActiveTab(String(tab.key)); setShowDropdown(false); }}
+                  style={{
+                    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+                    paddingHorizontal: 16, paddingVertical: 13,
+                    borderBottomWidth: idx < tabs.length - 1 ? StyleSheet.hairlineWidth : 0,
+                    borderBottomColor: bdr,
+                    backgroundColor: isActive ? '#3B72EE11' : 'transparent',
+                  }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: ACCENT_COLORS[idx % ACCENT_COLORS.length] }} />
+                    <Text style={{ fontSize: 14, fontWeight: isActive ? '600' : '400', color: isActive ? '#3B72EE' : txt }}>
+                      {tab.label}
+                    </Text>
+                  </View>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Text style={{ fontSize: 12, color: sub }}>{tab.count}</Text>
+                    {isActive && <Text style={{ fontSize: 13, color: '#3B72EE' }}>✓</Text>}
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        )}
+      </View>
+
+      {/* Notes list — tap outside closes dropdown */}
+      {showDropdown && <Pressable style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 5 }} onPress={() => setShowDropdown(false)} />}
       {loading ? (
         <View style={styles.centerState}>
-          <ActivityIndicator size="large" color="#4ECDC4" />
-          <Text style={[styles.emptySub, { color: sub }]}>Loading notes…</Text>
+          <ActivityIndicator size="large" color="#3B72EE" />
+          <Text style={{ color: sub, marginTop: 10 }}>Loading notes…</Text>
+        </View>
+      ) : visibleNotes.length === 0 ? (
+        <View style={styles.centerState}>
+          <Text style={{ fontSize: 40, opacity: 0.2 }}>⚡</Text>
+          <Text style={{ fontSize: 15, fontWeight: '600', color: txt, marginTop: 8 }}>No notes yet</Text>
+          <Text style={{ fontSize: 12, color: sub, textAlign: 'center', marginTop: 4 }}>
+            {'Tap + to capture your first thought.'}
+          </Text>
         </View>
       ) : (
-        <View style={styles.body}>
-
-          {/* ── Left: Folders panel ── */}
-          <View style={[styles.foldersPanel, { backgroundColor: card, borderRightColor: bdr }]}>
-            {/* Header */}
-            <View style={[styles.panelHeader, { borderBottomColor: bdr }]}>
-              <Text style={[styles.panelHeaderLabel, { color: sub }]}>FOLDERS</Text>
-              <TouchableOpacity
-                onPress={() => { setFolderName(''); setFolderModal(true); }}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              >
-                <Text style={styles.panelHeaderPlus}>+</Text>
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView showsVerticalScrollIndicator={false}>
-              {/* All Notes */}
-              <TouchableOpacity
-                style={[
-                  styles.folderRow,
-                  { borderBottomColor: bdr },
-                  selectedFolder === null && styles.folderRowActive,
-                  selectedFolder === null && { backgroundColor: isDark ? '#252530' : '#F0FDF4' },
-                ]}
-                onPress={() => setSelectedFolder(null)}
-                activeOpacity={0.7}
-              >
-                <Text style={{ fontSize: 15 }}>📋</Text>
-                <Text
-                  style={[styles.folderName, { color: selectedFolder === null ? '#4ECDC4' : txt }]}
-                  numberOfLines={1}
-                >
-                  All N...
-                </Text>
-                <View style={[styles.folderBadge, { backgroundColor: isDark ? '#333340' : '#EBEBF0' }]}>
-                  <Text style={[styles.folderBadgeText, { color: selectedFolder === null ? '#4ECDC4' : sub }]}>
-                    {notes.length}
-                  </Text>
-                </View>
-              </TouchableOpacity>
-
-              {/* Folder rows */}
-              {folders.map(f => {
-                const count  = folderCount(f.id);
-                const active = selectedFolder === f.id;
-                return (
-                  <TouchableOpacity
-                    key={f.id}
-                    style={[
-                      styles.folderRow,
-                      { borderBottomColor: bdr },
-                      active && { backgroundColor: isDark ? '#252530' : '#F0FDF4' },
-                    ]}
-                    onPress={() => setSelectedFolder(f.id)}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={{ fontSize: 15 }}>📁</Text>
-                    <Text
-                      style={[styles.folderName, { color: active ? '#4ECDC4' : txt }]}
-                      numberOfLines={1}
-                    >
-                      {f.name}
-                    </Text>
-                    {count > 0 && (
-                      <View style={[styles.folderBadge, { backgroundColor: isDark ? '#333340' : '#EBEBF0' }]}>
-                        <Text style={[styles.folderBadgeText, { color: active ? '#4ECDC4' : sub }]}>{count}</Text>
-                      </View>
-                    )}
-                  </TouchableOpacity>
-                );
-              })}
-
-              {/* All Projects */}
-              <TouchableOpacity style={[styles.folderRow, { borderBottomColor: bdr }]} activeOpacity={0.5}>
-                <Text style={{ fontSize: 15 }}>🗂</Text>
-                <Text style={[styles.folderName, { color: sub }]} numberOfLines={1}>All Projects</Text>
-                <Text style={{ color: sub, fontSize: 16 }}>›</Text>
-              </TouchableOpacity>
-            </ScrollView>
-          </View>
-
-          {/* ── Right: Notes list ── */}
-          <View style={[styles.notesPanel, { backgroundColor: bg }]}>
-            {/* Header */}
-            <View style={[styles.panelHeader, { borderBottomColor: bdr, backgroundColor: card }]}>
-              <Text style={[styles.panelHeaderLabel, { color: sub }]}>
-                {visibleNotes.length} NOTE{visibleNotes.length !== 1 ? 'S' : ''}
-              </Text>
-              <TouchableOpacity
-                onPress={openNoteModal}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              >
-                <Text style={styles.panelHeaderPlus}>+</Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Search */}
-            <View style={[styles.searchWrap, { backgroundColor: card, borderColor: bdr }]}>
-              <Text style={{ fontSize: 13, marginRight: 6 }}>🔍</Text>
-              <TextInput
-                style={[styles.searchInput, { color: txt }]}
-                placeholder="Search notes…"
-                placeholderTextColor={sub}
-                value={search}
-                onChangeText={setSearch}
+        <FlatList
+          data={visibleNotes}
+          keyExtractor={n => String(n.id)}
+          key={gridMode ? 'grid' : 'list'}
+          numColumns={gridMode ? 2 : 1}
+          contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 100, paddingTop: 4 }}
+          columnWrapperStyle={gridMode ? { gap: 10 } : undefined}
+          showsVerticalScrollIndicator={false}
+          renderItem={({ item, index }) => (
+            <View style={gridMode ? { flex: 1 } : {}}>
+              <NoteCard
+                note={item}
+                idx={index}
+                onPress={openNoteEditor}
+                card={card}
+                txt={txt}
+                sub={sub}
+                bdr={bdr}
+                gridMode={gridMode}
               />
-              {search.length > 0 && (
-                <TouchableOpacity onPress={() => setSearch('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                  <Text style={{ color: sub, fontSize: 13 }}>✕</Text>
-                </TouchableOpacity>
-              )}
             </View>
-
-            {/* Notes */}
-            {visibleNotes.length === 0 ? (
-              <View style={styles.centerState}>
-                <Text style={{ fontSize: 32, opacity: 0.2 }}>⚡</Text>
-                <Text style={[styles.emptyTitle, { color: txt }]}>No notes</Text>
-                <Text style={[styles.emptySub, { color: sub, textAlign: 'center' }]}>
-                  Tap + to create one
-                </Text>
-              </View>
-            ) : (
-              <FlatList
-                data={visibleNotes}
-                keyExtractor={n => String(n.id)}
-                contentContainerStyle={{ paddingBottom: 110 }}
-                renderItem={({ item }) => (
-                  <TouchableOpacity
-                    style={[styles.noteRow, { borderBottomColor: bdr }]}
-                    onPress={() => setDetailNote(item)}
-                    activeOpacity={0.7}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.noteTitle, { color: txt }]} numberOfLines={1}>
-                        {item.title || 'Untitled note'}
-                      </Text>
-                      <Text style={[styles.noteDate, { color: sub }]}>
-                        {fmtDate(item.created_at)}
-                      </Text>
-                      {!!item.content && (
-                        <Text style={[styles.notePreview, { color: sub }]} numberOfLines={2}>
-                          {item.content}
-                        </Text>
-                      )}
-                    </View>
-                    <TouchableOpacity
-                      style={styles.noteMenuBtn}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    >
-                      <Text style={{ color: sub, fontSize: 18, lineHeight: 20 }}>⋯</Text>
-                    </TouchableOpacity>
-                  </TouchableOpacity>
-                )}
-              />
-            )}
-          </View>
-        </View>
-      )}
-
-      {/* ── Note Detail — full screen slide-in from right ── */}
-      {detailNote && (
-        <NoteDetail
-          note={detailNote}
-          onClose={() => setDetailNote(null)}
-          isDark={isDark}
-          card={card}
-          txt={txt}
-          sub={sub}
-          bdr={bdr}
+          )}
         />
       )}
 
-      {/* ── New Note Modal ── */}
-      <Modal visible={noteModal} transparent animationType="fade" onRequestClose={() => !savingNote && setNoteModal(false)}>
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <Pressable style={styles.modalBackdrop} onPress={() => !savingNote && setNoteModal(false)}>
-            <Pressable style={[styles.modalCard, { backgroundColor: card, borderColor: bdr }]} onPress={() => {}}>
-              <View style={[styles.modalHeader, { borderBottomColor: bdr }]}>
-                <Text style={[styles.modalTitle, { color: txt }]}>New Note</Text>
-                <TouchableOpacity onPress={() => !savingNote && setNoteModal(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                  <Text style={{ color: sub, fontSize: 18 }}>✕</Text>
-                </TouchableOpacity>
+      {/* ── Full-screen note editor ── */}
+      {editorView && (
+        <KeyboardAvoidingView
+          style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 200, backgroundColor: isDark ? '#0D0D0F' : '#FFFFFF' }}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <SafeAreaView style={{ flex: 1 }} edges={['top']}>
+            {/* Editor navbar */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: bdr }}>
+              <TouchableOpacity onPress={closeEditor} style={{ padding: 4 }}>
+                <Text style={{ color: '#4ECDC4', fontSize: 22 }}>‹</Text>
+              </TouchableOpacity>
+              <Text style={{ fontSize: 15, fontWeight: '600', color: txt }}>
+                {editorNote ? 'Edit note' : 'New note'}
+              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+                <Text style={{ fontSize: 20 }}>☆</Text>
+                <Text style={{ fontSize: 20, color: sub }}>···</Text>
               </View>
+            </View>
 
-              <ScrollView style={{ padding: 16 }} keyboardShouldPersistTaps="handled">
-                <Text style={[styles.fieldLabel, { color: sub }]}>Content *</Text>
-                <TextInput
-                  style={[styles.contentInput, { color: txt, borderColor: bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
-                  placeholder="Type your note here…"
-                  placeholderTextColor={sub}
-                  value={draftContent}
-                  onChangeText={setDraftContent}
-                  multiline
-                  autoFocus
-                  textAlignVertical="top"
-                  editable={!savingNote}
-                />
-                <Text style={[styles.fieldHint, { color: sub }]}>Title is auto-generated from your content.</Text>
+            <ScrollView style={{ flex: 1, paddingHorizontal: 18 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
 
-                {/* Folder + Project */}
-                <View style={{ flexDirection: 'row', gap: 10, marginBottom: 14 }}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.fieldLabel, { color: sub }]}>Folder *</Text>
-                    <TouchableOpacity
-                      style={[styles.pickerBtn, { borderColor: notePicker === 'folder' ? '#4ECDC4' : bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
-                      onPress={() => setNotePicker(p => p === 'folder' ? null : 'folder')}
-                      disabled={savingNote}
-                    >
-                      <Text style={[{ flex: 1, fontSize: 13, color: draftFolder ? txt : sub }]} numberOfLines={1}>
+              {/* Folder + Project pickers — option 4: bordered cards */}
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 16, marginBottom: 16 }}>
+                {/* Folder card */}
+                <View style={{ flex: 1 }}>
+                  <TouchableOpacity
+                    style={{ borderWidth: 1.5, borderRadius: 10, padding: 10, borderColor: notePicker === 'folder' ? '#3B72EE' : bdr, backgroundColor: isDark ? '#1A1A20' : '#FFFFFF' }}
+                    onPress={() => setNotePicker(p => p === 'folder' ? null : 'folder')}
+                    disabled={savingNote}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={{ fontSize: 10, fontWeight: '700', color: notePicker === 'folder' ? '#3B72EE' : sub, letterSpacing: 0.5, marginBottom: 5 }}>FOLDER</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
+                        <Path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+                      </Svg>
+                      <Text style={{ flex: 1, fontSize: 13, fontWeight: '500', color: draftFolder ? txt : sub }} numberOfLines={1}>
                         {folders.find(f => f.id === draftFolder)?.name || 'Choose…'}
                       </Text>
-                      <Text style={{ color: sub, fontSize: 11 }}>{notePicker === 'folder' ? '▲' : '▾'}</Text>
-                    </TouchableOpacity>
-                    {notePicker === 'folder' && (
-                      <View style={[styles.dropdownList, { backgroundColor: card, borderColor: '#4ECDC4' }]}>
-                        <ScrollView style={{ maxHeight: 150 }} nestedScrollEnabled keyboardShouldPersistTaps="handled">
-                          {folders.map(f => (
-                            <TouchableOpacity
-                              key={f.id}
-                              style={[styles.dropdownItem, { borderBottomColor: bdr }, draftFolder === f.id && { backgroundColor: isDark ? '#252530' : '#F0FDF4' }]}
-                              onPress={() => { setDraftFolder(f.id); setNotePicker(null); }}
-                            >
-                              <Text style={[{ fontSize: 13, color: draftFolder === f.id ? '#4ECDC4' : txt, fontWeight: draftFolder === f.id ? '700' : '500' }]} numberOfLines={1}>{f.name}</Text>
-                              {draftFolder === f.id && <Text style={{ color: '#4ECDC4' }}>✓</Text>}
-                            </TouchableOpacity>
-                          ))}
-                          {folders.length === 0 && (
-                            <Text style={[{ fontSize: 12, color: sub, padding: 12, textAlign: 'center' }]}>No folders yet</Text>
-                          )}
-                        </ScrollView>
-                      </View>
-                    )}
-                  </View>
+                      <Svg width={12} height={12} viewBox="0 0 24 24" fill="none">
+                        <Path d={notePicker === 'folder' ? "M18 15L12 9L6 15" : "M6 9L12 15L18 9"} stroke={sub} strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"/>
+                      </Svg>
+                    </View>
+                  </TouchableOpacity>
+                  {notePicker === 'folder' && (
+                    <View style={{ borderWidth: 1.5, borderRadius: 10, marginTop: 4, borderColor: '#3B72EE', backgroundColor: card, overflow: 'hidden', zIndex: 10 }}>
+                      <ScrollView style={{ maxHeight: 160 }} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                        {folders.map(f => (
+                          <TouchableOpacity key={f.id}
+                            style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 11, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: bdr, backgroundColor: draftFolder === f.id ? '#EBF1FD' : 'transparent' }}
+                            onPress={() => { setDraftFolder(f.id); setNotePicker(null); }}>
+                            <Text style={{ fontSize: 13, color: draftFolder === f.id ? '#3B72EE' : txt, fontWeight: draftFolder === f.id ? '700' : '500' }} numberOfLines={1}>{f.name}</Text>
+                            {draftFolder === f.id && <Text style={{ color: '#3B72EE' }}>✓</Text>}
+                          </TouchableOpacity>
+                        ))}
+                        {folders.length === 0 && <Text style={{ fontSize: 12, color: sub, padding: 12, textAlign: 'center' }}>No folders yet</Text>}
+                      </ScrollView>
+                    </View>
+                  )}
+                </View>
 
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.fieldLabel, { color: sub }]}>Project *</Text>
-                    <TouchableOpacity
-                      style={[styles.pickerBtn, { borderColor: notePicker === 'project' ? '#4ECDC4' : bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
-                      onPress={() => setNotePicker(p => p === 'project' ? null : 'project')}
-                      disabled={savingNote}
-                    >
-                      <Text style={[{ flex: 1, fontSize: 13, color: draftProject ? txt : sub }]} numberOfLines={1}>
+                {/* Project card */}
+                <View style={{ flex: 1 }}>
+                  <TouchableOpacity
+                    style={{ borderWidth: 1.5, borderRadius: 10, padding: 10, borderColor: notePicker === 'project' ? '#10B981' : bdr, backgroundColor: isDark ? '#1A1A20' : '#FFFFFF' }}
+                    onPress={() => setNotePicker(p => p === 'project' ? null : 'project')}
+                    disabled={savingNote}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={{ fontSize: 10, fontWeight: '700', color: notePicker === 'project' ? '#10B981' : sub, letterSpacing: 0.5, marginBottom: 5 }}>PROJECT</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
+                        <Path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z" stroke="#10B981" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+                      </Svg>
+                      <Text style={{ flex: 1, fontSize: 13, fontWeight: '500', color: draftProject ? txt : sub }} numberOfLines={1}>
                         {projects.find(p => p.id === draftProject)?.name || 'Choose…'}
                       </Text>
-                      <Text style={{ color: sub, fontSize: 11 }}>{notePicker === 'project' ? '▲' : '▾'}</Text>
-                    </TouchableOpacity>
-                    {notePicker === 'project' && (
-                      <View style={[styles.dropdownList, { backgroundColor: card, borderColor: '#4ECDC4' }]}>
-                        <ScrollView style={{ maxHeight: 150 }} nestedScrollEnabled keyboardShouldPersistTaps="handled">
-                          {projects.map(p => (
-                            <TouchableOpacity
-                              key={p.id}
-                              style={[styles.dropdownItem, { borderBottomColor: bdr }, draftProject === p.id && { backgroundColor: isDark ? '#252530' : '#F0FDF4' }]}
-                              onPress={() => { setDraftProject(p.id); setNotePicker(null); }}
-                            >
-                              <Text style={[{ fontSize: 13, color: draftProject === p.id ? '#4ECDC4' : txt, fontWeight: draftProject === p.id ? '700' : '500' }]} numberOfLines={1}>{p.name}</Text>
-                              {draftProject === p.id && <Text style={{ color: '#4ECDC4' }}>✓</Text>}
-                            </TouchableOpacity>
-                          ))}
-                        </ScrollView>
-                      </View>
-                    )}
-                  </View>
+                      <Svg width={12} height={12} viewBox="0 0 24 24" fill="none">
+                        <Path d={notePicker === 'project' ? "M18 15L12 9L6 15" : "M6 9L12 15L18 9"} stroke={sub} strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"/>
+                      </Svg>
+                    </View>
+                  </TouchableOpacity>
+                  {notePicker === 'project' && (
+                    <View style={{ borderWidth: 1.5, borderRadius: 10, marginTop: 4, borderColor: '#10B981', backgroundColor: card, overflow: 'hidden', zIndex: 10 }}>
+                      <ScrollView style={{ maxHeight: 160 }} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                        {projects.map(p => (
+                          <TouchableOpacity key={p.id}
+                            style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 11, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: bdr, backgroundColor: draftProject === p.id ? '#ECFDF5' : 'transparent' }}
+                            onPress={() => { setDraftProject(p.id); setNotePicker(null); }}>
+                            <Text style={{ fontSize: 13, color: draftProject === p.id ? '#10B981' : txt, fontWeight: draftProject === p.id ? '700' : '500' }} numberOfLines={1}>{p.name}</Text>
+                            {draftProject === p.id && <Text style={{ color: '#10B981' }}>✓</Text>}
+                          </TouchableOpacity>
+                        ))}
+                      </ScrollView>
+                    </View>
+                  )}
                 </View>
+              </View>
 
-                {/* Buttons */}
-                <View style={{ flexDirection: 'row', gap: 10, marginBottom: 8 }}>
-                  <TouchableOpacity style={[styles.modalCancelBtn, { borderColor: bdr }]} onPress={() => setNoteModal(false)} disabled={savingNote}>
-                    <Text style={[{ fontSize: 14, fontWeight: '600', color: sub }]}>Cancel</Text>
+              {/* Title */}
+              <TextInput
+                ref={titleInputRef}
+                style={{ fontSize: 26, fontWeight: '700', color: txt, marginBottom: 8, lineHeight: 32 }}
+                placeholder="Title"
+                placeholderTextColor={isDark ? '#444455' : '#C0C0CC'}
+                value={draftTitle}
+                onChangeText={setDraftTitle}
+                returnKeyType="next"
+                onSubmitEditing={() => contentInputRef.current?.focus()}
+                editable={!savingNote}
+              />
+
+              {/* Content */}
+              <TextInput
+                ref={contentInputRef}
+                style={{ fontSize: 16, color: txt, lineHeight: 26, minHeight: 300, textAlignVertical: 'top' }}
+                placeholder="Start writing..."
+                placeholderTextColor={isDark ? '#444455' : '#C0C0CC'}
+                value={draftContent}
+                onChangeText={setDraftContent}
+                onSelectionChange={e => setSelection(e.nativeEvent.selection)}
+                multiline
+                scrollEnabled={false}
+                editable={!savingNote}
+              />
+
+              <View style={{ height: 120 }} />
+            </ScrollView>
+
+            {/* Formatting toolbar */}
+            <SafeAreaView edges={['bottom']} style={{ borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: bdr, backgroundColor: isDark ? '#1A1A20' : '#FFFFFF' }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 8 }}>
+                {[
+                  { label: 'B',   style: { fontSize: 18, fontWeight: '700', color: txt }, onPress: () => insertAtCursor('**', '**') },
+                  { label: 'I',   style: { fontSize: 18, fontStyle: 'italic', color: txt }, onPress: () => insertAtCursor('_', '_') },
+                  { label: '≡',   style: { fontSize: 24, color: txt }, onPress: () => insertAtCursor('\n• ') },
+                  { label: '☑',   style: { fontSize: 18, color: txt }, onPress: () => insertAtCursor('\n☐ ') },
+                  { label: '📎',  style: { fontSize: 18 }, onPress: () => {} },
+                  { label: '🔗',  style: { fontSize: 18 }, onPress: () => insertAtCursor('[', '](url)') },
+                ].map((btn, i) => (
+                  <TouchableOpacity key={i} style={{ paddingHorizontal: 12, paddingVertical: 6 }} onPress={btn.onPress}>
+                    <Text style={btn.style}>{btn.label}</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={[styles.modalSaveBtn, savingNote && { opacity: 0.6 }]} onPress={saveNote} disabled={savingNote}>
-                    {savingNote ? <ActivityIndicator color="#fff" size="small" /> : <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>Save Note</Text>}
-                  </TouchableOpacity>
-                </View>
-              </ScrollView>
-            </Pressable>
-          </Pressable>
+                ))}
+                <View style={{ flex: 1 }} />
+                <TouchableOpacity
+                  style={{ backgroundColor: '#3B72EE', paddingHorizontal: 20, paddingVertical: 8, borderRadius: 8 }}
+                  onPress={saveNote}
+                  disabled={savingNote}
+                >
+                  {savingNote
+                    ? <ActivityIndicator color="#fff" size="small" />
+                    : <Text style={{ color: '#fff', fontSize: 14, fontWeight: '600' }}>Done</Text>
+                  }
+                </TouchableOpacity>
+              </View>
+            </SafeAreaView>
+          </SafeAreaView>
         </KeyboardAvoidingView>
-      </Modal>
+      )}
 
       {/* ── New Folder Modal ── */}
       <Modal visible={folderModal} transparent animationType="fade" onRequestClose={() => !savingFolder && setFolderModal(false)}>
@@ -578,7 +668,7 @@ export default function QuickNotesScreen() {
                 />
                 <View style={{ flexDirection: 'row', gap: 10, marginTop: 4 }}>
                   <TouchableOpacity style={[styles.modalCancelBtn, { borderColor: bdr }]} onPress={() => setFolderModal(false)} disabled={savingFolder}>
-                    <Text style={[{ fontSize: 14, fontWeight: '600', color: sub }]}>Cancel</Text>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: sub }}>Cancel</Text>
                   </TouchableOpacity>
                   <TouchableOpacity style={[styles.modalSaveBtn, savingFolder && { opacity: 0.6 }]} onPress={saveFolder} disabled={savingFolder}>
                     {savingFolder ? <ActivityIndicator color="#fff" size="small" /> : <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>Create Folder</Text>}
@@ -593,84 +683,42 @@ export default function QuickNotesScreen() {
   );
 }
 
+// ── Styles ────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   safe: { flex: 1 },
+  navbar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1 },
+  navTitle: { fontWeight: '700', fontSize: 17 },
 
-  // Navbar
-  navbar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, elevation: 2 },
-  navLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  navRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  logoBox: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center' },
-  logoText: { color: '#4ECDC4', fontSize: 15, fontWeight: '800' },
-  brandName: { fontSize: 15, fontWeight: '700' },
-  navIconBtn: { width: 36, height: 36, borderRadius: 8, borderWidth: 1, justifyContent: 'center', alignItems: 'center' },
-  navIcon: { fontSize: 16 },
+  quickBanner: { marginHorizontal: 12, marginTop: 12, borderRadius: 16, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, gap: 12 },
+  quickBannerIcon: { width: 40, height: 40, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.2)', justifyContent: 'center', alignItems: 'center' },
 
-  // Body — folders + notes side by side
-  body: { flex: 1, flexDirection: 'row' },
+  tabChip: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20, borderWidth: 1.5, minWidth: 60, alignItems: 'center', flexShrink: 0 },
 
-  // Panel shared header
-  panelHeader: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1,
+  noteCard: {
+    borderRadius: 12, borderWidth: StyleSheet.hairlineWidth,
+    borderLeftWidth: 3, padding: 14, marginBottom: 10,
   },
-  panelHeaderLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 0.8 },
-  panelHeaderPlus: { color: '#4ECDC4', fontSize: 20, fontWeight: '700', lineHeight: 22 },
+  noteCardGrid: {
+    borderRadius: 12, borderWidth: StyleSheet.hairlineWidth,
+    borderTopWidth: 3, padding: 12, marginBottom: 10, flex: 1,
+  },
+  noteCardTitle:   { fontSize: 14, fontWeight: '600', marginBottom: 4 },
+  noteCardPreview: { fontSize: 13, lineHeight: 19, marginBottom: 6 },
+  noteCardTime:    { fontSize: 11 },
 
-  // Folders panel
-  foldersPanel: { width: 130, borderRightWidth: 1 },
-  folderRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 7,
-    paddingHorizontal: 10, paddingVertical: 11,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  folderRowActive: {},
-  folderName: { flex: 1, fontSize: 13, fontWeight: '500' },
-  folderBadge: { minWidth: 22, height: 20, borderRadius: 10, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 5 },
-  folderBadgeText: { fontSize: 10, fontWeight: '700' },
 
-  // Notes panel
-  notesPanel: { flex: 1 },
-  searchWrap: {
-    flexDirection: 'row', alignItems: 'center',
-    margin: 10, borderRadius: 10, borderWidth: 1,
-    paddingHorizontal: 12, height: 38,
-  },
-  searchInput: { flex: 1, fontSize: 13 },
-  noteRow: {
-    flexDirection: 'row', alignItems: 'flex-start',
-    paddingHorizontal: 14, paddingVertical: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    gap: 6,
-  },
-  noteTitle: { fontSize: 14, fontWeight: '700', lineHeight: 20, marginBottom: 2 },
-  noteDate: { fontSize: 11, marginBottom: 4 },
-  notePreview: { fontSize: 12, lineHeight: 17 },
-  noteMenuBtn: { paddingTop: 2, paddingLeft: 6 },
+  centerState: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 6, padding: 20 },
 
-  // Note detail slide-in
-  detailOverlay: {
-    position: 'absolute', top: 0, right: 0, bottom: 0, left: 0,
-    zIndex: 100,
-    shadowColor: '#000', shadowOffset: { width: -4, height: 0 },
-    shadowOpacity: 0.15, shadowRadius: 12, elevation: 20,
-  },
-  detailHeader: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1,
-  },
+  // Note detail
+  detailOverlay: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: 100, elevation: 20 },
+  detailHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1 },
   detailBackBtn: { width: 60 },
-  detailBackText: { color: '#4ECDC4', fontSize: 14, fontWeight: '600' },
+  detailBackText: { color: '#3B72EE', fontSize: 14, fontWeight: '600' },
   detailHeaderTitle: { flex: 1, textAlign: 'center', fontSize: 14, fontWeight: '700' },
   detailTitle: { fontSize: 20, fontWeight: '700', lineHeight: 28, marginBottom: 4 },
   detailTime: { fontSize: 12, marginBottom: 16 },
   detailDivider: { height: 1, marginBottom: 18 },
   detailContent: { fontSize: 15, lineHeight: 24 },
-
-  // Empty / loading
-  centerState: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 8, padding: 20 },
-  emptyTitle: { fontSize: 15, fontWeight: '600' },
-  emptySub: { fontSize: 13 },
 
   // Modals
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 16 },
@@ -686,5 +734,5 @@ const styles = StyleSheet.create({
   dropdownList: { borderWidth: 1.5, borderRadius: 10, marginTop: 4, marginBottom: 8, overflow: 'hidden' },
   dropdownItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 11, borderBottomWidth: StyleSheet.hairlineWidth },
   modalCancelBtn: { flex: 1, height: 46, borderWidth: 1, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
-  modalSaveBtn: { flex: 1, height: 46, backgroundColor: '#1A1A2E', borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+  modalSaveBtn: { flex: 1, height: 46, backgroundColor: '#3B72EE', borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
 });

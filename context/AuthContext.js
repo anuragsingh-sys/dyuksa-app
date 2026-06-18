@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { setCachedToken, clearTokenCache } from '../services/ApiService';
+import { invalidateTasksCache } from '../hooks/useTasksCache';
 import WebSocketService from '../services/WebSocketService';
 
 import { API_BASE, BASE_URL, WS_BASE } from '../config';
@@ -126,8 +127,13 @@ export function AuthProvider({ children }) {
       SecureStore.deleteItemAsync(AUTH_REFRESH_KEY),
       SecureStore.deleteItemAsync(TOKEN_EXPIRY_KEY),
       AsyncStorage.removeItem('DYUKSA_AUTH_TOKEN'),
+      AsyncStorage.removeItem('DYUKSA_WORKSPACE_ID'),
+      AsyncStorage.removeItem('DYUKSA_NOTIFICATIONS'),
+      AsyncStorage.removeItem('DYUKSA_SETTINGS'),
+      AsyncStorage.removeItem('TASKS_CACHE_V1'),
     ]).catch(() => {});
     clearTokenCache();
+    invalidateTasksCache();     // wipe in-memory task cache
     setToken(null);
     setUser(null);
     // Disconnect WebSocket on logout
@@ -140,7 +146,7 @@ export function AuthProvider({ children }) {
       const refreshTok = await SecureStore.getItemAsync(AUTH_REFRESH_KEY);
       if (!refreshTok) return false;
 
-      const res = await fetch(`${BASE_URL}/auth/token/refresh/`, {
+      const res = await fetch(`${BASE_URL}/auth/refresh/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refresh: refreshTok }),
@@ -302,13 +308,19 @@ export function AuthProvider({ children }) {
 
   // ── Logout ────────────────────────────────────────────────────────────
   const logout = async () => {
+    // Call backend logout to invalidate refresh token
     try {
-      // ── BACKEND INTEGRATION POINT ──────────────────────────────────
-      // await fetch('https://api.dyuksa.com/auth/logout', {
-      //   method: 'POST',
-      //   headers: { Authorization: `Bearer ${token}` },
-      // }).catch(() => {}); // fire and forget
-      // ─────────────────────────────────────────────────────────────
+      const refreshTok = await SecureStore.getItemAsync(AUTH_REFRESH_KEY);
+      if (refreshTok && token) {
+        await fetch(`${BASE_URL}/auth/logout/`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+          body: JSON.stringify({ refresh: refreshTok }),
+        }).catch(() => {}); // fire and forget — clear session regardless
+      }
     } catch {}
     await clearSession();
   };

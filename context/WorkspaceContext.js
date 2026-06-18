@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { getWorkspaces, switchWorkspace, getWorkspaceId, setWorkspaceId } from '../services/ApiService';
+import { invalidateTasksCache } from '../hooks/useTasksCache';
 
 export const WorkspaceContext = createContext({
   currentWorkspace:  null,
@@ -8,6 +9,7 @@ export const WorkspaceContext = createContext({
   switchingId:       null,
   fetchWorkspaces:   async () => {},
   handleSwitch:      async () => {},
+  switchWorkspace:   async () => {},
 });
 
 export function WorkspaceProvider({ children }) {
@@ -79,6 +81,11 @@ export function WorkspaceProvider({ children }) {
     try {
       await switchWorkspace(workspace.id); // saves X-Workspace-ID to AsyncStorage
 
+      // ── Invalidate all workspace-scoped caches ────────────────────
+      // This ensures remounted screens always fetch fresh data for the
+      // new workspace instead of showing stale cached data
+      invalidateTasksCache();
+
       setCurrentWorkspace(workspace);
       setWorkspaces(prev => prev.map(w => ({
         ...w,
@@ -100,6 +107,7 @@ export function WorkspaceProvider({ children }) {
       switchingId,
       fetchWorkspaces,
       handleSwitch,
+      switchWorkspace: handleSwitch, // alias for components that call switchWorkspace directly
     }}>
       {children}
     </WorkspaceContext.Provider>

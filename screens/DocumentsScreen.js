@@ -7,9 +7,10 @@ import {
 import { WebView } from 'react-native-webview';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useState, useContext, useEffect, useCallback, useMemo } from 'react';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useNavigation, useFocusEffect, useRoute } from '@react-navigation/native';
 import SidebarMenu from '../components/SidebarMenu';
 import NotificationBell from '../components/NotificationBell';
+import Svg, { Path, Rect } from 'react-native-svg';
 import { ThemeContext } from '../context/ThemeContext';
 import { getAccessToken, getWorkspaceId } from '../services/ApiService';
 
@@ -246,8 +247,18 @@ const fileIconStyles = StyleSheet.create({
   },
 });
 
+
+// ── SVG Search Icon ───────────────────────────────────────────────────────────
+const SearchIcon = ({ size = 20, color = '#3B72EE' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Path d="M11 19C15.4183 19 19 15.4183 19 11C19 6.58172 15.4183 3 11 3C6.58172 3 3 6.58172 3 11C3 15.4183 6.58172 19 11 19Z" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+    <Path d="M21 21L16.65 16.65" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+  </Svg>
+);
+
 export default function DocumentsScreen() {
   const navigation = useNavigation();
+  const route = useRoute();
   const { theme, fontScale } = useContext(ThemeContext);
   const isDark = theme === 'Dark';
   const bg   = isDark ? '#0D0D0F' : '#F5F5F7';
@@ -477,6 +488,15 @@ export default function DocumentsScreen() {
   );
 
   useFocusEffect(useCallback(() => { loadAll(); }, [loadAll]));
+
+  // Open upload modal directly when navigated from FAB / QuickCreate
+  useFocusEffect(useCallback(() => {
+    if (route.params?.openUpload) {
+      navigation.setParams({ openUpload: false });
+      // Small delay so the screen finishes mounting first
+      setTimeout(() => openUploadModal(), 350);
+    }
+  }, [route.params?.openUpload]));
 
   // ── Fetch users for share modal ──────────────────────────────────
   useEffect(() => {
@@ -836,7 +856,7 @@ export default function DocumentsScreen() {
       <TouchableOpacity
         style={[
           styles.row,
-          { backgroundColor: isSelected ? (isDark ? '#1A2E2E' : '#F0FFFE') : card, borderColor: isSelected ? '#4ECDC4' : bdr },
+          { backgroundColor: isSelected ? (isDark ? '#1A2E2E' : '#F0FFFE') : card, borderColor: isSelected ? '#3B72EE' : bdr },
         ]}
         onPress={() => {
           if (isSelecting) {
@@ -853,7 +873,7 @@ export default function DocumentsScreen() {
         {isSelecting && (
           <View style={[
             styles.selectionCheck,
-            { borderColor: isSelected ? '#4ECDC4' : bdr, backgroundColor: isSelected ? '#4ECDC4' : 'transparent' },
+            { borderColor: isSelected ? '#3B72EE' : bdr, backgroundColor: isSelected ? '#3B72EE' : 'transparent' },
           ]}>
             {isSelected && <Text style={{ color: '#fff', fontSize: 10, fontWeight: '800' }}>✓</Text>}
           </View>
@@ -893,15 +913,17 @@ export default function DocumentsScreen() {
             {!!status && (
               <View style={[styles.statusPill, {
                 backgroundColor:
-                  status === 'approved'  ? '#D1FAE5' :
-                  status === 'in_review' ? '#FEF3C7' :
-                  status === 'archived'  ? '#F3F4F6' : '#F5F5F7',
+                  status === 'approved'  ? (isDark ? 'rgba(34,160,107,0.15)' : '#D1FAE5') :
+                  status === 'in_review' ? (isDark ? 'rgba(229,166,14,0.15)' : '#FEF3C7') :
+                  status === 'archived'  ? (isDark ? '#252530' : '#F3F4F6') :
+                                           (isDark ? '#252530' : '#F5F5F7'),
               }]}>
                 <Text style={[styles.statusPillTxt, {
                   color:
-                    status === 'approved'  ? '#065F46' :
-                    status === 'in_review' ? '#92400E' :
-                    status === 'archived'  ? '#6B7280' : '#374151',
+                    status === 'approved'  ? (isDark ? '#4ADE80' : '#065F46') :
+                    status === 'in_review' ? (isDark ? '#FCD34D' : '#92400E') :
+                    status === 'archived'  ? (isDark ? '#9898A6' : '#6B7280') :
+                                             (isDark ? '#9898A6' : '#374151'),
                   fontSize: fs(9),
                 }]}>
                   {status === 'in_review' ? 'IN REVIEW' : status.toUpperCase()}
@@ -925,7 +947,7 @@ export default function DocumentsScreen() {
             {/* Shared indicator */}
             {((item.shared_with?.length > 0) || (sharedWithMap[item.id]?.length > 0)) && (
               <TouchableOpacity
-                style={[styles.sharedBadge, { backgroundColor: isDark ? '#1A2E2E' : '#F0FFFE', borderColor: '#4ECDC4' }]}
+                style={[styles.sharedBadge, { backgroundColor: isDark ? '#1A2E2E' : '#F0FFFE', borderColor: '#3B72EE' }]}
                 onPress={() => {
                   fetchSharedWith(item.id);
                   setShareUserId(null);
@@ -934,7 +956,7 @@ export default function DocumentsScreen() {
                 }}
                 hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
               >
-                <Text style={{ fontSize: 9, color: '#4ECDC4', fontWeight: '700' }}>
+                <Text style={{ fontSize: 9, color: '#3B72EE', fontWeight: '700' }}>
                   ⤴ Shared ({item.shared_with?.length || sharedWithMap[item.id]?.length || 0})
                 </Text>
               </TouchableOpacity>
@@ -955,7 +977,7 @@ export default function DocumentsScreen() {
       style={[
         styles.chip,
         { backgroundColor: card, borderColor: bdr },
-        active && { backgroundColor: isDark ? '#4ECDC4' : '#1A1A2E', borderColor: isDark ? '#4ECDC4' : '#1A1A2E' },
+        active && { backgroundColor: isDark ? '#3B72EE' : '#1A1A2E', borderColor: isDark ? '#3B72EE' : '#1A1A2E' },
       ]}
       activeOpacity={0.7}
     >
@@ -971,284 +993,285 @@ export default function DocumentsScreen() {
     </TouchableOpacity>
   );
 
+  // ── Folder grouping ──
+  const folderMap = {};
+  filtered.forEach(doc => {
+    const pid = doc.project != null ? doc.project : extractProjectIdFromUrl(doc.source_file || doc.file_url);
+    const pName = (pid != null && projectMap[pid]) ? projectMap[pid] : 'Uncategorized';
+    if (!folderMap[pName]) folderMap[pName] = [];
+    folderMap[pName].push(doc);
+  });
+  const folders = Object.entries(folderMap).map(([name, files]) => ({ name, count: files.length }));
+  folders.sort((a, b) => b.count - a.count);
+
+  const [fileFilter,       setFileFilter]       = useState('recent');
+  const [gridView,         setGridView]         = useState(false);
+  const [showSortDropdown, setShowSortDropdown] = useState(false);
+
+  // Storage mock (replace with real API when available)
+  const totalFiles = docs.length;
+  const storageUsed = 12.4;
+  const storageTotal = 50;
+  const storagePercent = (storageUsed / storageTotal) * 100;
+
+  // Filter + sort docs
+  const FILE_FILTERS = [
+    { key: 'recent', label: 'Recent' },
+    { key: 'jpg',    label: 'JPG' },
+    { key: 'pdf',    label: 'PDF' },
+    { key: 'docx',   label: 'DOCX' },
+    { key: 'xlsx',   label: 'XLSX' },
+    { key: 'pptx',   label: 'PPTX' },
+    { key: 'csv',    label: 'CSV' },
+    { key: 'html',   label: 'HTML' },
+    { key: 'other',  label: 'Others' },
+  ];
+
+  const EXT_GROUPS = {
+    jpg:  ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'bmp', 'svg'],
+    pdf:  ['pdf'],
+    docx: ['doc', 'docx', 'rtf', 'txt', 'md'],
+    xlsx: ['xls', 'xlsx', 'csv'],
+    pptx: ['ppt', 'pptx', 'key'],
+    csv:  ['csv'],
+    html: ['html', 'htm'],
+    other:['zip', 'rar', '7z', 'tar', 'gz', 'mp4', 'mov', 'avi', 'mp3', 'wav', 'js', 'ts', 'py', 'java', 'json', 'xml', 'yml'],
+  };
+
+  const sortedDocs = [...filtered]
+    .sort((a, b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0))
+    .filter(doc => {
+      if (fileFilter === 'recent') return true;
+      const ext = getExt(doc.name || doc.file_name || '');
+      const group = EXT_GROUPS[fileFilter] || [];
+      return group.includes(ext);
+    });
+
+  const FOLDER_COLORS = ['#3B72EE', '#8B5CF6', '#10B981', '#F59E0B', '#EF4444', '#EC4899'];
+
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: bg }]} edges={['top', 'left', 'right']}>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={card} translucent={false} />
 
-      {/* Navbar */}
+      {/* ── Navbar ── */}
       <View style={[styles.navbar, { backgroundColor: card, borderBottomColor: bdr }]}>
-        <View style={styles.navLeft}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
           <SidebarMenu activeScreen="Docs" />
-          <TouchableOpacity
-            style={styles.logoBox}
-            onPress={() => { try { navigation.jumpTo('Dashboard'); } catch { navigation.navigate('Main', { screen: 'Dashboard' }); } }}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.logoText}>D</Text>
-          </TouchableOpacity>
-          <Text style={[styles.brandName, { color: txt, fontSize: fs(15) }]}>Documents</Text>
+          <View>
+            <Text style={[styles.navTitle, { color: txt }]}>Documents</Text>
+            <Text style={{ fontSize: 11, color: sub, marginTop: 1 }}>{totalFiles} files</Text>
+          </View>
         </View>
-        <View style={styles.navRight}>
-          <TouchableOpacity style={[styles.navIconBtn, { backgroundColor: isDark ? '#252530' : '#FAFAFA', borderColor: bdr }]}>
-            <Text style={styles.navIcon}>💬</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <TouchableOpacity style={{ padding: 6 }} onPress={() => navigation.navigate('Search')}>
+            <SearchIcon size={20} color='#3B72EE' />
           </TouchableOpacity>
           <NotificationBell />
         </View>
       </View>
 
-      {/* Sub header with count + action buttons */}
-      <View style={[styles.subHeader, { backgroundColor: card, borderBottomColor: bdr }]}>
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.pageTitle, { color: txt, fontSize: fs(17) }]}>All Documents</Text>
-          <Text style={[styles.pageSub, { color: sub, fontSize: fs(12) }]}>
-            {isSelecting
-              ? `${selectedIds.size} selected`
-              : loading ? 'Loading…' : `${filtered.length} of ${docs.length} document${docs.length !== 1 ? 's' : ''}`}
-          </Text>
-        </View>
-
-        {isSelecting ? (
-          /* ── Selection action bar ── */
-          <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-            {/* Cancel */}
-            <TouchableOpacity
-              style={[styles.actionBarBtn, { borderColor: bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
-              onPress={clearSelection}
-            >
-              <Text style={[styles.actionBarBtnTxt, { color: sub }]}>✕ {selectedIds.size}</Text>
-            </TouchableOpacity>
-            {/* Move */}
-            <TouchableOpacity
-              style={[styles.actionBarBtn, { borderColor: '#60A5FA', backgroundColor: isDark ? '#1A2035' : '#EFF6FF' }]}
-              onPress={openMoveModal}
-            >
-              <Text style={[styles.actionBarBtnTxt, { color: '#2563EB' }]}>⇥ Move</Text>
-            </TouchableOpacity>
-            {/* Add Tags */}
-            <TouchableOpacity
-              style={[styles.actionBarBtn, { borderColor: '#A78BFA', backgroundColor: isDark ? '#1E1A30' : '#F5F3FF' }]}
-              onPress={openTagsModal}
-            >
-              <Text style={[styles.actionBarBtnTxt, { color: '#7C3AED' }]}>🏷 Tags</Text>
-            </TouchableOpacity>
-            {/* Change Status */}
-            <TouchableOpacity
-              style={[styles.actionBarBtn, { borderColor: '#FBBF24', backgroundColor: isDark ? '#2A2510' : '#FFFBEB' }]}
-              onPress={() => Alert.alert(
-                'Change Status',
-                `Update ${selectedIds.size} doc${selectedIds.size > 1 ? 's' : ''} to:`,
-                [
-                  { text: 'Draft',     onPress: () => bulkChangeStatus('draft') },
-                  { text: 'In Review', onPress: () => bulkChangeStatus('in_review') },
-                  { text: 'Approved',  onPress: () => bulkChangeStatus('approved') },
-                  { text: 'Archived',  onPress: () => bulkChangeStatus('archived') },
-                  { text: 'Cancel',    style: 'cancel' },
-                ]
-              )}
-            >
-              <Text style={[styles.actionBarBtnTxt, { color: '#D97706' }]}>⇅ Status</Text>
-            </TouchableOpacity>
-            {/* Share — only when 1 doc selected */}
-            {selectedIds.size === 1 && (
-              <TouchableOpacity
-                style={[styles.actionBarBtn, { borderColor: '#4ECDC4', backgroundColor: isDark ? '#1A2E2E' : '#F0FFFE' }]}
-                onPress={() => {
-                  const doc = docs.find(d => selectedIds.has(d.id));
-                  setShareUserId(null);
-                  setShareUserOpen(false);
-                  fetchSharedWith(doc.id);
-                  setShareModalDoc(doc);
-                }}
-              >
-                <Text style={[styles.actionBarBtnTxt, { color: '#4ECDC4' }]}>⤴ Share</Text>
-              </TouchableOpacity>
-            )}
-            {/* Delete */}
-            <TouchableOpacity
-              style={[styles.actionBarBtn, { borderColor: '#EF4444', backgroundColor: isDark ? '#2A1010' : '#FEF2F2' }]}
-              onPress={bulkDelete}
-            >
-              <Text style={[styles.actionBarBtnTxt, { color: '#EF4444' }]}>🗑 Delete</Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          /* ── Normal Upload + New buttons ── */
-          <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-            <TouchableOpacity
-              style={[styles.uploadBtn, { borderColor: bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
-              onPress={openUploadModal}
-              activeOpacity={0.7}
-            >
-              <Text style={[styles.uploadBtnText, { color: txt }]}>⬆ Upload</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.newDocBtn}
-              onPress={openUploadModal}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.newDocBtnText}>+ New</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-      </View>
-
-      {/* Search bar */}
-      <View style={{ paddingHorizontal: 12, paddingTop: 10 }}>
-        <View style={[styles.searchWrap, { backgroundColor: card, borderColor: bdr }]}>
-          <Text style={{ marginRight: 6, fontSize: 14 }}>🔍</Text>
-          <TextInput
-            style={[styles.searchInput, { color: txt, fontSize: fs(13) }]}
-            placeholder="Search documents..."
-            placeholderTextColor={sub}
-            value={search}
-            onChangeText={setSearch}
-            autoCapitalize="none"
-          />
-          {search.length > 0 && (
-            <TouchableOpacity onPress={() => setSearch('')}>
-              <Text style={{ color: sub, fontSize: 14, paddingHorizontal: 6 }}>✕</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      </View>
-
-      {/* Filter dropdowns: All Projects / All Types */}
-      <View style={styles.dropdownRow}>
-        <TouchableOpacity
-          onPress={() => setPickerOpen('project')}
-          activeOpacity={0.7}
-          style={[styles.dropdownBtn, { backgroundColor: card, borderColor: bdr }]}
-        >
-          <Text
-            style={[styles.dropdownText, { color: projectFilter === 'all' ? sub : txt, fontSize: fs(13) }]}
-            numberOfLines={1}
-          >
-            {currentProjectLabel}
-          </Text>
-          <Text style={[styles.dropdownCaret, { color: sub }]}>▾</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          onPress={() => setPickerOpen('type')}
-          activeOpacity={0.7}
-          style={[styles.dropdownBtn, { backgroundColor: card, borderColor: bdr }]}
-        >
-          <Text
-            style={[styles.dropdownText, { color: typeFilter === 'all' ? sub : txt, fontSize: fs(13) }]}
-            numberOfLines={1}
-          >
-            {currentTypeLabel}
-          </Text>
-          <Text style={[styles.dropdownCaret, { color: sub }]}>▾</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* List / loading / empty / error */}
-      {loading && docs.length === 0 ? (
-        <View style={styles.centerState}>
-          <ActivityIndicator size="large" color="#4ECDC4" />
-          <Text style={[styles.emptySub, { color: sub, marginTop: 12 }]}>Loading documents…</Text>
-        </View>
-      ) : error ? (
-        <View style={styles.centerState}>
-          <Text style={{ fontSize: 40, opacity: 0.4 }}>⚠️</Text>
-          <Text style={[styles.emptyTitle, { color: txt }]}>Couldn't load documents</Text>
-          <Text style={[styles.emptySub, { color: sub, textAlign: 'center', marginTop: 4 }]}>{error}</Text>
-          <TouchableOpacity style={styles.retryBtn} onPress={() => { setLoading(true); loadAll(); }}>
-            <Text style={styles.retryBtnText}>Retry</Text>
-          </TouchableOpacity>
-        </View>
-      ) : filtered.length === 0 ? (
-        <View style={styles.centerState}>
-          <Text style={{ fontSize: 52, opacity: 0.3 }}>📄</Text>
-          <Text style={[styles.emptyTitle, { color: txt }]}>
-            {docs.length === 0 ? 'No documents yet' : 'No matching documents'}
-          </Text>
-          <Text style={[styles.emptySub, { color: sub }]}>
-            {docs.length === 0
-              ? 'Upload files from inside any project to see them here.'
-              : 'Try changing filters or search terms.'}
-          </Text>
-        </View>
-      ) : (
-        <FlatList
-          data={filtered}
-          keyExtractor={(item, idx) => String(item.id) + '_' + idx}
-          contentContainerStyle={{ padding: 12, paddingBottom: 110 }}
-          renderItem={renderItem}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              tintColor="#4ECDC4"
-              colors={['#4ECDC4']}
-            />
-          }
-          ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
-        />
-      )}
-
-      {/* Picker modal (project / type) */}
-      <Modal
-        visible={pickerOpen !== null}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setPickerOpen(null)}
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor='#3B72EE' />}
+        contentContainerStyle={{ paddingBottom: 100 }}
       >
-        <Pressable style={styles.pickerBackdrop} onPress={() => setPickerOpen(null)}>
-          <Pressable
-            style={[styles.pickerSheet, { backgroundColor: card, borderColor: bdr }]}
-            onPress={() => { /* swallow */ }}
-          >
-            <View style={[styles.pickerHeader, { borderBottomColor: bdr }]}>
-              <Text style={[styles.pickerTitle, { color: txt, fontSize: fs(15) }]}>
-                {pickerOpen === 'project' ? 'Filter by project' : 'Filter by type'}
-              </Text>
-              <TouchableOpacity onPress={() => setPickerOpen(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                <Text style={{ color: sub, fontSize: 18 }}>✕</Text>
+        {/* ── Storage card ── */}
+        <View style={{ paddingHorizontal: 14, paddingTop: 14 }}>
+          <View style={[styles.storageCard]}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <Text style={{ fontSize: 12, color: 'rgba(255,255,255,0.75)', fontWeight: '500' }}>Storage</Text>
+              <TouchableOpacity style={styles.upgradeBtn}>
+                <Text style={{ fontSize: 12, color: '#3B72EE', fontWeight: '700' }}>Upgrade</Text>
               </TouchableOpacity>
             </View>
+            <Text style={{ fontSize: 26, fontWeight: '700', color: '#fff', marginBottom: 4 }}>
+              {storageUsed} <Text style={{ fontSize: 14, fontWeight: '400', color: 'rgba(255,255,255,0.7)' }}>/ {storageTotal} GB used</Text>
+            </Text>
+            <View style={styles.progressTrack}>
+              <View style={[styles.progressFill, { width: `${storagePercent}%` }]} />
+            </View>
+          </View>
+        </View>
 
-            <ScrollView style={{ maxHeight: 420 }}>
-              {(pickerOpen === 'project' ? projectOptions : TYPE_GROUPS).map(opt => {
-                const active = pickerOpen === 'project'
-                  ? projectFilter === opt.id
-                  : typeFilter === opt.id;
+        {/* ── Folders ── */}
+        <View style={{ paddingHorizontal: 14, paddingTop: 20 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+            <Text style={{ fontSize: 16, fontWeight: '700', color: txt }}>Folders</Text>
+            <TouchableOpacity onPress={() => {}}>
+              <Text style={{ fontSize: 13, color: '#3B72EE', fontWeight: '600' }}>See all</Text>
+            </TouchableOpacity>
+          </View>
+          {loading ? (
+            <ActivityIndicator color='#3B72EE' />
+          ) : folders.length === 0 ? (
+            <Text style={{ color: sub, fontSize: 13 }}>No folders yet</Text>
+          ) : (
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+              {folders.slice(0, 4).map((folder, idx) => (
+                <TouchableOpacity
+                  key={folder.name}
+                  style={[styles.folderCard, { backgroundColor: card, borderColor: bdr }]}
+                  onPress={() => setProjectFilter(
+                    Object.keys(folderMap).find(k => projectMap[k] === folder.name) || 'all'
+                  )}
+                  activeOpacity={0.75}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
+                    <View style={[styles.folderIcon, { backgroundColor: FOLDER_COLORS[idx % FOLDER_COLORS.length] + '18' }]}>
+                      <Svg width={22} height={22} viewBox="0 0 24 24" fill="none">
+                        <Path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" stroke={FOLDER_COLORS[idx % FOLDER_COLORS.length]} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"/>
+                      </Svg>
+                    </View>
+                    <Text style={{ color: sub, fontSize: 18, fontWeight: '300' }}>···</Text>
+                  </View>
+                  <Text style={{ fontSize: 13, fontWeight: '600', color: txt, marginBottom: 2 }} numberOfLines={1}>{folder.name}</Text>
+                  <Text style={{ fontSize: 11, color: sub }}>{folder.count} files</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+        </View>
+
+        {/* ── All files ── */}
+        <View style={{ paddingHorizontal: 14, paddingTop: 24 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, zIndex: 20 }}>
+            <Text style={{ fontSize: 16, fontWeight: '700', color: txt }}>All files</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              {/* Recent dropdown */}
+              <View style={{ position: 'relative' }}>
+                <TouchableOpacity
+                  style={[styles.sortBtn, { borderColor: bdr, backgroundColor: card }]}
+                  onPress={() => setShowSortDropdown(v => !v)}
+                >
+                  <Text style={{ fontSize: 12, color: sub, fontWeight: '500' }}>
+                    {FILE_FILTERS.find(f => f.key === fileFilter)?.label || 'Recent'} {showSortDropdown ? '▲' : '▾'}
+                  </Text>
+                </TouchableOpacity>
+                {showSortDropdown && (
+                  <View style={{
+                    position: 'absolute', top: 36, right: 0, zIndex: 100,
+                    backgroundColor: card, borderRadius: 12, borderWidth: 1, borderColor: bdr,
+                    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
+                    shadowOpacity: 0.12, shadowRadius: 8, elevation: 12,
+                    minWidth: 140, overflow: 'hidden',
+                  }}>
+                    {FILE_FILTERS.map((f, idx) => {
+                      const isActive = fileFilter === f.key;
+                      return (
+                        <TouchableOpacity
+                          key={f.key}
+                          onPress={() => { setFileFilter(f.key); setShowSortDropdown(false); }}
+                          style={{
+                            flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+                            paddingHorizontal: 14, paddingVertical: 11,
+                            borderBottomWidth: idx < FILE_FILTERS.length - 1 ? StyleSheet.hairlineWidth : 0,
+                            borderBottomColor: bdr,
+                            backgroundColor: isActive ? '#3B72EE11' : 'transparent',
+                          }}
+                        >
+                          <Text style={{ fontSize: 13, fontWeight: isActive ? '600' : '400', color: isActive ? '#3B72EE' : txt }}>
+                            {f.label}
+                          </Text>
+                          {isActive && <Text style={{ color: '#3B72EE', fontSize: 13 }}>✓</Text>}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                )}
+              </View>
+              <TouchableOpacity onPress={() => setGridView(v => !v)} style={{ padding: 4 }}>
+                <Text style={{ fontSize: 29, color: sub, lineHeight: 29 }}>{gridView ? '☰' : '⊞'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+          {/* Dismiss dropdown on outside tap */}
+          {showSortDropdown && (
+            <Pressable style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 10 }} onPress={() => setShowSortDropdown(false)} />
+          )}
+
+          {loading ? (
+            <View style={{ paddingVertical: 40, alignItems: 'center' }}>
+              <ActivityIndicator size="large" color='#3B72EE' />
+              <Text style={{ color: sub, marginTop: 10, fontSize: 13 }}>Loading documents…</Text>
+            </View>
+          ) : sortedDocs.length === 0 ? (
+            <View style={{ paddingVertical: 40, alignItems: 'center' }}>
+              <Text style={{ fontSize: 36, opacity: 0.2 }}>📄</Text>
+              <Text style={{ fontSize: 15, fontWeight: '600', color: txt, marginTop: 8 }}>No documents</Text>
+              <Text style={{ fontSize: 12, color: sub, marginTop: 4 }}>Tap + to upload your first file</Text>
+            </View>
+          ) : gridView ? (
+            // ── Grid view ──
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+              {sortedDocs.map((item) => {
+                const name    = item.name || item.file_name || 'Untitled';
+                const fileUrl = item.source_file || item.source_file_url || item.file_url;
+                const ext     = getExt(name);
+                const meta    = TYPE_META[ext] || FALLBACK_META;
+                const isSelected = selectedIds.has(item.id);
                 return (
                   <TouchableOpacity
-                    key={opt.id}
-                    style={[
-                      styles.pickerRow,
-                      { borderBottomColor: bdr },
-                      active && { backgroundColor: isDark ? '#252530' : '#F5F5F7' },
-                    ]}
-                    onPress={() => {
-                      if (pickerOpen === 'project') setProjectFilter(opt.id);
-                      else setTypeFilter(opt.id);
-                      setPickerOpen(null);
-                    }}
-                    activeOpacity={0.7}
+                    key={item.id}
+                    style={[styles.gridCard, { backgroundColor: isSelected ? '#EBF1FD' : card, borderColor: isSelected ? '#3B72EE' : bdr }]}
+                    onPress={() => isSelecting ? toggleSelect(item.id) : openDoc(item)}
+                    onLongPress={() => toggleSelect(item.id)}
+                    activeOpacity={0.75}
                   >
-                    <Text
-                      style={[
-                        styles.pickerRowText,
-                        { color: active ? (isDark ? '#4ECDC4' : '#1A1A2E') : txt, fontSize: fs(14) },
-                        active && { fontWeight: '700' },
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {opt.label}
-                    </Text>
-                    {active && <Text style={{ color: isDark ? '#4ECDC4' : '#1A1A2E', fontSize: 16 }}>✓</Text>}
+                    <View style={[styles.typeBadge, { backgroundColor: meta.bg, width: 44, height: 44, marginBottom: 10 }]}>
+                      <Text style={{ fontSize: 10, fontWeight: '800', color: meta.color, letterSpacing: 0.3 }}>
+                        {(meta.label || ext?.toUpperCase() || 'FILE').slice(0, 4)}
+                      </Text>
+                    </View>
+                    <Text style={{ fontSize: 12, fontWeight: '600', color: txt, marginBottom: 3 }} numberOfLines={2}>{name}</Text>
+                    <Text style={{ fontSize: 10, color: sub }}>{formatRelative(item.updated_at || item.created_at)}</Text>
                   </TouchableOpacity>
                 );
               })}
-            </ScrollView>
-          </Pressable>
-        </Pressable>
-      </Modal>
+            </View>
+          ) : (
+            // ── List view ──
+            sortedDocs.map((item) => {
+              const name    = item.name || item.file_name || 'Untitled';
+              const fileUrl = item.source_file || item.source_file_url || item.file_url;
+              const ext     = getExt(name);
+              const meta    = TYPE_META[ext] || FALLBACK_META;
+              const projectId   = item.project != null ? item.project : extractProjectIdFromUrl(fileUrl);
+              const projectName = (projectId != null && projectMap[projectId]) ? projectMap[projectId] : null;
+              const isSelected  = selectedIds.has(item.id);
 
-      {/* ── Move Document Modal ───────────────────────────────────────────── */}
+              return (
+                <TouchableOpacity
+                  key={item.id}
+                  style={[styles.fileRow, { backgroundColor: isSelected ? '#EBF1FD' : card, borderColor: isSelected ? '#3B72EE' : bdr }]}
+                  onPress={() => isSelecting ? toggleSelect(item.id) : openDoc(item)}
+                  onLongPress={() => toggleSelect(item.id)}
+                  activeOpacity={0.75}
+                >
+                  <View style={[styles.typeBadge, { backgroundColor: meta.bg }]}>
+                    <Text style={{ fontSize: 10, fontWeight: '800', color: meta.color, letterSpacing: 0.3 }}>
+                      {(meta.label || ext?.toUpperCase() || 'FILE').slice(0, 4)}
+                    </Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: txt, marginBottom: 3 }} numberOfLines={1}>{name}</Text>
+                    <Text style={{ fontSize: 12, color: sub }} numberOfLines={1}>
+                      {[projectName, item.tags?.[0]?.name].filter(Boolean).join(' / ') || 'No project'}
+                    </Text>
+                  </View>
+                  <View style={{ alignItems: 'flex-end', gap: 3 }}>
+                    <Text style={{ fontSize: 11, color: sub }}>{formatRelative(item.updated_at || item.created_at)}</Text>
+                    {item.size && <Text style={{ fontSize: 10, color: sub }}>{(item.size / 1024).toFixed(0)} KB</Text>}
+                  </View>
+                </TouchableOpacity>
+              );
+            })
+          )}
+        </View>
+      </ScrollView>
+
+      
+
+
       <Modal visible={!!moveModalDoc} transparent animationType="fade" statusBarTranslucent onRequestClose={() => !moving && setMoveModalDoc(null)}>
         <View style={styles.shareOverlay}>
           <Pressable style={StyleSheet.absoluteFillObject} onPress={() => !moving && setMoveModalDoc(null)} />
@@ -1340,7 +1363,7 @@ export default function DocumentsScreen() {
               </TouchableOpacity>
               <Text style={[styles.shareFieldLabel, { color: sub, marginTop: 12 }]}>AVAILABLE TAGS</Text>
               {loadingTags ? (
-                <ActivityIndicator color="#4ECDC4" style={{ marginVertical: 20 }} />
+                <ActivityIndicator color="#3B72EE" style={{ marginVertical: 20 }} />
               ) : (
                 <ScrollView style={{ maxHeight: 240 }} showsVerticalScrollIndicator={false}>
                   {availableTags
@@ -1422,7 +1445,7 @@ export default function DocumentsScreen() {
                           key={s.id || i}
                           style={[styles.shareUserRow, { borderBottomColor: bdr }, i === sharedWithMap[shareModalDoc?.id].length - 1 && { borderBottomWidth: 0 }]}
                         >
-                          <View style={[styles.shareUserAvatar, { backgroundColor: '#4ECDC4' }]}>
+                          <View style={[styles.shareUserAvatar, { backgroundColor: '#3B72EE' }]}>
                             <Text style={styles.shareUserAvatarTxt}>{sName[0]?.toUpperCase()}</Text>
                           </View>
                           <View style={{ flex: 1 }}>
@@ -1447,7 +1470,7 @@ export default function DocumentsScreen() {
               {/* Select user to share with */}
               <Text style={[styles.shareFieldLabel, { color: sub }]}>Select User *</Text>
               <TouchableOpacity
-                style={[styles.sharePickerBtn, { borderColor: shareUserOpen ? '#4ECDC4' : bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
+                style={[styles.sharePickerBtn, { borderColor: shareUserOpen ? '#3B72EE' : bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
                 onPress={() => setShareUserOpen(v => !v)}
                 disabled={sharing}
               >
@@ -1461,7 +1484,7 @@ export default function DocumentsScreen() {
 
               {/* User dropdown */}
               {shareUserOpen && (
-                <View style={[styles.shareDropdown, { backgroundColor: card, borderColor: '#4ECDC4', shadowColor: '#000' }]}>
+                <View style={[styles.shareDropdown, { backgroundColor: card, borderColor: '#3B72EE', shadowColor: '#000' }]}>
                   <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
                     {users.map(u => {
                       const uName = u.full_name || u.name || u.username || 'User';
@@ -1476,16 +1499,16 @@ export default function DocumentsScreen() {
                           ]}
                           onPress={() => { setShareUserId(u.id); setShareUserOpen(false); }}
                         >
-                          <View style={[styles.shareUserAvatar, { backgroundColor: '#4ECDC4' }]}>
+                          <View style={[styles.shareUserAvatar, { backgroundColor: '#3B72EE' }]}>
                             <Text style={styles.shareUserAvatarTxt}>{uName[0]?.toUpperCase()}</Text>
                           </View>
                           <View style={{ flex: 1 }}>
-                            <Text style={{ fontSize: 13, color: selected ? '#4ECDC4' : txt, fontWeight: selected ? '700' : '500' }}>
+                            <Text style={{ fontSize: 13, color: selected ? '#3B72EE' : txt, fontWeight: selected ? '700' : '500' }}>
                               {uName}
                             </Text>
                             {u.email && <Text style={{ fontSize: 11, color: sub }}>{u.email}</Text>}
                           </View>
-                          {selected && <Text style={{ color: '#4ECDC4', fontWeight: '700' }}>✓</Text>}
+                          {selected && <Text style={{ color: '#3B72EE', fontWeight: '700' }}>✓</Text>}
                         </TouchableOpacity>
                       );
                     })}
@@ -1546,7 +1569,7 @@ export default function DocumentsScreen() {
               {/* File picker area */}
               <Text style={[styles.uploadLabel, { color: sub }]}>File</Text>
               <TouchableOpacity
-                style={[styles.filePicker, { borderColor: uploadFile ? '#4ECDC4' : bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
+                style={[styles.filePicker, { borderColor: uploadFile ? '#3B72EE' : bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
                 onPress={pickDocument}
                 activeOpacity={0.7}
                 disabled={uploading}
@@ -1585,7 +1608,7 @@ export default function DocumentsScreen() {
               {/* Project selector */}
               <Text style={[styles.uploadLabel, { color: sub, marginTop: 14 }]}>Project *</Text>
               <TouchableOpacity
-                style={[styles.projectSelector, { borderColor: uploadPickerOpen ? '#4ECDC4' : bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
+                style={[styles.projectSelector, { borderColor: uploadPickerOpen ? '#3B72EE' : bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
                 onPress={() => setUploadPickerOpen(o => !o)}
                 activeOpacity={0.7}
                 disabled={uploading}
@@ -1598,7 +1621,7 @@ export default function DocumentsScreen() {
 
               {/* Project dropdown */}
               {uploadPickerOpen && (
-                <View style={[styles.uploadDropdown, { backgroundColor: card, borderColor: '#4ECDC4' }]}>
+                <View style={[styles.uploadDropdown, { backgroundColor: card, borderColor: '#3B72EE' }]}>
                   {/* Search */}
                   <View style={[styles.uploadDropdownSearch, { borderBottomColor: bdr }]}>
                     <Text style={{ fontSize: 12, marginRight: 6 }}>🔍</Text>
@@ -1623,10 +1646,10 @@ export default function DocumentsScreen() {
                             style={[styles.uploadDropdownItem, { borderBottomColor: bdr }, active && { backgroundColor: isDark ? '#252530' : '#F0FDF4' }]}
                             onPress={() => { setUploadProjectId(p.id); setUploadPickerOpen(false); setUploadProjectSearch(''); }}
                           >
-                            <Text style={[{ flex: 1, fontSize: fs(13), color: active ? '#4ECDC4' : txt, fontWeight: active ? '700' : '500' }]} numberOfLines={1}>
+                            <Text style={[{ flex: 1, fontSize: fs(13), color: active ? '#3B72EE' : txt, fontWeight: active ? '700' : '500' }]} numberOfLines={1}>
                               {p.name}
                             </Text>
-                            {active && <Text style={{ color: '#4ECDC4', fontSize: 14 }}>✓</Text>}
+                            {active && <Text style={{ color: '#3B72EE', fontSize: 14 }}>✓</Text>}
                           </TouchableOpacity>
                         );
                       })
@@ -1637,7 +1660,7 @@ export default function DocumentsScreen() {
 
               {/* Info box */}
               <View style={[styles.uploadInfo, { borderColor: 'rgba(78,205,196,0.3)', backgroundColor: 'rgba(78,205,196,0.06)' }]}>
-                <Text style={{ fontSize: fs(12), color: '#4ECDC4', lineHeight: 18 }}>
+                <Text style={{ fontSize: fs(12), color: '#3B72EE', lineHeight: 18 }}>
                   💾  File will be uploaded and linked to the selected project. It will appear in the Documents list immediately.
                 </Text>
               </View>
@@ -1675,104 +1698,120 @@ export default function DocumentsScreen() {
           transparent={false}
           animationType="slide"
           statusBarTranslucent
-          onRequestClose={() => { setDetailDoc(null); setShowWebView(false); }}
+          onRequestClose={() => { setDetailDoc(null); setShowWebView(false); setShowInfo(false); }}
         >
-          <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={card} translucent={false} />
-          <SafeAreaView style={[styles.detailSafe, { backgroundColor: bg }]} edges={['top', 'left', 'right', 'bottom']}>
-            {/* Detail header */}
-            <View style={[styles.detailHeader, { backgroundColor: card, borderBottomColor: bdr }]}>
-              <TouchableOpacity onPress={() => { setDetailDoc(null); setShowWebView(false); }} style={styles.detailBackBtn}>
-                <Text style={{ color: '#4ECDC4', fontSize: 14, fontWeight: '600' }}>← Back</Text>
+          <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={card} />
+          <SafeAreaView style={{ flex: 1, backgroundColor: bg }} edges={['top', 'left', 'right', 'bottom']}>
+
+            {/* ── Header ── */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 12, backgroundColor: card, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: bdr }}>
+              <TouchableOpacity onPress={() => { setDetailDoc(null); setShowWebView(false); setShowInfo(false); }} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                <Text style={{ color: '#3B72EE', fontSize: 18 }}>‹</Text>
+                <Text style={{ color: '#3B72EE', fontSize: 14, fontWeight: '600' }}>Back</Text>
               </TouchableOpacity>
-              <Text style={[styles.detailHeaderTitle, { color: txt }]} numberOfLines={1}>
+              <Text style={{ fontSize: 14, fontWeight: '600', color: txt, flex: 1, textAlign: 'center', marginHorizontal: 12 }} numberOfLines={1}>
                 {detailDoc?.name || detailDoc?.file_name || 'Document'}
               </Text>
               <TouchableOpacity
-                onPress={() => {
-                  const url = detailDoc?.source_file || detailDoc?.source_file_url || detailDoc?.file_url;
-                  if (url) Linking.openURL(url).catch(() => {});
-                }}
-                style={styles.detailOpenBtn}
+                onPress={() => { const url = detailDoc?.source_file || detailDoc?.source_file_url || detailDoc?.file_url; if (url) Linking.openURL(url).catch(() => {}); }}
+                style={{ padding: 4 }}
               >
-                <Text style={{ color: '#4ECDC4', fontSize: 12, fontWeight: '600' }}>⬡ Browser</Text>
+                <Text style={{ color: '#3B72EE', fontSize: 13, fontWeight: '600' }}>Open ↗</Text>
               </TouchableOpacity>
             </View>
 
             {showWebView ? (
-              /* ── WebView ── */
+              /* ── Preview ── */
               (() => {
                 const url = detailDoc?.source_file || detailDoc?.source_file_url || detailDoc?.file_url;
-                const ext = (detailDoc?.name || '').split('.').pop().toLowerCase();
-                const isImage = ['png','jpg','jpeg','gif','webp','heic','bmp','svg'].includes(ext);
-                const isPdf   = ext === 'pdf';
-                const viewUrl = isPdf
-                  ? `https://docs.google.com/viewer?url=${encodeURIComponent(url)}&embedded=true`
-                  : isImage ? null : `https://docs.google.com/viewer?url=${encodeURIComponent(url)}&embedded=true`;
-
-                return isImage ? (
-                  <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: isDark ? '#0D0D0F' : '#F5F5F7' }}>
+                const ext = getExt(detailDoc?.name || '');
+                const isImage  = ['png','jpg','jpeg','gif','webp','heic','bmp'].includes(ext);
+                const isPdf    = ext === 'pdf';
+                const isOffice = ['doc','docx','ppt','pptx','xls','xlsx'].includes(ext);
+                const canPreview = isPdf || isOffice;
+                const viewUrl = canPreview && url ? `https://docs.google.com/viewer?url=${encodeURIComponent(url)}&embedded=true` : null;
+                if (isImage) return (
+                  <View style={{ flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' }}>
                     <Image source={{ uri: url }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
                   </View>
-                ) : (
-                  <WebView
-                    source={{ uri: viewUrl || url }}
-                    style={{ flex: 1 }}
-                    startInLoadingState
-                    renderLoading={() => (
-                      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-                        <ActivityIndicator size="large" color="#4ECDC4" />
-                        <Text style={{ color: sub, marginTop: 12 }}>Loading document…</Text>
-                      </View>
-                    )}
-                    onError={() => Alert.alert('Could not load', 'Try opening in browser instead.')}
-                  />
+                );
+                if (canPreview && viewUrl) return (
+                  <WebView source={{ uri: viewUrl }} style={{ flex: 1 }} startInLoadingState
+                    renderLoading={() => <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}><ActivityIndicator size="large" color="#3B72EE" /></View>}
+                    onError={() => setShowWebView(false)} />
+                );
+                return (
+                  <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', gap: 14, paddingHorizontal: 32 }}>
+                    <Text style={{ fontSize: 48, opacity: 0.3 }}>📄</Text>
+                    <Text style={{ fontSize: 16, fontWeight: '700', color: txt }}>Preview not available</Text>
+                    <Text style={{ fontSize: 13, color: sub, textAlign: 'center', lineHeight: 20 }}>
+                      {ext.toUpperCase()} files cannot be previewed in-app.
+                    </Text>
+                    <TouchableOpacity
+                      style={{ backgroundColor: '#3B72EE', borderRadius: 12, paddingHorizontal: 24, paddingVertical: 12 }}
+                      onPress={() => { if (url) Linking.openURL(url).catch(() => {}); }}
+                    >
+                      <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>Open in Browser</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setShowWebView(false)}>
+                      <Text style={{ color: sub, fontSize: 13 }}>← Back to details</Text>
+                    </TouchableOpacity>
+                  </View>
                 );
               })()
             ) : (
               /* ── Detail info ── */
               <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
-                {/* File icon + name */}
-                <View style={[styles.detailCard, { backgroundColor: card, borderColor: bdr }]}>
-                  <View style={styles.detailTopRow}>
+
+                {/* File card */}
+                <View style={{ backgroundColor: card, borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: bdr, overflow: 'hidden', marginBottom: 16 }}>
+                  {/* Top — icon + name */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', padding: 16, gap: 14 }}>
                     {(() => {
-                      const ext  = (detailDoc?.name || '').split('.').pop().toLowerCase();
+                      const ext = getExt(detailDoc?.name || '');
                       const meta = TYPE_META[ext] || FALLBACK_META;
-                      return <FileIcon ext={ext} meta={meta} />;
+                      return (
+                        <View style={{ width: 52, height: 52, borderRadius: 12, backgroundColor: meta.bg, justifyContent: 'center', alignItems: 'center' }}>
+                          <Text style={{ fontSize: 11, fontWeight: '800', color: meta.color, letterSpacing: 0.3 }}>
+                            {(meta.label || ext.toUpperCase() || 'FILE').slice(0, 4)}
+                          </Text>
+                        </View>
+                      );
                     })()}
-                    <View style={{ flex: 1, marginLeft: 12 }}>
-                      <Text style={[{ fontSize: 15, fontWeight: '700', color: txt }]} numberOfLines={2}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 15, fontWeight: '700', color: txt, marginBottom: 3 }} numberOfLines={2}>
                         {detailDoc?.name || detailDoc?.file_name}
                       </Text>
-                      <Text style={[{ fontSize: 11, color: sub, marginTop: 4 }]}>
-                        {(detailDoc?.name || '').split('.').pop().toUpperCase()} file
+                      <Text style={{ fontSize: 12, color: sub }}>
+                        {getExt(detailDoc?.name || '').toUpperCase()} file
                       </Text>
                     </View>
                   </View>
 
-                  {/* Metadata rows */}
+                  {/* Meta rows */}
                   {[
-                    { label: 'Type',    value: (detailDoc?.name || '').split('.').pop().toUpperCase() },
-                    { label: 'Status',  value: detailDoc?.status ? detailDoc.status.replace('_', ' ').toUpperCase() : 'DRAFT' },
-                    { label: 'Project', value: projectMap[detailDoc?.project] || `Project ${detailDoc?.project}` || '—' },
-                    { label: 'Owner',   value: detailDoc?.created_by?.full_name || detailDoc?.created_by?.username || '—' },
-                    { label: 'Created', value: detailDoc?.created_at ? new Date(detailDoc.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—' },
-                    { label: 'Updated', value: detailDoc?.updated_at ? new Date(detailDoc.updated_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—' },
+                    { label: 'Type',     value: getExt(detailDoc?.name || '').toUpperCase() || '—' },
+                    { label: 'Status',   value: detailDoc?.status ? detailDoc.status.replace('_', ' ').toUpperCase() : 'DRAFT' },
+                    { label: 'Project',  value: projectMap[detailDoc?.project] || '—' },
+                    { label: 'Owner',    value: detailDoc?.created_by?.full_name || detailDoc?.created_by?.username || '—' },
+                    { label: 'Created',  value: detailDoc?.created_at ? new Date(detailDoc.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—' },
+                    { label: 'Updated',  value: detailDoc?.updated_at ? new Date(detailDoc.updated_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—' },
                     { label: 'Location', value: `/ ${projectMap[detailDoc?.project] || 'Documents'}` },
-                  ].map(({ label, value }) => (
-                    <View key={label} style={[styles.detailMetaRow, { borderTopColor: bdr }]}>
-                      <Text style={[styles.detailMetaLabel, { color: sub }]}>{label}</Text>
-                      <Text style={[styles.detailMetaValue, { color: txt }]} numberOfLines={1}>{value}</Text>
+                  ].map(({ label, value }, i) => (
+                    <View key={label} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 13, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: bdr }}>
+                      <Text style={{ fontSize: 13, color: sub, fontWeight: '500', width: 80 }}>{label}</Text>
+                      <Text style={{ fontSize: 13, fontWeight: '600', color: txt, flex: 1, textAlign: 'right' }} numberOfLines={1}>{value}</Text>
                     </View>
                   ))}
 
                   {/* Tags */}
                   {(detailDoc?.tags || []).length > 0 && (
-                    <View style={[styles.detailMetaRow, { borderTopColor: bdr }]}>
-                      <Text style={[styles.detailMetaLabel, { color: sub }]}>Tags</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 13, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: bdr }}>
+                      <Text style={{ fontSize: 13, color: sub, fontWeight: '500', width: 80 }}>Tags</Text>
                       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, flex: 1, justifyContent: 'flex-end' }}>
                         {(detailDoc.tags || []).map((tag, i) => (
-                          <View key={i} style={[styles.tagPill, { backgroundColor: (tag.color || '#6B7280') + '22', borderColor: (tag.color || '#6B7280') + '44' }]}>
-                            <Text style={[styles.tagPillTxt, { color: tag.color || '#6B7280', fontSize: 10 }]}>{tag.name || tag}</Text>
+                          <View key={i} style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, backgroundColor: (tag.color || '#6B7280') + '22' }}>
+                            <Text style={{ fontSize: 11, fontWeight: '600', color: tag.color || '#6B7280' }}>{tag.name || tag}</Text>
                           </View>
                         ))}
                       </View>
@@ -1780,90 +1819,25 @@ export default function DocumentsScreen() {
                   )}
                 </View>
 
-                {/* Open document button */}
+                {/* Action buttons */}
                 <TouchableOpacity
-                  style={[styles.openDocBtn, { backgroundColor: '#1A1A2E' }]}
+                  style={{ backgroundColor: '#3B72EE', borderRadius: 14, paddingVertical: 15, alignItems: 'center', marginBottom: 10 }}
                   onPress={() => setShowWebView(true)}
                 >
-                  <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>⬡ Open Document</Text>
+                  <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700' }}>Open Document</Text>
                 </TouchableOpacity>
-
-                {/* Open in browser */}
                 <TouchableOpacity
-                  style={[styles.openDocBtnOutline, { borderColor: bdr }]}
+                  style={{ borderRadius: 14, paddingVertical: 14, alignItems: 'center', borderWidth: 1.5, borderColor: bdr, backgroundColor: card }}
                   onPress={() => {
                     const url = detailDoc?.source_file || detailDoc?.source_file_url || detailDoc?.file_url;
                     if (url) Linking.openURL(url).catch(() => Alert.alert('Error', 'Could not open URL.'));
                     else Alert.alert('Unavailable', 'No URL available for this document.');
                   }}
                 >
-                  <Text style={{ color: sub, fontSize: 13, fontWeight: '600' }}>🌐 Open in Browser</Text>
+                  <Text style={{ color: sub, fontSize: 14, fontWeight: '600' }}>🌐  Open in Browser</Text>
                 </TouchableOpacity>
               </ScrollView>
             )}
-
-            {/* ── Bottom toolbar ── */}
-            <SafeAreaView edges={['bottom']} style={[styles.viewerBottomBar, { backgroundColor: card, borderTopColor: bdr }]}>
-              <TouchableOpacity style={styles.viewerBottomBtn} onPress={() => setShowInfo(v => !v)}>
-                <Text style={[styles.viewerBottomIcon, { color: showInfo ? '#4ECDC4' : sub }]}>ⓘ</Text>
-                <Text style={[styles.viewerBottomLabel, { color: showInfo ? '#4ECDC4' : sub }]}>Info</Text>
-              </TouchableOpacity>
-              {!showWebView ? (
-                <TouchableOpacity style={styles.viewerBottomBtn} onPress={() => setShowWebView(true)}>
-                  <Text style={[styles.viewerBottomIcon, { color: sub }]}>⬡</Text>
-                  <Text style={[styles.viewerBottomLabel, { color: sub }]}>View</Text>
-                </TouchableOpacity>
-              ) : (
-                <TouchableOpacity style={styles.viewerBottomBtn} onPress={() => setShowWebView(false)}>
-                  <Text style={[styles.viewerBottomIcon, { color: sub }]}>☰</Text>
-                  <Text style={[styles.viewerBottomLabel, { color: sub }]}>Details</Text>
-                </TouchableOpacity>
-              )}
-              <TouchableOpacity style={styles.viewerBottomBtn} onPress={() => {
-                const url = detailDoc?.source_file || detailDoc?.source_file_url || detailDoc?.file_url;
-                if (url) Linking.openURL(url).catch(() => {});
-              }}>
-                <Text style={[styles.viewerBottomIcon, { color: sub }]}>⬆</Text>
-                <Text style={[styles.viewerBottomLabel, { color: sub }]}>Browser</Text>
-              </TouchableOpacity>
-            </SafeAreaView>
-
-            {/* ── Info panel (slides up on ⓘ tap) ── */}
-            {showInfo && (
-              <View style={[styles.infoPanel, { backgroundColor: isDark ? '#1C1C1E' : '#F2F2F7' }]}>
-                <View style={[styles.infoPanelHandle, { backgroundColor: isDark ? '#48484A' : '#C7C7CC' }]} />
-                <Text style={[styles.infoPanelTitle, { color: txt }]}>{detailDoc?.name || 'Document'}</Text>
-                {[
-                  { label: 'Type',    value: (detailDoc?.name || '').split('.').pop().toUpperCase() },
-                  { label: 'Status',  value: (detailDoc?.status || 'draft').replace('_', ' ').toUpperCase() },
-                  { label: 'Project', value: projectMap[detailDoc?.project] || '—' },
-                  { label: 'Owner',   value: detailDoc?.created_by?.full_name || detailDoc?.created_by?.username || '—' },
-                  { label: 'Created', value: detailDoc?.created_at ? new Date(detailDoc.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—' },
-                  { label: 'Updated', value: detailDoc?.updated_at ? new Date(detailDoc.updated_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—' },
-                ].map(({ label, value }) => (
-                  <View key={label} style={[styles.infoRow, { borderBottomColor: isDark ? '#38383A' : '#E5E5EA' }]}>
-                    <Text style={[styles.infoLabel, { color: isDark ? '#8E8E93' : '#6C6C70' }]}>{label}</Text>
-                    <Text style={[styles.infoValue, { color: txt }]} numberOfLines={1}>{value}</Text>
-                  </View>
-                ))}
-                {(detailDoc?.tags || []).length > 0 && (
-                  <View style={[styles.infoRow, { borderBottomColor: isDark ? '#38383A' : '#E5E5EA' }]}>
-                    <Text style={[styles.infoLabel, { color: isDark ? '#8E8E93' : '#6C6C70' }]}>Tags</Text>
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, justifyContent: 'flex-end', flex: 1 }}>
-                      {(detailDoc.tags || []).map((tag, i) => (
-                        <View key={i} style={[styles.tagPill, { backgroundColor: (tag.color || '#6B7280') + '22', borderColor: (tag.color || '#6B7280') + '44' }]}>
-                          <Text style={[styles.tagPillTxt, { color: tag.color || '#6B7280' }]}>{tag.name || tag}</Text>
-                        </View>
-                      ))}
-                    </View>
-                  </View>
-                )}
-                <TouchableOpacity onPress={() => setShowInfo(false)} style={styles.infoDoneBtn}>
-                  <Text style={{ color: '#4ECDC4', fontSize: 14, fontWeight: '600' }}>Done</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
           </SafeAreaView>
         </Modal>
       )}
@@ -1874,391 +1848,65 @@ export default function DocumentsScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1 },
-
-  // Navbar
   navbar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, elevation: 2,
+    paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1,
   },
-  navLeft:  { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  navRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  logoBox:  { width: 32, height: 32, borderRadius: 8, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center' },
-  logoText: { color: '#4ECDC4', fontSize: 15, fontWeight: '800' },
-  brandName:{ fontWeight: '700' },
-  navIconBtn: { width: 36, height: 36, borderRadius: 8, borderWidth: 1, justifyContent: 'center', alignItems: 'center' },
-  navIcon: { fontSize: 16 },
+  navTitle: { fontWeight: '700', fontSize: 17 },
 
-  // Sub header
-  subHeader: { paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1 },
-  pageTitle: { fontWeight: '700' },
-  pageSub: { marginTop: 2 },
-
-  // Search
-  searchWrap: {
-    flexDirection: 'row', alignItems: 'center',
-    borderWidth: 1, borderRadius: 10,
-    paddingHorizontal: 12, height: 42,
+  // Storage card
+  storageCard: {
+    backgroundColor: '#3B72EE', borderRadius: 16,
+    padding: 18,
   },
-  searchInput: { flex: 1, paddingVertical: 0 },
+  upgradeBtn: {
+    backgroundColor: '#fff', borderRadius: 20,
+    paddingHorizontal: 14, paddingVertical: 6,
+  },
+  progressTrack: {
+    height: 6, borderRadius: 3,
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    marginTop: 10, overflow: 'hidden',
+  },
+  progressFill: {
+    height: 6, borderRadius: 3,
+    backgroundColor: '#fff',
+  },
 
-  // Chips
-  chip: {
+  // Folders
+  folderCard: {
+    width: '47.5%', borderRadius: 14,
+    borderWidth: 1, padding: 14,
+  },
+  folderIcon: {
+    width: 38, height: 38, borderRadius: 10,
+    justifyContent: 'center', alignItems: 'center',
+  },
+
+  // Sort
+  sortBtn: {
     paddingHorizontal: 12, paddingVertical: 6,
-    borderRadius: 20, borderWidth: 1,
-    height: 30, justifyContent: 'center', alignItems: 'center',
-  },
-  chipText: { fontSize: 12, fontWeight: '500' },
-
-  // Rows
-  row: {
-    flexDirection: 'row', alignItems: 'center',
-    padding: 12, borderRadius: 12, borderWidth: 1, gap: 12,
-  },
-  iconTile: { width: 48, height: 58, flexShrink: 0 }, // kept for spacing reference only
-  fileName: { fontWeight: '600', marginBottom: 4 },
-
-  metaRow:  { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 4 },
-  projectPill: {
-    borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2,
-    borderWidth: 1, maxWidth: 140,
-  },
-  projectPillText: { fontWeight: '600' },
-  typePill: { borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
-  typePillText: { fontWeight: '700', letterSpacing: 0.3 },
-  taskPill: { borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
-  taskPillText: { fontWeight: '600' },
-  draftPill: {
-    backgroundColor: '#FEF3C7', borderRadius: 4,
-    paddingHorizontal: 6, paddingVertical: 2,
-    borderWidth: 1, borderColor: '#FDE68A',
-  },
-  draftPillText: { color: '#92400E', fontWeight: '700', letterSpacing: 0.5 },
-
-  // Bottom row: date · avatar · shared-by name
-  bottomRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
-  dateText:    {},
-  dotSep:      { marginHorizontal: 6 },
-  avatar: {
-    width: 16, height: 16, borderRadius: 8,
-    justifyContent: 'center', alignItems: 'center',
-    marginRight: 5,
-  },
-  avatarText:  { fontSize: 8, fontWeight: '700', color: '#FFFFFF' },
-  sharedByText:{ flexShrink: 1 },
-
-  // Empty / loading / error states
-  centerState: {
-    flex: 1, justifyContent: 'center', alignItems: 'center',
-    padding: 24, gap: 8,
-  },
-  emptyTitle: { fontSize: 16, fontWeight: '600' },
-  emptySub:   { fontSize: 13 },
-  retryBtn: {
-    marginTop: 16, backgroundColor: '#4ECDC4',
-    paddingHorizontal: 24, paddingVertical: 10, borderRadius: 8,
-  },
-  retryBtnText: { color: '#0D0D0F', fontSize: 14, fontWeight: '700' },
-
-  // Dropdown row (replaces chip rows)
-  dropdownRow: {
-    flexDirection: 'row',
-    gap: 10,
-    paddingHorizontal: 12,
-    marginTop: 10,
-    marginBottom: 2,
-  },
-  dropdownBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderWidth: 1,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    height: 40,
-  },
-  dropdownText: { flex: 1, fontWeight: '600', marginRight: 8 },
-  dropdownCaret: { fontSize: 12 },
-
-  // Picker modal
-  pickerBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-  },
-  pickerSheet: {
-    width: '100%',
-    maxWidth: 400,
-    borderRadius: 14,
-    borderWidth: 1,
-    overflow: 'hidden',
-  },
-  pickerHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-  },
-  pickerTitle: { fontWeight: '700' },
-  pickerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  pickerRowText: { flex: 1, marginRight: 8 },
-
-  // ── Upload button styles (sub-header) ──
-  // ── Tag + status pills on card ──
-  tagPill: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 5, borderWidth: 1 },
-  tagPillTxt: { fontWeight: '700', letterSpacing: 0.2 },
-  statusPill: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 5 },
-  statusPillTxt: { fontWeight: '800', letterSpacing: 0.3 },
-  sharedBadge: {
-    paddingHorizontal: 6, paddingVertical: 2, borderRadius: 5,
-    borderWidth: 1, marginLeft: 4,
-  },
-
-  // ── Tags modal ──
-  createTagBtn: {
-    borderWidth: 1, borderStyle: 'dashed', borderRadius: 10,
-    paddingVertical: 12, alignItems: 'center',
-  },
-  tagRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    borderRadius: 8, paddingHorizontal: 14, paddingVertical: 12,
-  },
-  tagCheckbox: {
-    width: 20, height: 20, borderRadius: 4, borderWidth: 2,
-    justifyContent: 'center', alignItems: 'center',
-  },
-
-  // ── Revoke button ──
-  revokeBtn: {
-    paddingHorizontal: 8, paddingVertical: 5,
-    borderRadius: 6, borderWidth: 1,
-  },
-
-  // ── Selection ──
-  selectionCheck: {
-    width: 22, height: 22, borderRadius: 11, borderWidth: 2,
-    justifyContent: 'center', alignItems: 'center',
-    marginRight: 8, flexShrink: 0,
-  },
-  actionBarBtn: {
-    paddingHorizontal: 10, paddingVertical: 7,
-    borderRadius: 8, borderWidth: 1,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  actionBarBtnTxt: { fontSize: 11, fontWeight: '700' },
-
-  // ── Share modal ──
-  shareOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-  },
-  shareFloating: {
-    width: '100%',
-    maxWidth: 400,
-    borderRadius: 16,
-    borderWidth: 1,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.25,
-    shadowRadius: 20,
-    elevation: 20,
-  },
-  shareHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 18,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-  },
-  shareTitle: { flex: 1, fontSize: 16, fontWeight: '700' },
-  shareDocName: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: 10,
-    borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginBottom: 16,
-  },
-  shareFieldLabel: { fontSize: 11, fontWeight: '600', letterSpacing: 0.3, marginBottom: 8 },
-  sharePickerBtn: {
-    flexDirection: 'row', alignItems: 'center',
-    borderWidth: 1.5, borderRadius: 10,
-    paddingHorizontal: 14, height: 46,
-  },
-  shareDropdown: {
-    borderWidth: 1.5, borderRadius: 10,
-    marginTop: 6, overflow: 'hidden',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15, shadowRadius: 8, elevation: 8,
-  },
-  shareUserRow: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 14, paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    gap: 10,
-  },
-  shareUserAvatar: {
-    width: 32, height: 32, borderRadius: 16,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  shareUserAvatarTxt: { color: '#1A1A2E', fontSize: 12, fontWeight: '700' },
-  shareCancelBtn: {
-    flex: 1, height: 46, borderWidth: 1,
-    borderRadius: 10, justifyContent: 'center', alignItems: 'center',
-  },
-  shareConfirmBtn: {
-    flex: 1, height: 46,
-    backgroundColor: '#1A1A2E',
-    borderRadius: 10, justifyContent: 'center', alignItems: 'center',
-  },
-
-  // ── Old share card (remove) ──
-  shareModalCard: { width: 0, height: 0 },
-  userAvatar: { width: 28, height: 28, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginRight: 8 },
-  userAvatarTxt: { color: '#1A1A2E', fontSize: 11, fontWeight: '700' },
-
-  uploadBtn: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 10, paddingVertical: 7,
     borderRadius: 8, borderWidth: 1,
   },
-  uploadBtnText: { fontSize: 12, fontWeight: '600' },
-  newDocBtn: {
-    backgroundColor: '#1A1A2E',
-    paddingHorizontal: 12, paddingVertical: 7,
-    borderRadius: 8,
-  },
-  newDocBtnText: { color: '#fff', fontSize: 12, fontWeight: '700' },
 
-  // ── Upload modal styles ──
-  uploadSheet: {
-    width: '100%', maxWidth: 440,
-    borderRadius: 16, borderWidth: 1,
-    maxHeight: '88%',
-    overflow: 'hidden',
+  // File rows
+  fileRow: {
+    flexDirection: 'row', alignItems: 'center',
+    padding: 14, gap: 12,
+    borderRadius: 12, borderWidth: 1,
+    marginBottom: 10,
   },
-  uploadLabel: {
-    fontSize: 12, fontWeight: '600',
-    marginBottom: 6, letterSpacing: 0.3,
-  },
-  filePicker: {
-    minHeight: 90,
-    borderWidth: 1.5, borderStyle: 'dashed',
-    borderRadius: 12,
+  typeBadge: {
+    width: 46, height: 46, borderRadius: 10,
     justifyContent: 'center', alignItems: 'center',
-    flexDirection: 'row',
-    paddingHorizontal: 16, paddingVertical: 14,
-    gap: 10,
-  },
-  projectSelector: {
-    flexDirection: 'row', alignItems: 'center',
-    borderWidth: 1.5, borderRadius: 10,
-    paddingHorizontal: 14, height: 46,
-  },
-  uploadDropdown: {
-    borderWidth: 1.5, borderRadius: 10,
-    marginTop: 4, marginBottom: 8,
-    overflow: 'hidden',
-  },
-  uploadDropdownSearch: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 12, paddingVertical: 8,
-    borderBottomWidth: 1,
-  },
-  uploadDropdownItem: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 14, paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  uploadInfo: {
-    borderWidth: 1, borderRadius: 10,
-    padding: 12, marginTop: 14, marginBottom: 16,
-  },
-  // ── Document detail panel ──
-  detailSafe: { flex: 1 },
-  detailHeader: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 14, paddingVertical: 12,
-    borderBottomWidth: 1, gap: 10,
-  },
-  detailBackBtn: { width: 70 },
-  detailHeaderTitle: { flex: 1, fontSize: 13, fontWeight: '700', textAlign: 'center' },
-  detailOpenBtn: { width: 70, alignItems: 'flex-end' },
-  detailCard: {
-    borderRadius: 14, borderWidth: 1,
-    marginBottom: 16, overflow: 'hidden',
-  },
-  detailTopRow: {
-    flexDirection: 'row', alignItems: 'center',
-    padding: 16, gap: 12,
-  },
-  detailMetaRow: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 16, paddingVertical: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    gap: 12,
-  },
-  detailMetaLabel: { fontSize: 12, fontWeight: '600', width: 70 },
-  detailMetaValue: { flex: 1, fontSize: 13, fontWeight: '500', textAlign: 'right' },
-  openDocBtn: {
-    height: 50, borderRadius: 12,
-    justifyContent: 'center', alignItems: 'center',
-    marginBottom: 12,
-  },
-  openDocBtnOutline: {
-    height: 46, borderRadius: 12, borderWidth: 1,
-    justifyContent: 'center', alignItems: 'center',
+    flexShrink: 0,
   },
 
-  uploadCancelBtn: {
-    flex: 1, height: 48, borderWidth: 1,
-    borderRadius: 10, justifyContent: 'center', alignItems: 'center',
-  },
-  uploadSubmitBtn: {
-    flex: 1, height: 48,
-    backgroundColor: '#1A1A2E',
-    borderRadius: 10, justifyContent: 'center', alignItems: 'center',
+  // Grid card
+  gridCard: {
+    width: '47.5%', borderRadius: 12,
+    borderWidth: 1, padding: 12,
+    marginBottom: 0,
   },
 
-  // ── Bottom toolbar ──
-  viewerBottomBar: {
-    flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center',
-    paddingVertical: 8, borderTopWidth: StyleSheet.hairlineWidth,
-  },
-  viewerBottomBtn: { alignItems: 'center', paddingHorizontal: 20, paddingVertical: 4 },
-  viewerBottomIcon: { fontSize: 22 },
-  viewerBottomLabel: { fontSize: 10, marginTop: 2, fontWeight: '500' },
-
-  // ── Info panel ──
-  infoPanel: {
-    position: 'absolute', bottom: 0, left: 0, right: 0,
-    borderTopLeftRadius: 16, borderTopRightRadius: 16,
-    padding: 16, paddingBottom: 32,
-    shadowColor: '#000', shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.2, shadowRadius: 12, elevation: 20,
-  },
-  infoPanelHandle: { width: 36, height: 4, borderRadius: 2, alignSelf: 'center', marginBottom: 14 },
-  infoPanelTitle: { fontSize: 15, fontWeight: '700', marginBottom: 12 },
-  infoRow: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  infoLabel: { fontSize: 13, fontWeight: '500' },
-  infoValue: { fontSize: 13, fontWeight: '400', maxWidth: '60%', textAlign: 'right' },
-  infoDoneBtn: { alignItems: 'center', marginTop: 16, paddingVertical: 8 },
 });

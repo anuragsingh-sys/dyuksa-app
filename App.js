@@ -1,12 +1,14 @@
-import { NavigationContainer, useNavigation, useNavigationState } from '@react-navigation/native';
+import { NavigationContainer, useNavigation, useNavigationState, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import {
-  Text, View, TouchableOpacity, StyleSheet, Platform, Modal, Animated, ScrollView, Image,
+  Text, View, TouchableOpacity, StyleSheet, Platform, Modal, Animated, ScrollView,
+  Image, PanResponder, Dimensions, Alert, KeyboardAvoidingView, TextInput, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useState, useEffect, useContext, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { BASE_URL } from './config';
 import { NotificationsProvider } from './context/NotificationsContext';
 import { AuthProvider, AuthContext } from './context/AuthContext';
 import { registerForPushNotifications, addNotificationListeners, rescheduleAllEvents } from './services/PushNotificationService';
@@ -26,36 +28,86 @@ import DashboardScreen from './screens/DashboardScreen';
 import CalendarScreen  from './screens/CalendarScreen';
 import ProjectsScreen  from './screens/ProjectsScreen';
 import TasksScreen     from './screens/TasksScreen';
+import CreateTaskScreen from './screens/CreateTaskScreen';
 import DocumentsScreen from './screens/DocumentsScreen';
 import ChatScreen      from './screens/ChatScreen';
 import SettingsScreen  from './screens/SettingsScreen';
 import ProfileScreen   from './screens/ProfileScreen';
-import QuickNotesScreen from './screens/QuickNotesScreen';
+import QuickNotesScreen      from './screens/QuickNotesScreen';
+import ProjectDetailScreen      from './screens/ProjectDetailScreen';
+import TaskDetailScreen         from './screens/TaskDetailScreen';
+import NotificationsScreen      from './screens/NotificationsScreen';
+import SearchScreen             from './screens/SearchScreen';
+import TeamScreen               from './screens/TeamScreen';
+import MyWorkScreen             from './screens/MyWorkScreen';
+import ReportsScreen            from './screens/ReportsScreen';
+import DocumentViewerScreen     from './screens/DocumentViewerScreen';
+import QuickCreateScreen        from './screens/QuickCreateScreen';
+import CreateProjectScreen      from './screens/CreateProjectScreen';
+import InviteUserScreen         from './screens/InviteUserScreen';
+import NotificationToast        from './components/NotificationToast';
 
 export const STORAGE_KEY = 'DYUKSA_QUICK_TASKS';
 
 const Stack = createNativeStackNavigator();
 const Tab   = createBottomTabNavigator();
 
-function QuickTaskButton({ onPress, borderColor }) {
-  // Try to load logo — falls back to text if asset missing
-  let logoSource = null;
-  try { logoSource = require('./assets/lvlogo1_1.png'); } catch {}
-
+function QuickTaskButton({ onPress }) {
   return (
     <View style={styles.fabWrapper}>
       <TouchableOpacity
-        style={[styles.fab, { borderColor: borderColor || '#fff' }]}
+        style={styles.fab}
         onPress={onPress}
         activeOpacity={0.85}
       >
-        {logoSource ? (
-          <Image source={logoSource} style={styles.fabLogo} resizeMode="cover" />
-        ) : (
-          <Text style={styles.fabIcon}>＋</Text>
-        )}
+        <Text style={styles.fabIcon}>+</Text>
       </TouchableOpacity>
     </View>
+  );
+}
+
+// ── Draggable Floating FAB ────────────────────────────────────────────────────
+function DraggableFAB({ onPress }) {
+  const { width, height } = Dimensions.get('window');
+  const pan = useRef(new Animated.ValueXY({ x: width / 2 - 30, y: height - 120 })).current;
+  const lastPos = useRef({ x: width / 2 - 30, y: height - 120 });
+  const isDragging = useRef(false);
+
+  const panResponder = useRef(PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: (_, gs) => Math.abs(gs.dx) > 5 || Math.abs(gs.dy) > 5,
+    onPanResponderGrant: () => {
+      pan.setOffset({ x: lastPos.current.x, y: lastPos.current.y });
+      pan.setValue({ x: 0, y: 0 });
+      isDragging.current = false;
+    },
+    onPanResponderMove: (_, gs) => {
+      if (Math.abs(gs.dx) > 5 || Math.abs(gs.dy) > 5) isDragging.current = true;
+      Animated.event([null, { dx: pan.x, dy: pan.y }], { useNativeDriver: false })(_, gs);
+    },
+    onPanResponderRelease: (_, gs) => {
+      pan.flattenOffset();
+      const newX = Math.max(0, Math.min(width - 60, lastPos.current.x + gs.dx));
+      const newY = Math.max(60, Math.min(height - 120, lastPos.current.y + gs.dy));
+      lastPos.current = { x: newX, y: newY };
+      pan.setValue({ x: newX, y: newY });
+      if (!isDragging.current) onPress();
+    },
+  })).current;
+
+  return (
+    <Animated.View
+      style={[styles.draggableFab, { transform: pan.getTranslateTransform() }]}
+      {...panResponder.panHandlers}
+    >
+      <TouchableOpacity
+        style={styles.fab}
+        onPress={onPress}
+        activeOpacity={0.85}
+      >
+        <Text style={styles.fabIcon}>+</Text>
+      </TouchableOpacity>
+    </Animated.View>
   );
 }
 
@@ -63,163 +115,270 @@ function QuickTaskButton({ onPress, borderColor }) {
 // Task  → opens the AI-enhanced Create Task screen (TasksScreen)
 // Event → opens the New Event screen (CalendarScreen)
 // AI    → opens the "Generate by AI" modal on the relevant screen
-function QuickAddModal({ visible, onClose, onPickTask, onPickEvent, onPickAI }) {
-  const [activeTab, setActiveTab] = useState('task');
-  const slideAnim = useRef(new Animated.Value(-700)).current;
+function QuickAddModal({ visible, onClose, navigation }) {
+  const slideAnim = useRef(new Animated.Value(400)).current;
+  const { theme } = useContext(ThemeContext);
+  const isDark = theme === 'Dark';
+  const modalBg  = isDark ? '#1A1A20' : '#FFFFFF';
+  const modalTxt = isDark ? '#FFFFFF' : '#1A1A2E';
+  const modalSub = isDark ? '#9898A6' : '#6B7588';
+  const modalBdr = isDark ? '#2A2A38' : '#F0F0F5';
+  const inputBg  = isDark ? '#252530' : '#F5F6F9';
+
+  // ── Inline invite state ───────────────────────────────────────────
+  const [showInvite,      setShowInvite]      = useState(false);
+  const [inviteEmail,     setInviteEmail]     = useState('');
+  const [inviteRole,      setInviteRole]      = useState('viewer');
+  const [inviteWorkspace, setInviteWorkspace] = useState(null);
+  const [inviteWorkspaces, setInviteWorkspaces] = useState([]);
+  const [inviteSaving,    setInviteSaving]    = useState(false);
+  const [wsDropOpen,      setWsDropOpen]      = useState(false);
+  const ROLES = ['admin', 'manager', 'annotator', 'viewer', 'developer'];
+
+  const resetInvite = () => {
+    setInviteEmail(''); setInviteRole('viewer');
+    setInviteWorkspace(null); setWsDropOpen(false);
+  };
+
+  const fetchWS = async () => {
+    try {
+      const token = await AsyncStorage.getItem('DYUKSA_AUTH_TOKEN');
+      const wsId  = await AsyncStorage.getItem('DYUKSA_WORKSPACE_ID');
+      const h = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+      if (wsId) h['X-Workspace-ID'] = wsId;
+      const res = await fetch(`${BASE_URL}/organizations/workspaces/`, { headers: h });
+      if (res.ok) {
+        const d = await res.json();
+        setInviteWorkspaces(Array.isArray(d) ? d : (d.results || d.workspaces || []));
+      }
+    } catch {}
+  };
+
+  const handleInvite = async () => {
+    if (!inviteEmail.trim()) { Alert.alert('Required', 'Enter email.'); return; }
+    setInviteSaving(true);
+    try {
+      const token = await AsyncStorage.getItem('DYUKSA_AUTH_TOKEN');
+      const wsId  = await AsyncStorage.getItem('DYUKSA_WORKSPACE_ID');
+      const h = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+      if (wsId) h['X-Workspace-ID'] = wsId;
+      const payload = { email: inviteEmail.trim(), role: inviteRole };
+      if (inviteWorkspace?.id) payload.workspace_id = inviteWorkspace.id;
+      const res = await fetch(`${BASE_URL}/auth/invite/send/`, { method: 'POST', headers: h, body: JSON.stringify(payload) });
+      const ct = res.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) {
+        Alert.alert('Error', `Server error (${res.status})`); return;
+      }
+      const data = await res.json();
+      if (!res.ok) { Alert.alert('Error', data.detail || 'Failed to send invite.'); return; }
+      Alert.alert('Invite Sent ✓', `Invitation sent to ${inviteEmail.trim()}`);
+      resetInvite(); setShowInvite(false);
+    } catch (e) { Alert.alert('Error', e.message); }
+    finally { setInviteSaving(false); }
+  };
 
   useEffect(() => {
     if (visible) {
-      setActiveTab('task');
-      Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, tension: 80, friction: 12 }).start();
+      Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, tension: 70, friction: 12 }).start();
     } else {
-      slideAnim.setValue(-700);
+      slideAnim.setValue(400);
     }
   }, [visible]);
 
   const handleClose = () => {
-    Animated.timing(slideAnim, { toValue: -700, duration: 240, useNativeDriver: true })
+    Animated.timing(slideAnim, { toValue: 400, duration: 220, useNativeDriver: true })
       .start(() => onClose());
   };
 
-  const handleContinue = () => {
-    Animated.timing(slideAnim, { toValue: -700, duration: 220, useNativeDriver: true })
-      .start(() => {
-        onClose();
-        setTimeout(() => {
-          if (activeTab === 'task') onPickTask();
-          else onPickEvent();
-        }, 120);
-      });
+  const handleOption = (action) => {
+    handleClose();
+    setTimeout(() => action(), 250);
   };
 
-  // Tap on the "✨ Nova AI" pill → close Quick Add, then open AI modal
-  const handleNovaAI = () => {
-    Animated.timing(slideAnim, { toValue: -700, duration: 220, useNativeDriver: true })
-      .start(() => {
-        onClose();
-        setTimeout(() => onPickAI(activeTab), 120);
-      });
-  };
+  const OPTIONS = [
+    {
+      icon: '☑️',
+      iconBg: '#EEF2FF',
+      iconColor: '#4F46E5',
+      label: 'New Task',
+      desc: 'Add to any project',
+      action: () => navigation.navigate('CreateTask'),
+    },
+    {
+      icon: '📁',
+      iconBg: '#F0FDF4',
+      iconColor: '#16A34A',
+      label: 'New Project',
+      desc: 'Start a workspace',
+      action: () => navigation.navigate('CreateProject'),
+    },
+    {
+      icon: '📝',
+      iconBg: '#FFF7ED',
+      iconColor: '#EA580C',
+      label: 'New Note',
+      desc: 'Quick capture',
+      action: () => navigation.navigate('QuickNotes'),
+    },
+    {
+      icon: '📝',
+      iconBg: '#FFF7ED',
+      iconColor: '#F97316',
+      label: 'New Note',
+      desc: 'Quick capture',
+      action: () => navigation.navigate('QuickNotes', { openCreate: true }),
+    },
+    {
+      icon: '⬆️',
+      iconBg: '#FFF7ED',
+      iconColor: '#EA580C',
+      label: 'Upload Doc',
+      desc: 'PDF, Word, Sheet, Slide',
+      action: () => navigation.navigate('Docs'),
+    },
+    {
+      icon: '📅',
+      iconBg: '#FFF1F2',
+      iconColor: '#E11D48',
+      label: 'New Event',
+      desc: 'Meeting or focus block',
+      action: () => navigation.navigate('Calendar'),
+    },
+    {
+      icon: '👥',
+      iconBg: '#F5F3FF',
+      iconColor: '#7C3AED',
+      label: 'Invite Member',
+      desc: 'By email or link',
+      action: () => { fetchWS(); setShowInvite(true); },
+    },
+  ];
 
   if (!visible) return null;
+
+  // ── Invite form view ──────────────────────────────────────────────
+  if (showInvite) {
+    return (
+      <Modal transparent visible animationType="slide" onRequestClose={() => { setShowInvite(false); resetInvite(); onClose(); }}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+          <TouchableOpacity style={styles.qaOverlay} activeOpacity={1} onPress={() => { setShowInvite(false); resetInvite(); onClose(); }} />
+          <View style={[styles.qaPanel, { backgroundColor: modalBg, paddingHorizontal: 20, paddingBottom: 34 }]}>
+            <View style={styles.qaHandle} />
+            <View style={[styles.qaHeader, { borderBottomColor: modalBdr }]}>
+              <TouchableOpacity onPress={() => setShowInvite(false)} style={{ padding: 4 }}>
+                <Text style={{ fontSize: 22, color: modalSub }}>‹</Text>
+              </TouchableOpacity>
+              <Text style={[styles.qaTitle, { color: modalTxt, flex: 1, textAlign: 'center' }]}>Invite Member</Text>
+              <TouchableOpacity onPress={() => { setShowInvite(false); resetInvite(); onClose(); }} style={[styles.qaCloseCircle, { backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}>
+                <Text style={[styles.qaCloseText, { color: modalSub }]}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <Text style={{ fontSize: 11, fontWeight: '700', color: modalSub, marginTop: 16, marginBottom: 6, letterSpacing: 0.5 }}>EMAIL</Text>
+              <TextInput
+                value={inviteEmail} onChangeText={setInviteEmail}
+                placeholder="user@example.com" placeholderTextColor={modalSub}
+                keyboardType="email-address" autoCapitalize="none" autoCorrect={false}
+                style={{ borderRadius: 10, borderWidth: 1.5, borderColor: modalBdr, backgroundColor: inputBg, paddingHorizontal: 14, height: 46, fontSize: 14, color: modalTxt }}
+              />
+
+              <Text style={{ fontSize: 11, fontWeight: '700', color: modalSub, marginTop: 14, marginBottom: 8, letterSpacing: 0.5 }}>ROLE</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                {ROLES.map(r => (
+                  <TouchableOpacity key={r} onPress={() => setInviteRole(r)}
+                    style={{ paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, borderWidth: 1.5,
+                      backgroundColor: inviteRole === r ? '#1A1A2E' : inputBg,
+                      borderColor: inviteRole === r ? '#1A1A2E' : modalBdr }}>
+                    <Text style={{ fontSize: 12, fontWeight: '700', textTransform: 'capitalize',
+                      color: inviteRole === r ? '#fff' : modalSub }}>{r}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={{ fontSize: 11, fontWeight: '700', color: modalSub, marginTop: 14, marginBottom: 6, letterSpacing: 0.5 }}>
+                WORKSPACE <Text style={{ fontWeight: '400', fontSize: 10 }}>(optional)</Text>
+              </Text>
+              <TouchableOpacity
+                style={{ borderRadius: 10, borderWidth: 1.5, borderColor: wsDropOpen ? '#4ECDC4' : modalBdr, backgroundColor: inputBg, paddingHorizontal: 14, height: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+                onPress={() => setWsDropOpen(o => !o)}
+              >
+                <Text style={{ color: inviteWorkspace ? modalTxt : modalSub, fontSize: 14 }}>{inviteWorkspace?.name || 'Default Workspace'}</Text>
+                <Text style={{ color: modalSub, fontSize: 11 }}>{wsDropOpen ? '▲' : '▾'}</Text>
+              </TouchableOpacity>
+              {wsDropOpen && (
+                <View style={{ borderRadius: 10, borderWidth: 1.5, borderColor: '#4ECDC4', backgroundColor: modalBg, marginTop: 4, maxHeight: 160, overflow: 'hidden' }}>
+                  <ScrollView nestedScrollEnabled showsVerticalScrollIndicator={false}>
+                    <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: modalBdr }}
+                      onPress={() => { setInviteWorkspace(null); setWsDropOpen(false); }}>
+                      <Text style={{ flex: 1, fontSize: 13, fontWeight: !inviteWorkspace ? '700' : '500', color: !inviteWorkspace ? '#4ECDC4' : modalTxt }}>Default Workspace</Text>
+                      {!inviteWorkspace && <Text style={{ color: '#4ECDC4' }}>✓</Text>}
+                    </TouchableOpacity>
+                    {inviteWorkspaces.map(ws => (
+                      <TouchableOpacity key={ws.id} style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: modalBdr }}
+                        onPress={() => { setInviteWorkspace(ws); setWsDropOpen(false); }}>
+                        <Text style={{ flex: 1, fontSize: 13, fontWeight: inviteWorkspace?.id === ws.id ? '700' : '500', color: inviteWorkspace?.id === ws.id ? '#4ECDC4' : modalTxt }} numberOfLines={1}>{ws.name}</Text>
+                        {inviteWorkspace?.id === ws.id && <Text style={{ color: '#4ECDC4' }}>✓</Text>}
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
+            </ScrollView>
+
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 20 }}>
+              <TouchableOpacity style={{ flex: 1, height: 48, borderRadius: 12, borderWidth: 1.5, borderColor: modalBdr, justifyContent: 'center', alignItems: 'center' }}
+                onPress={() => { setShowInvite(false); resetInvite(); }}>
+                <Text style={{ color: modalSub, fontWeight: '600' }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={{ flex: 2, height: 48, borderRadius: 12, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center' }}
+                onPress={handleInvite} disabled={inviteSaving}>
+                {inviteSaving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={{ color: '#fff', fontWeight: '700' }}>✉ Send Invite</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+    );
+  }
 
   return (
     <Modal transparent visible animationType="none" onRequestClose={handleClose}>
       <TouchableOpacity style={styles.qaOverlay} activeOpacity={1} onPress={handleClose} />
-      <Animated.View style={[styles.qaPanel, { transform: [{ translateY: slideAnim }] }]}>
-        <SafeAreaView>
-          <View style={styles.qaHandle} />
-          <ScrollView style={styles.qaScroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+      <Animated.View style={[styles.qaPanel, { backgroundColor: modalBg, transform: [{ translateY: slideAnim }] }]}>
+        <View style={styles.qaHandle} />
+        {/* Header */}
+        <View style={[styles.qaHeader, { borderBottomColor: modalBdr }]}>
+          <Text style={[styles.qaTitle, { color: modalTxt }]}>Create</Text>
+          <TouchableOpacity onPress={handleClose} style={[styles.qaCloseCircle, { backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}>
+            <Text style={[styles.qaCloseText, { color: modalSub }]}>✕</Text>
+          </TouchableOpacity>
+        </View>
 
-            {/* Header */}
-            <View style={styles.qaHeader}>
-              <Text style={styles.qaTitle}>Quick Add</Text>
-              <TouchableOpacity style={styles.qaCloseCircle} onPress={handleClose}>
-                <Text style={styles.qaCloseText}>✕</Text>
-              </TouchableOpacity>
+        {/* Options */}
+        {OPTIONS.map((opt, i) => (
+          <TouchableOpacity
+            key={i}
+            onPress={() => handleOption(opt.action)}
+            activeOpacity={0.7}
+            style={[styles.qaOption, { borderBottomColor: modalBdr, borderBottomWidth: i < OPTIONS.length - 1 ? 1 : 0 }]}
+          >
+            <View style={[styles.qaOptionIcon, { backgroundColor: isDark ? '#252530' : opt.iconBg }]}>
+              <Text style={{ fontSize: 20 }}>{opt.icon}</Text>
             </View>
-
-            {/* Task / Event Toggle */}
-            <View style={styles.qaToggle}>
-              {['task', 'event'].map(t => (
-                <TouchableOpacity
-                  key={t}
-                  style={[styles.qaToggleBtn, activeTab === t && styles.qaToggleBtnOn]}
-                  onPress={() => setActiveTab(t)}
-                  activeOpacity={0.85}
-                >
-                  <Text style={[styles.qaToggleText, activeTab === t && styles.qaToggleTextOn]}>
-                    {t === 'task' ? '📋  Task' : '📅  Event'}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.qaOptionLabel, { color: modalTxt }]}>{opt.label}</Text>
+              <Text style={[styles.qaOptionDesc, { color: modalSub }]}>{opt.desc}</Text>
             </View>
-
-            {/* Preview / Description card — mirrors your old design */}
-            <View style={styles.qaPreviewCard}>
-              {activeTab === 'task' ? (
-                <>
-                  <Text style={styles.qaPreviewTitle}>Create a new task</Text>
-                  <Text style={styles.qaPreviewText}>
-                    Continue to the Create Task screen with AI-assisted fields: Project,
-                    Nova AI title/description refinement, Status, Priority, Start/Due dates,
-                    Assignees, Links, and Attachments.
-                  </Text>
-                  <View style={styles.qaFeatureRow}>
-                    <TouchableOpacity
-                      style={[styles.qaFeatureChip, styles.qaFeatureChipAI]}
-                      onPress={handleNovaAI}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={[styles.qaFeatureChipText, styles.qaFeatureChipTextAI]}>✨ Nova AI</Text>
-                    </TouchableOpacity>
-                    <View style={styles.qaFeatureChip}>
-                      <Text style={styles.qaFeatureChipText}>⚡ Auto-generate</Text>
-                    </View>
-                    <View style={styles.qaFeatureChip}>
-                      <Text style={styles.qaFeatureChipText}>👥 Assignees</Text>
-                    </View>
-                  </View>
-                </>
-              ) : (
-                <>
-                  <Text style={styles.qaPreviewTitle}>Schedule a new event</Text>
-                  <Text style={styles.qaPreviewText}>
-                    Continue to the New Event screen to pick date and time. You'll receive
-                    an alert 1 hour before the event fires.
-                  </Text>
-                  <View style={styles.qaFeatureRow}>
-                    <TouchableOpacity
-                      style={[styles.qaFeatureChip, styles.qaFeatureChipAI]}
-                      onPress={handleNovaAI}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={[styles.qaFeatureChipText, styles.qaFeatureChipTextAI]}>✨ Nova AI</Text>
-                    </TouchableOpacity>
-                    <View style={[styles.qaFeatureChip, { backgroundColor: 'rgba(167,139,250,0.12)' }]}>
-                      <Text style={[styles.qaFeatureChipText, { color: '#A78BFA' }]}>📅 Date picker</Text>
-                    </View>
-                    <View style={[styles.qaFeatureChip, { backgroundColor: 'rgba(167,139,250,0.12)' }]}>
-                      <Text style={[styles.qaFeatureChipText, { color: '#A78BFA' }]}>🕐 Time picker</Text>
-                    </View>
-                    <View style={[styles.qaFeatureChip, { backgroundColor: 'rgba(167,139,250,0.12)' }]}>
-                      <Text style={[styles.qaFeatureChipText, { color: '#A78BFA' }]}>🔔 Alert</Text>
-                    </View>
-                  </View>
-                </>
-              )}
-            </View>
-
-            {/* Info strip */}
-            <View style={styles.qaInfoBox}>
-              <Text style={styles.qaInfoText}>
-                💾  Saves to DYUKSA{'\n'}
-                {activeTab === 'task'
-                  ? 'Task appears in the Tasks tab instantly.'
-                  : 'Event appears in the Calendar tab instantly.'}
-              </Text>
-            </View>
-
-            {/* Buttons */}
-            <View style={styles.qaActionRow}>
-              <TouchableOpacity style={styles.qaCancelBtn} onPress={handleClose}>
-                <Text style={styles.qaCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.qaSaveBtn} onPress={handleContinue}>
-                <Text style={styles.qaSaveText}>
-                  {activeTab === 'task' ? 'Continue →' : 'Continue →'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-          </ScrollView>
-        </SafeAreaView>
+            <Text style={{ color: isDark ? '#3A3A4A' : '#D0D0DA', fontSize: 18 }}>›</Text>
+          </TouchableOpacity>
+        ))}
+        <View style={{ height: 24 }} />
       </Animated.View>
     </Modal>
   );
 }
 
-// Bottom bar: Dashboard | Projects | FAB (Quick Add) | Calendar | Tasks
 function MainTabs() {
   const navigation = useNavigation();
   const [qaVisible, setQaVisible] = useState(false);
@@ -253,13 +412,9 @@ function MainTabs() {
 
   const openQuickAdd = () => setQaVisible(true);
 
-  // Center + FAB: open AI Task modal directly (skip Quick Add)
-  // The modal itself has Task/Event tabs so user can switch inside it.
+  // FAB → navigate to the full QuickCreate screen
   const openAIModalDirect = () => {
-    navigation.navigate('Main', {
-      screen: 'Tasks',
-      params: { openCreateModalAI: true, returnTo: currentTabName },
-    });
+    navigation.navigate('QuickCreate');
   };
 
   const handlePickTask = () => {
@@ -300,15 +455,7 @@ function MainTabs() {
         safeAreaInsets={{ bottom: 0 }}
         screenOptions={({ route }) => ({
           headerShown: false,
-          tabBarStyle: [
-            styles.tabBar,
-            {
-              backgroundColor: tabBg,
-              height: tabBarHeight,
-              paddingBottom: insets.bottom,
-              borderTopColor: tabBorder,
-            },
-          ],
+          tabBarStyle: { display: 'none' },
           tabBarActiveTintColor: tabActive,
           tabBarInactiveTintColor: tabInactive,
           tabBarLabel: ({ color, focused }) => (
@@ -332,12 +479,12 @@ function MainTabs() {
           options={{
             tabBarLabel:  () => null,
             tabBarIcon:   () => null,
-            tabBarButton: () => <QuickTaskButton onPress={openAIModalDirect} borderColor={tabBg} />,
+            tabBarButton: () => <QuickTaskButton onPress={openAIModalDirect} />,
           }}
           listeners={{
             tabPress: (e) => {
               e.preventDefault();
-              openAIModalDirect();
+              navigation.navigate('QuickCreate');
             },
           }}
         />
@@ -349,9 +496,7 @@ function MainTabs() {
       <QuickAddModal
         visible={qaVisible}
         onClose={() => setQaVisible(false)}
-        onPickTask={handlePickTask}
-        onPickEvent={handlePickEvent}
-        onPickAI={handlePickAI}
+        navigation={navigation}
       />
     </>
   );
@@ -365,6 +510,22 @@ function MainTabsWithWorkspaceKey(props) {
   const { currentWorkspace } = useWorkspace();
   const workspaceKey = currentWorkspace?.id ? `ws_${currentWorkspace.id}` : 'ws_default';
   return <MainTabs key={workspaceKey} {...props} />;
+}
+
+// ── FABOverlay — ref-based, never uses navigation hooks (crash-proof) ────────
+const FAB_SCREENS = ['Main', 'Docs', 'QuickNotes', 'MyWork', 'TeamManagement', 'Reports'];
+export const navigationRef = createNavigationContainerRef();
+
+function FABOverlay({ currentRoute }) {
+  const { isAuthenticated } = useContext(AuthContext);
+  if (!isAuthenticated || !FAB_SCREENS.includes(currentRoute)) return null;
+  return (
+    <DraggableFAB
+      onPress={() => {
+        if (navigationRef.isReady()) navigationRef.navigate('QuickCreate');
+      }}
+    />
+  );
 }
 
 function RootNavigator() {
@@ -427,6 +588,18 @@ function RootNavigator() {
           <Stack.Screen name="TeamManagement"  component={TeamManagementScreen} />
           <Stack.Screen name="EditProfile"     component={EditProfileScreen} />
           <Stack.Screen name="ChangePassword"  component={ChangePasswordScreen} />
+          <Stack.Screen name="ProjectDetail"      component={ProjectDetailScreen} />
+          <Stack.Screen name="TaskDetail"         component={TaskDetailScreen} />
+          <Stack.Screen name="Notifications"      component={NotificationsScreen} />
+          <Stack.Screen name="Search"             component={SearchScreen} />
+          <Stack.Screen name="Team"               component={TeamScreen} />
+          <Stack.Screen name="MyWork"             component={MyWorkScreen} />
+          <Stack.Screen name="Reports"            component={ReportsScreen} />
+          <Stack.Screen name="DocumentViewer"     component={DocumentViewerScreen} options={{ statusBarTranslucent: false, statusBarColor: '#FFFFFF' }} />
+          <Stack.Screen name="QuickCreate"         component={QuickCreateScreen} options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />
+          <Stack.Screen name="CreateProject"       component={CreateProjectScreen} options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="CreateTask"           component={CreateTaskScreen}    options={{ presentation: 'modal', animation: 'slide_from_bottom', headerShown: false }} />
+          <Stack.Screen name="InviteUser"          component={InviteUserScreen}    options={{ animation: 'slide_from_right' }} />
         </>
       )}
     </Stack.Navigator>
@@ -434,6 +607,17 @@ function RootNavigator() {
 }
 
 export default function App() {
+  const [currentRoute, setCurrentRoute] = useState(null);
+
+  const handleStateChange = () => {
+    if (!navigationRef.isReady()) return;
+    const route = navigationRef.getCurrentRoute();
+    // Top-level stack route name (Main, Docs, QuickNotes, etc.)
+    const rootState = navigationRef.getRootState();
+    const topName = rootState?.routes?.[rootState.index ?? rootState.routes.length - 1]?.name;
+    setCurrentRoute(topName || route?.name || null);
+  };
+
   return (
     <ErrorBoundary>
     <SafeAreaProvider>
@@ -441,9 +625,15 @@ export default function App() {
       <NotificationsProvider>
         <ThemeProvider>
           <WorkspaceProvider>
-            <NavigationContainer>
+            <NavigationContainer
+              ref={navigationRef}
+              onReady={handleStateChange}
+              onStateChange={handleStateChange}
+            >
               <RootNavigator />
+              <NotificationToast />
             </NavigationContainer>
+            <FABOverlay currentRoute={currentRoute} />
           </WorkspaceProvider>
         </ThemeProvider>
       </NotificationsProvider>
@@ -466,21 +656,23 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
   },
   fabWrapper: { flex: 1, alignItems: 'center', justifyContent: 'flex-start' },
+  draggableFab: {
+    position: 'absolute',
+    zIndex: 9999,
+    elevation: 20,
+  },
   fab: {
-    width: 58, height: 58, borderRadius: 29,
-    backgroundColor: '#000',
+    width: 66, height: 66, borderRadius: 33,
+    backgroundColor: '#2D6AE3',
     justifyContent: 'center', alignItems: 'center',
-    marginTop: -22,
-    borderWidth: 2.5, borderColor: '#fff',
-    shadowColor: '#7B61FF',
+    shadowColor: '#2D6AE3',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.5,
+    shadowOpacity: 0.45,
     shadowRadius: 12,
     elevation: 14,
-    overflow: 'hidden',
   },
-  fabLogo: { width: 58, height: 58, borderRadius: 29 },
-  fabIcon: { color: '#4ECDC4', fontSize: 26, lineHeight: 30 },
+  fabLogo: { width: 66, height: 66, borderRadius: 33 },
+  fabIcon: { color: '#fff', fontSize: 34, fontWeight: '300', lineHeight: 38, marginTop: -1 },
 
   // ── Quick Add modal ──
   qaOverlay: {
@@ -490,7 +682,7 @@ const styles = StyleSheet.create({
   },
   qaPanel: {
     position: 'absolute', top: 0, left: 0, right: 0,
-    backgroundColor: '#fff',
+    backgroundColor: '#FFFFFF',
     borderBottomLeftRadius: 24, borderBottomRightRadius: 24,
     maxHeight: '92%',
     shadowColor: '#000', shadowOffset: { width: 0, height: 8 },

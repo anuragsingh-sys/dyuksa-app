@@ -1,1332 +1,869 @@
+import React, { useState, useEffect, useCallback, useContext, useRef } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView, StatusBar, Platform,
-  ActivityIndicator, Modal, TextInput, KeyboardAvoidingView, Alert, Animated,
+  View, Text, ScrollView, TouchableOpacity, StyleSheet,
+  ActivityIndicator, RefreshControl, StatusBar, Alert,
 } from 'react-native';
+import { Svg, Circle, G, Polyline, Path } from 'react-native-svg';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
-import SidebarMenu from '../components/SidebarMenu';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { ThemeContext } from '../context/ThemeContext';
 import { AuthContext } from '../context/AuthContext';
+import { getAccessToken, getWorkspaceId } from '../services/ApiService';
+import SidebarMenu from '../components/SidebarMenu';
 import NotificationBell from '../components/NotificationBell';
-import { useRef, useCallback, useState, useContext, useEffect } from 'react';
-import { getProjects, getTasks, getAccessToken, getWorkspaceId } from '../services/ApiService';
-import { canCreateProject, canManageMembers } from '../utils/permissions';
-import { useWorkspace } from '../context/WorkspaceContext';
+import { BASE_URL } from '../config';
+import { Feather } from '@expo/vector-icons';
+import { useTasksCache } from '../hooks/useTasksCache';
 
-import { API_BASE, BASE_URL, WS_BASE } from '../config';
-// const API_BASE → imported from config
+// ── Token colours (inline — no dep on dev_1 constants folder) ────────────────
+const T = {
+  brand:        '#2D6AE3',
+  brandDark:    '#1F4FB5',
+  ink:          '#0E1726',
+  ink2:         '#3B4658',
+  ink3:         '#6B7588',
+  ink4:         '#9AA3B2',
+  hairline:     '#E6E9EF',
+  hairlineSoft: '#F0F2F6',
+  surface:      '#FFFFFF',
+  surfaceAlt:   '#F7F8FB',
+  cBlue:   '#2D6AE3', cBlueSoft:   '#E6EEFC',
+  cGreen:  '#22A06B', cGreenSoft:  '#E2F5EC',
+  cYellow: '#E5A60E', cYellowSoft: '#FEF3CE',
+  cPurple: '#7A5AF8', cPurpleSoft: '#EEEAFE',
+  cRed:    '#E5484D', cRedSoft:    '#FBE3E3',
+  r: 10, rMd: 14, rLg: 20,
+};
 
-// Always includes X-Workspace-ID so every request is workspace-aware
+// ── Auth headers ──────────────────────────────────────────────────────────────
 const authHeaders = async () => {
-  const token       = await getAccessToken();
-  const workspaceId = await getWorkspaceId();
-  const h = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` };
-  if (workspaceId) h['X-Workspace-ID'] = workspaceId;
+  const token = await getAccessToken();
+  const wsId  = await getWorkspaceId();
+  const h = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+  if (wsId) h['X-Workspace-ID'] = wsId;
   return h;
 };
 
-// Map common file extensions to a small label + colour for the doc icon
-const fileMeta = (name = '') => {
-  const ext = String(name).split('.').pop().toLowerCase();
-  if (['pdf'].includes(ext))                             return { label: 'PDF',  color: '#EF4444' };
-  if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) return { label: 'IMG',  color: '#06B6D4' };
-  if (['doc', 'docx'].includes(ext))                     return { label: 'DOC',  color: '#3B82F6' };
-  if (['xls', 'xlsx', 'csv'].includes(ext))              return { label: 'XLS',  color: '#10B981' };
-  if (['ppt', 'pptx'].includes(ext))                     return { label: 'PPT',  color: '#F97316' };
-  if (['zip', 'rar', '7z'].includes(ext))                return { label: 'ZIP',  color: '#A855F7' };
-  if (['txt', 'md'].includes(ext))                       return { label: 'TXT',  color: '#6B7280' };
-  return { label: 'FILE', color: '#6B7280' };
-};
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const stripHtml = (s) => (s || '').replace(/<[^>]*>/g, '').trim();
 
 const fmtRelative = (iso) => {
   if (!iso) return '';
   try {
-    const d = new Date(iso);
-    const now = new Date();
-    const diffMs   = now - d;
-    const diffMin  = Math.floor(diffMs / 60000);
-    const diffHour = Math.floor(diffMs / 3600000);
-    const diffDay  = Math.floor(diffMs / 86400000);
-    if (diffMin < 1)  return 'just now';
-    if (diffMin < 60) return `${diffMin}m ago`;
-    if (diffHour < 24) return `${diffHour}h ago`;
-    if (diffDay < 7)  return `${diffDay}d ago`;
-    return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+    const diff = Date.now() - new Date(iso).getTime();
+    const m = Math.floor(diff / 60000);
+    if (m < 1)   return 'just now';
+    if (m < 60)  return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24)  return `${h}h ago`;
+    const d = Math.floor(h / 24);
+    if (d < 7)   return `${d}d ago`;
+    return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
   } catch { return ''; }
 };
 
-const PRIORITY_COLORS = {
-  low: '#9CA3AF', medium: '#F59E0B', high: '#EF4444', critical: '#DC2626',
+const today = () => new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' });
+
+const PRIORITY_COLOR = {
+  critical: T.cRed, high: T.cRed, medium: T.cYellow, low: T.cBlue,
+};
+const STATUS_COLOR = {
+  in_progress: T.cBlue, completed: T.cGreen, pending: T.cYellow,
+  overdue: T.cRed, todo: T.cYellow,
+};
+const DOC_KIND_COLOR = {
+  pdf: T.cRed, doc: T.cBlue, docx: T.cBlue,
+  xls: T.cGreen, xlsx: T.cGreen,
+  ppt: T.cYellow, pptx: T.cYellow,
+  img: T.cPurple, png: T.cPurple, jpg: T.cPurple,
+};
+const DOC_KIND_LABEL = {
+  pdf: 'PDF', doc: 'DOC', docx: 'DOC', xls: 'XLS', xlsx: 'XLS',
+  ppt: 'PPT', pptx: 'PPT', png: 'IMG', jpg: 'IMG',
 };
 
-// Task status options + labels + colours (mirrors TasksScreen.js)
-const TASK_STATUS_OPTIONS = ['pending', 'in_progress', 'completed', 'backlog', 'deployed', 'deferred', 'review'];
-const TASK_STATUS_LABELS  = { pending: 'Pending', in_progress: 'In Progress', completed: 'Completed', backlog: 'Backlog', deployed: 'Deployed', deferred: 'Deferred', review: 'Review' };
-const TASK_STATUS_COLORS  = { pending: '#888899', in_progress: '#F59E0B', completed: '#4ADE80', backlog: '#F472B6', deployed: '#3B82F6', deferred: '#FBBF24', review: '#A78BFA' };
+// ── Mini reusable UI pieces (no external dep) ─────────────────────────────────
 
-// Document status options + labels + colours (matches the web's dropdown)
-const DOC_STATUS_OPTIONS = ['draft', 'in_review', 'approved', 'archived'];
-const DOC_STATUS_LABELS  = { draft: 'Draft', in_review: 'In Review', approved: 'Approved', archived: 'Archived' };
-const DOC_STATUS_COLORS  = { draft: '#888899', in_review: '#F59E0B', approved: '#4ADE80', archived: '#9CA3AF' };
+function Card({ children, style, padding = 16, isDark }) {
+  return (
+    <View style={[{
+      backgroundColor: isDark ? '#1A1A20' : T.surface, 
+      borderRadius: T.rMd,
+      borderWidth: 1, 
+      borderColor: isDark ? '#252530' : T.hairline, 
+      padding,
+    }, style]}>
+      {children}
+    </View>
+  );
+}
 
+function SectionHeader({ children, right, style, isDark }) {
+  return (
+    <View style={[{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }, style]}>
+      <Text style={{ fontSize: 13, fontWeight: '700', color: isDark ? '#9AA3B2' : T.ink2, letterSpacing: 0.3 }}>{children}</Text>
+      {right}
+    </View>
+  );
+}
+
+function TextLink({ children, onPress }) {
+  return (
+    <TouchableOpacity onPress={onPress} activeOpacity={0.7}>
+      <Text style={{ fontSize: 12, fontWeight: '600', color: T.brand }}>{children}</Text>
+    </TouchableOpacity>
+  );
+}
+
+function Progress({ value = 0, color = T.brand, h = 6, trackColor }) {
+  const pct = Math.min(100, Math.max(0, value));
+  return (
+    <View style={{ height: h, backgroundColor: trackColor || T.hairlineSoft, borderRadius: h }}>
+      <View style={{ height: h, width: `${pct}%`, backgroundColor: color, borderRadius: h }} />
+    </View>
+  );
+}
+
+function FileTile({ ext, size = 36 }) {
+  const key  = (ext || '').toLowerCase();
+  const color = DOC_KIND_COLOR[key] || T.ink3;
+  const label = DOC_KIND_LABEL[key] || (key.toUpperCase().slice(0, 3) || 'DOC');
+  return (
+    <View style={{
+      width: size, height: size, borderRadius: 8,
+      backgroundColor: color + '22',
+      justifyContent: 'center', alignItems: 'center',
+    }}>
+      <Text style={{ fontSize: 9, fontWeight: '800', color, letterSpacing: 0.4 }}>{label}</Text>
+    </View>
+  );
+}
+
+// Simple tab bar
+function Tabs({ tabs, activeTab, onTab }) {
+  return (
+    <View style={{ flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: T.hairline, marginBottom: 8 }}>
+      {tabs.map(t => (
+        <TouchableOpacity
+          key={t.id}
+          onPress={() => onTab(t.id)}
+          style={{ paddingVertical: 8, paddingHorizontal: 10, marginRight: 4, position: 'relative' }}
+        >
+          <Text style={{ fontSize: 12, fontWeight: activeTab === t.id ? '700' : '500', color: activeTab === t.id ? T.brand : T.ink3 }}>
+            {t.label}
+          </Text>
+          {activeTab === t.id && (
+            <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 2, backgroundColor: T.brand, borderRadius: 1 }} />
+          )}
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
+}
+
+// ── Main Dashboard ────────────────────────────────────────────────────────────
 export default function DashboardScreen() {
   const navigation = useNavigation();
-  const { theme, fontScale } = useContext(ThemeContext);
-  const { user } = useContext(AuthContext);
-  const { currentWorkspace } = useWorkspace();
-  const isDark = theme === 'Dark';
-  const bg   = isDark ? '#0D0D0F' : '#F5F5F7';
-  const card = isDark ? '#1A1A20' : '#FFFFFF';
-  const txt  = isDark ? '#FFFFFF' : '#1A1A2E';
-  const sub  = isDark ? '#9898A6' : '#888899';
-  const bdr  = isDark ? '#252530' : '#EBEBF0';
-  const fs   = s => s * fontScale;
+  const { theme }  = useContext(ThemeContext);
+  const { user }   = useContext(AuthContext);
+  const isDark     = theme === 'Dark';
 
-  const route = useRoute();
-  const scrollRef = useRef(null);
-  const quickActionsRef = useRef(null);
-  const [quickNotes, setQuickNotes] = useState([]);
-  const [loadingNotes, setLoadingNotes] = useState(true);
-  const [notesExpanded, setNotesExpanded] = useState(false);
+  // ── State ──────────────────────────────────────────────────────────────────
+  // Tasks come from the shared cache — no duplicate fetches across screens
+  const { tasks } = useTasksCache();
+  const [projects,      setProjects]      = useState([]);
+  const [recentDocs,    setRecentDocs]    = useState([]);
+  const [totalDocs,     setTotalDocs]     = useState(0);
+  const [loading,       setLoading]       = useState(true);
+  const [refreshing,    setRefreshing]    = useState(false);
+  const [activeTaskTab, setActiveTaskTab] = useState('upcoming');
 
-  // Note composer modal state
-  const [composerVisible, setComposerVisible] = useState(false);
-  const [draftContent,    setDraftContent]    = useState('');
-  const [draftFolderId,   setDraftFolderId]   = useState(null);
-  const [draftProjectId,  setDraftProjectId]  = useState(null);
-  const [savingNote,      setSavingNote]      = useState(false);
-  const [foldersList,     setFoldersList]     = useState([]);
-  const [projectsList,    setProjectsList]    = useState([]);
-  const [picker,          setPicker]          = useState(null);   // 'folder' | 'project' | null
+  // ── Fetch projects + docs only (tasks come from shared cache) ─────────────
+  const lastFetchRef  = useRef(0);
+  const STALE_MS_DASH = 30_000; // 30s — skip refetch on rapid tab switches
 
-  // ── Backend-wired sections ─────────────────────────────────────────────
-  const [inProgressTasks, setInProgressTasks] = useState([]);
-  const [recentDocs, setRecentDocs]           = useState([]);
-  const [favProjects, setFavProjects]         = useState([]);
-  const [loadingTasks, setLoadingTasks]       = useState(true);
-  const [loadingDocs, setLoadingDocs]         = useState(true);
-  const [loadingProjects, setLoadingProjects] = useState(true);
-
-  // Status picker state — one is open at a time. type identifies which list.
-  // shape: { type: 'task'|'doc', id }
-  const [statusPicker,    setStatusPicker]    = useState(null);
-  const [savingStatus,    setSavingStatus]    = useState(false);
-  // Track which fav-project row is currently being toggled (for spinner / disable)
-  const [togglingFavId,   setTogglingFavId]   = useState(null);
-
-  // Resolve "is this task assigned to me?" by id, username, or email — covers
-  // backends that put any of those in `assigned_to` / `assigned_to_user_details`.
-  const isTaskMine = useCallback((task) => {
-    if (!user) return false;
-    const myId    = user.id;
-    const myEmail = (user.email || '').toLowerCase();
-    const myUname = (user.username || user.name || '').toLowerCase();
-    const ids = task.assigned_to || [];
-    if (myId != null && ids.some((x) => String(x) === String(myId))) return true;
-    const details = task.assigned_to_user_details || [];
-    return details.some((u) => {
-      if (myId != null && String(u.id) === String(myId)) return true;
-      if (myEmail && (u.email || '').toLowerCase() === myEmail) return true;
-      if (myUname && (u.username || '').toLowerCase() === myUname) return true;
-      return false;
-    });
-  }, [user]);
-
-  // Fetch in-progress tasks assigned to me
-  const fetchInProgress = useCallback(async () => {
+  const fetchAll = useCallback(async (force = false) => {
+    if (!force && Date.now() - lastFetchRef.current < STALE_MS_DASH) return;
     try {
-      const all = await getTasks();
-      const list = Array.isArray(all) ? all : (all?.results || []);
-      const mine = list
-        .filter((t) => t && t.status === 'in_progress' && isTaskMine(t))
-        .sort((a, b) => {
-          const da = new Date(a.updated_at || a.created_at || 0).getTime();
-          const db = new Date(b.updated_at || b.created_at || 0).getTime();
-          return db - da;
-        })
-        .slice(0, 5);
-      setInProgressTasks(mine);
-    } catch (e) {
-      console.warn('fetchInProgress failed:', e?.message || e);
-      setInProgressTasks([]);
-    } finally {
-      setLoadingTasks(false);
-    }
-  }, [isTaskMine]);
+      const headers = await authHeaders();
 
-  // Fetch the 3 most recently uploaded documents
-  const fetchRecentDocs = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/v1/documents/?ordering=-created_at`, {
-        headers: await authHeaders(),
-      });
-      if (!res.ok) throw new Error(`docs ${res.status}`);
-      const data = await res.json();
-      const list = Array.isArray(data) ? data : (data.results || []);
-      // Server-side ordering may not always be supported — sort client-side too
-      list.sort((a, b) => {
-        const da = new Date(a.created_at || a.updated_at || 0).getTime();
-        const db = new Date(b.created_at || b.updated_at || 0).getTime();
-        return db - da;
-      });
-      setRecentDocs(list.slice(0, 3));
+      const [projectsRes, docsRes] = await Promise.all([
+        fetch(`${BASE_URL}/projects/?page_size=20`, { headers }),
+        fetch(`${BASE_URL}/documents/?page_size=10`, { headers }),
+      ]);
+
+      if (projectsRes.ok) {
+        const d = await projectsRes.json();
+        setProjects(Array.isArray(d) ? d : (d.results || []));
+      }
+      if (docsRes.ok) {
+        const d = await docsRes.json();
+        setTotalDocs(d.count ?? (Array.isArray(d) ? d.length : (d.results?.length || 0)));
+        setRecentDocs((Array.isArray(d) ? d : (d.results || [])).slice(0, 5));
+      }
+      lastFetchRef.current = Date.now();
     } catch (e) {
-      console.warn('fetchRecentDocs failed:', e?.message || e);
-      setRecentDocs([]);
+      console.warn('DashboardScreen fetchAll:', e.message);
     } finally {
-      setLoadingDocs(false);
+      setLoading(false);
+      setRefreshing(false);
     }
   }, []);
-
-  // Fetch favourite projects.
-  // Backend exact field name varies — defensively check several common keys.
-  // If none of the projects have a favourite flag set, gracefully fall back to
-  // the 3 most recently updated projects so the section isn't empty.
-  const fetchFavProjects = useCallback(async () => {
-    try {
-      const list = await getProjects();
-      const projects = Array.isArray(list) ? list : (list?.results || []);
-      const isFav = (p) =>
-        p.is_favourite === true ||
-        p.is_favorite  === true ||
-        p.is_starred   === true ||
-        p.is_pinned    === true ||
-        p.favourite    === true ||
-        p.favorite     === true ||
-        p.starred      === true;
-
-      const favs = projects.filter(isFav);
-      let result;
-      if (favs.length > 0) {
-        favs.sort((a, b) => {
-          const da = new Date(a.updated_at || a.created_at || 0).getTime();
-          const db = new Date(b.updated_at || b.created_at || 0).getTime();
-          return db - da;
-        });
-        result = favs.slice(0, 3);
-      } else {
-        // Fallback: 3 most recently updated projects
-        const sorted = [...projects].sort((a, b) => {
-          const da = new Date(a.updated_at || a.created_at || 0).getTime();
-          const db = new Date(b.updated_at || b.created_at || 0).getTime();
-          return db - da;
-        });
-        result = sorted.slice(0, 3);
-      }
-      setFavProjects(result);
-    } catch (e) {
-      console.warn('fetchFavProjects failed:', e?.message || e);
-      setFavProjects([]);
-    } finally {
-      setLoadingProjects(false);
-    }
-  }, []);
-
-  // ── Quick Notes ─────────────────────────────────────────────────────────
-  // GET /api/v1/quicknotes/notes/  → DRF paginated { count, results: [...] }
-  // Each note: { id, user, folder, project, title, content, attachments, created_at, updated_at }
-  // (title is auto-generated server-side, content is plain text)
-  const fetchQuickNotes = useCallback(async () => {
-    try {
-      const token = await getAccessToken();
-      // quicknotes API does NOT use X-Workspace-ID
-      const res = await fetch(`${API_BASE}/api/v1/quicknotes/notes/`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`notes ${res.status}`);
-      const data = await res.json();
-      const list = Array.isArray(data) ? data : (data.results || []);
-      list.sort((a, b) => {
-        const da = new Date(a.created_at || a.updated_at || 0).getTime();
-        const db = new Date(b.created_at || b.updated_at || 0).getTime();
-        return db - da;
-      });
-      setQuickNotes(list.slice(0, 10));   // keep top 10 in state, render top 5
-    } catch (e) {
-      console.warn('fetchQuickNotes failed:', e?.message || e);
-      setQuickNotes([]);
-    } finally {
-      setLoadingNotes(false);
-    }
-  }, []);
-
-  // Lazy-load folders and projects only when the composer opens — avoids the
-  // unconditional double-fetch on every dashboard mount.
-  const ensureComposerData = async () => {
-    try {
-      const tasks = [];
-      if (foldersList.length === 0) {
-        tasks.push(
-          fetch(`${API_BASE}/api/v1/quicknotes/folders/`, {
-            headers: await authHeaders(),
-          }).then(r => r.ok ? r.json() : null)
-        );
-      } else { tasks.push(null); }
-      if (projectsList.length === 0) {
-        tasks.push(getProjects().catch(() => null));
-      } else { tasks.push(null); }
-      const [foldersResp, projectsResp] = await Promise.all(tasks);
-      if (foldersResp) {
-        const folders = Array.isArray(foldersResp) ? foldersResp : (foldersResp.results || []);
-        setFoldersList(folders);
-        if (!draftFolderId && folders[0]) setDraftFolderId(folders[0].id);
-      }
-      if (projectsResp) {
-        const projects = Array.isArray(projectsResp) ? projectsResp : (projectsResp.results || []);
-        setProjectsList(projects);
-        if (!draftProjectId && projects[0]) setDraftProjectId(projects[0].id);
-      }
-    } catch (e) {
-      console.warn('ensureComposerData failed:', e?.message || e);
-    }
-  };
-
-  const openComposer = async () => {
-    setDraftContent('');
-    setComposerVisible(true);
-    ensureComposerData();   // fire-and-forget; modal renders immediately
-  };
-
-  const closeComposer = () => {
-    if (savingNote) return;
-    setComposerVisible(false);
-    setPicker(null);
-  };
-
-  const submitNote = async () => {
-    const content = draftContent.trim();
-    if (!content) {
-      Alert.alert('Empty note', 'Type something to save.');
-      return;
-    }
-    if (!draftFolderId || !draftProjectId) {
-      Alert.alert(
-        'Missing folder or project',
-        'Both are required by the backend. Pick them from the dropdowns above.',
-      );
-      return;
-    }
-    setSavingNote(true);
-    try {
-      const res = await fetch(`${API_BASE}/api/v1/quicknotes/notes/`, {
-        method: 'POST',
-        headers: await authHeaders(),
-        body: JSON.stringify({
-          content,
-          folder:  draftFolderId,
-          project: draftProjectId,
-        }),
-      });
-      if (!res.ok) {
-        let detail = `${res.status}`;
-        try { const e = await res.json(); detail = e.detail || JSON.stringify(e); } catch {}
-        throw new Error(detail);
-      }
-      const created = await res.json();
-      // Prepend to state so it appears immediately, then refresh in background
-      setQuickNotes(prev => [created, ...prev].slice(0, 10));
-      setComposerVisible(false);
-      setDraftContent('');
-      setNotesExpanded(true);     // expand the panel so the new note is visible
-      fetchQuickNotes();          // sync with server
-    } catch (e) {
-      Alert.alert('Could not save note', e?.message || 'Try again later.');
-    } finally {
-      setSavingNote(false);
-    }
-  };
-
-  // Refetch all data when workspace changes — handles case where
-  // Dashboard is already focused so useFocusEffect doesn't fire
-  useEffect(() => {
-    if (!currentWorkspace?.id) return;
-    setLoadingTasks(true);
-    setLoadingDocs(true);
-    setLoadingProjects(true);
-    setLoadingNotes(true);
-    fetchInProgress();
-    fetchRecentDocs();
-    fetchFavProjects();
-    fetchQuickNotes();
-  }, [currentWorkspace?.id]);
 
   useFocusEffect(useCallback(() => {
-    // Refresh all backend-wired sections every time we land here
-    setLoadingTasks(true);
-    setLoadingDocs(true);
-    setLoadingProjects(true);
-    setLoadingNotes(true);
-    fetchInProgress();
-    fetchRecentDocs();
-    fetchFavProjects();
-    fetchQuickNotes();
-
-    // If navigated here with scrollToNotes param, go to the QuickNotes screen
-    if (route.params?.scrollToNotes) {
-      navigation.navigate('QuickNotes');
-      navigation.setParams({ scrollToNotes: false });
+    // Small delay on first mount ensures token/workspace are fully saved to
+    // AsyncStorage after login before we start fetching
+    if (lastFetchRef.current === 0) {
+      const t = setTimeout(() => fetchAll(), 100);
+      return () => clearTimeout(t);
     }
-  }, [route.params?.scrollToNotes, fetchInProgress, fetchRecentDocs, fetchFavProjects, fetchQuickNotes]));
+    fetchAll();
+  }, [fetchAll]));
 
-  const handleQuickNotesPress = () => {
-    navigation.navigate('QuickNotes');
+  // ── Derived counts ─────────────────────────────────────────────────────────
+  const totalTasks     = tasks.length;
+  const completedTasks = tasks.filter(t => ['completed', 'done'].includes((t.status || '').toLowerCase())).length;
+  const overdueTasks   = tasks.filter(t => {
+    const s = (t.status || '').toLowerCase();
+    const due = t.end_date || t.due_date;
+    const today = new Date().toISOString().slice(0,10);
+    return (s !== 'completed' && s !== 'deployed' && due && due < today);
+  }).length;
+  const inProgressTasks= tasks.filter(t => (t.status || '').toLowerCase() === 'in_progress').length;
+  const pendingTasks   = tasks.filter(t => (t.status || '').toLowerCase() === 'pending').length;
+  const backlogTasks   = tasks.filter(t => (t.status || '').toLowerCase() === 'backlog').length;
+  const reviewTasks    = tasks.filter(t => (t.status || '').toLowerCase() === 'review').length;
+  const deployedTasks  = tasks.filter(t => (t.status || '').toLowerCase() === 'deployed').length;
+
+  const upcomingTasks  = tasks.filter(t => {
+    const s = (t.status || '').toLowerCase();
+    return s === 'pending' || s === 'todo';
+  }).slice(0, 8);
+  const overdueTasksList   = tasks.filter(t => {
+    const s   = (t.status || '').toLowerCase();
+    const due = t.end_date || t.due_date;
+    const now = new Date().toISOString().slice(0,10);
+    return (s !== 'completed' && s !== 'deployed' && due && due < now);
+  }).slice(0, 8);
+  const completedTasksList = tasks.filter(t => ['completed','done'].includes((t.status||'').toLowerCase())).slice(0, 8);
+
+  const tasksByTab = (tab) => {
+    if (tab === 'upcoming')  return upcomingTasks;
+    if (tab === 'overdue')   return overdueTasksList;
+    if (tab === 'completed') return completedTasksList;
+    return [];
   };
 
-  const formatDate = iso => {
-    try {
-      return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
-    } catch { return ''; }
+  const TABS = [
+    { id: 'upcoming',  label: `Upcoming (${upcomingTasks.length})` },
+    { id: 'overdue',   label: `Overdue (${overdueTasksList.length})` },
+    { id: 'completed', label: `Completed (${completedTasksList.length})` },
+  ];
+
+  // ── Overview stat cards — real values ──────────────────────────────────────
+  // Sparkline data: cumulative task counts over last 8 months
+  const sparkFor = (filterFn) => {
+    return Array.from({ length: 8 }, (_, i) => {
+      const d = new Date(); d.setMonth(d.getMonth() - (7 - i));
+      const yr = d.getFullYear(); const mo = d.getMonth();
+      return tasks.filter(t => {
+        const ds = (t.created_at || t.updated_at || '').slice(0, 7);
+        return ds === `${yr}-${String(mo + 1).padStart(2, '0')}` && filterFn(t);
+      }).length;
+    });
   };
 
-  // Navigate to Tasks tab and open the specific task
-  const openTask = (task) => {
-    try { navigation.jumpTo('Tasks', { openTaskId: task.id }); }
-    catch { navigation.navigate('Main', { screen: 'Tasks', params: { openTaskId: task.id } }); }
-  };
+  // ── Overview stat cards ────────────────────────────────────────────────────
+  const OVERVIEW = [
+    { label: 'Total Projects',  value: projects.length, color: T.cBlue,   soft: T.cBlueSoft,   icon: 'folder',       pct: `${projects.length} total`,
+      spark: [2,3,4,5,6,7,8, projects.length || 1],
+      onPress: () => { try { navigation.jumpTo('Projects'); } catch { navigation.navigate('Projects'); } } },
+    { label: 'Total Documents', value: totalDocs,       color: T.cGreen,  soft: T.cGreenSoft,  icon: 'file-text',    pct: `${totalDocs} total`,
+      spark: [10,15,20,30,35,40,50, totalDocs || 1],
+      onPress: () => navigation.navigate('Docs') },
+    { label: 'Total Tasks',     value: totalTasks,      color: T.cYellow, soft: T.cYellowSoft, icon: 'check-square', pct: `${pendingTasks} pending`,
+      spark: sparkFor(() => true),
+      onPress: () => { try { navigation.jumpTo('Tasks'); } catch { navigation.navigate('Tasks'); } } },
+    { label: 'Completed',       value: completedTasks,  color: T.cPurple, soft: T.cPurpleSoft, icon: 'check-circle', pct: `${totalTasks > 0 ? Math.round((completedTasks/totalTasks)*100) : 0}% done`,
+      spark: sparkFor(t => ['completed','deployed'].includes(t.status)),
+      onPress: () => { try { navigation.jumpTo('Tasks'); } catch { navigation.navigate('Tasks'); } } },
+    { label: 'Overdue Tasks',   value: overdueTasks,    color: T.cRed,    soft: T.cRedSoft,    icon: 'alert-circle', pct: `${totalTasks > 0 ? Math.round((overdueTasks/totalTasks)*100) : 0}% of total`,
+      spark: sparkFor(t => { const due = t.end_date||t.due_date; return due && due < new Date().toISOString().slice(0,10) && !['completed','deployed'].includes(t.status); }),
+      onPress: () => { try { navigation.jumpTo('Tasks'); } catch { navigation.navigate('Tasks'); } } },
+  ];
 
-  // Navigate to a project's detail view
-  const openProject = (project) => {
-    try { navigation.jumpTo('Projects', { openProjectId: project.id }); }
-    catch { navigation.navigate('Main', { screen: 'Projects', params: { openProjectId: project.id } }); }
-  };
+  // ── Tasks Over Time — real data from tasks (same as web) ──────────────────
+  const [selectedMonth, setSelectedMonth] = useState(() => {
+    const d = new Date();
+    return { year: d.getFullYear(), month: d.getMonth() };
+  });
+  const [showMonthPicker, setShowMonthPicker] = useState(false);
 
-  const goToTasksFiltered = () => {
-    try { navigation.jumpTo('Tasks', { presetFilter: 'in_progress' }); }
-    catch { navigation.navigate('Main', { screen: 'Tasks', params: { presetFilter: 'in_progress' } }); }
-  };
+  const chartData = (() => {
+    const { year, month } = selectedMonth;
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    // 8 evenly spaced sample points across the month
+    const points = Array.from({ length: 8 }, (_, i) =>
+      Math.round(1 + (i / 7) * (daysInMonth - 1))
+    );
 
-  // ── Inline status updates ───────────────────────────────────────────────
-  // Task: PATCH /api/v1/tasksite/{id}/  body { status }
-  // Doc:  PATCH /api/v1/documents/{id}/ body { status }
-  // If the new status moves the row out of the section's filter (e.g. task
-  // changes from in_progress → completed), we drop it from local state so it
-  // visually leaves the dashboard immediately. The Tasks tab on next focus
-  // will reflect the up-to-date data anyway.
-  const updateStatus = async (newStatus) => {
-    if (!statusPicker || !newStatus) return;
-    const { type, id } = statusPicker;
-    const list  = type === 'task' ? inProgressTasks : recentDocs;
-    const target = list.find(x => x.id === id);
-    if (!target || target.status === newStatus) {
-      setStatusPicker(null);
-      return;
-    }
-    setSavingStatus(true);
-    const url = type === 'task'
-      ? `${API_BASE}/api/v1/tasksite/${id}/`
-      : `${API_BASE}/api/v1/documents/${id}/`;
-    try {
-      const res = await fetch(url, {
-        method: 'PATCH',
-        headers: await authHeaders(),
-        body: JSON.stringify({ status: newStatus }),
-      });
-      if (!res.ok) {
-        let detail = `${res.status}`;
-        try { const e = await res.json(); detail = e.detail || JSON.stringify(e); } catch {}
-        throw new Error(detail);
-      }
-      if (type === 'task') {
-        if (newStatus === 'in_progress') {
-          // Stay in this section, just update the local copy
-          setInProgressTasks(prev => prev.map(t => t.id === id ? { ...t, status: newStatus } : t));
-        } else {
-          // Moves out of "In Progress" — drop it
-          setInProgressTasks(prev => prev.filter(t => t.id !== id));
-        }
-      } else {
-        // Doc status change — keep it in the Recent Documents list, just update label
-        setRecentDocs(prev => prev.map(d => d.id === id ? { ...d, status: newStatus } : d));
-      }
-    } catch (e) {
-      Alert.alert(
-        type === 'task' ? 'Could not update task' : 'Could not update document',
-        e?.message || 'Try again later.',
-      );
-    } finally {
-      setSavingStatus(false);
-      setStatusPicker(null);
-    }
-  };
+    const countByDay = (day, filterFn, useDueDate = false) =>
+      tasks.filter(t => {
+        const dateStr = useDueDate
+          ? (t.end_date || t.due_date)
+          : (t.created_at || t.updated_at || t.start_date || '');
+        if (!dateStr) return false;
+        const d = new Date(dateStr);
+        return d.getFullYear() === year && d.getMonth() === month && d.getDate() <= day && filterFn(t);
+      }).length;
 
-  // Toggle favourite on a project — defensive about field name (matches
-  // ProjectsScreen): tries is_favourite first, falls back through other
-  // common keys. Optimistically removes from this list since the section
-  // shows favourites only.
-  const toggleFavProject = async (project) => {
-    if (!project?.id || togglingFavId) return;
-    const candidates = ['is_favourite', 'is_favorite', 'is_starred', 'is_pinned', 'favourite', 'favorite', 'starred'];
-    let key = candidates.find(k => Object.prototype.hasOwnProperty.call(project, k)) || 'is_favourite';
+    return {
+      points,
+      labels: points.map(d => {
+        const mn = new Date(year, month, d).toLocaleString('en-US', { month: 'short' });
+        return `${mn} ${d}`;
+      }),
+      series: [
+        { label: 'In Progress', color: '#3B72EE', data: points.map(d => countByDay(d, t => t.status === 'in_progress')) },
+        { label: 'Completed',   color: '#22C55E', data: points.map(d => countByDay(d, t => t.status === 'completed' || t.status === 'deployed', true)) },
+        { label: 'Overdue',     color: '#EF4444', data: points.map(d => {
+          const cutoff = new Date(year, month, d);
+          return tasks.filter(t => {
+            const due = t.end_date || t.due_date;
+            return due && new Date(due) < cutoff && !['completed','deployed'].includes(t.status);
+          }).length;
+        })},
+        { label: 'Pending', color: '#F59E0B', data: points.map(d => countByDay(d, t => t.status === 'pending' || t.status === 'backlog')) },
+      ],
+    };
+  })();
 
-    setTogglingFavId(project.id);
-    // Optimistic: remove from this section (the next refresh will sync)
-    setFavProjects(prev => prev.filter(p => p.id !== project.id));
+  // Tab screens use jumpTo; Stack screens use navigate
+  const QUICK_ACTIONS = [
+    { label: 'New Project', icon: 'folder-plus',  color: T.cBlue,   soft: T.cBlueSoft,
+      onPress: () => navigation.navigate('CreateProject') },
+    { label: 'Upload Doc',  icon: 'upload',       color: T.cGreen,  soft: T.cGreenSoft,
+      onPress: () => navigation.navigate('Docs') },
+    { label: 'New Task',    icon: 'check-square', color: T.cYellow, soft: T.cYellowSoft,
+      onPress: () => navigation.navigate('CreateTask') },
+    { label: 'Calendar',    icon: 'calendar',     color: T.cPurple, soft: T.cPurpleSoft,
+      onPress: () => { try { navigation.jumpTo('Calendar'); } catch { navigation.navigate('Calendar'); } } },
+    { label: 'Reports',     icon: 'bar-chart-2',  color: T.cBlue,   soft: T.cBlueSoft,
+      onPress: () => { try { navigation.jumpTo('Reports'); } catch { navigation.navigate('Reports'); } } },
+    { label: 'Invite',      icon: 'user-plus',    color: T.cRed,    soft: T.cRedSoft,
+      onPress: () => navigation.navigate('InviteUser') },
+  ];
 
-    try {
-      const res = await fetch(`${API_BASE}/api/v1/projects/${project.id}/`, {
-        method: 'PATCH',
-        headers: await authHeaders(),
-        body: JSON.stringify({ [key]: false }),
-      });
-      if (!res.ok) {
-        let detail = `${res.status}`;
-        try { const e = await res.json(); detail = e.detail || JSON.stringify(e); } catch {}
-        throw new Error(detail);
-      }
-    } catch (e) {
-      // Restore the project to the list on failure
-      setFavProjects(prev => [project, ...prev]);
-      Alert.alert(
-        'Could not unfavourite',
-        e?.message || 'Try again later.',
-      );
-    } finally {
-      setTogglingFavId(null);
-    }
-  };
+  const userName = user?.first_name || user?.username || 'there';
 
-  const userFirstName = (user?.name || user?.username || 'there').split(' ')[0];
-
-  // Welcome banner — visible for 10 s then fades out
-  const [showWelcome, setShowWelcome] = useState(true);
-  const welcomeOpacity = useRef(new Animated.Value(1)).current;
-
-  useEffect(() => {
-    const hideTimer = setTimeout(() => {
-      Animated.timing(welcomeOpacity, {
-        toValue: 0,
-        duration: 600,
-        useNativeDriver: true,
-      }).start(() => setShowWelcome(false));
-    }, 10000);
-    return () => clearTimeout(hideTimer);
-  }, []);
-
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: bg }]} edges={['top', 'left', 'right']}>
-      <StatusBar barStyle={isDark ? "light-content" : "dark-content"} backgroundColor={isDark ? "#0D0D0F" : "#fff"} translucent={false} />
+    <SafeAreaView style={[s.safe, { backgroundColor: isDark ? '#0D0D0F' : T.surfaceAlt }]} edges={['top', 'left', 'right']}>
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
 
       {/* Navbar */}
-      <View style={[styles.navbar, { backgroundColor: card, borderBottomColor: bdr }]}>
-        <View style={styles.navLeft}>
+      <View style={[s.navbar, { backgroundColor: isDark ? '#1A1A20' : T.surface, borderBottomColor: isDark ? '#252530' : T.hairline }]}>
+        <View style={s.navLeft}>
           <SidebarMenu activeScreen="Dashboard" />
-          <TouchableOpacity
-            style={styles.logoBox}
-            onPress={() => scrollRef.current?.scrollTo({ y: 0, animated: true })}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.logoText}>D</Text>
-          </TouchableOpacity>
-          <Text style={[styles.brandName, { color: txt }]}>DYUKSA</Text>
+          <View>
+            <Text style={[s.brandName, { color: isDark ? '#fff' : T.ink }]}>Dashboard</Text>
+            <Text style={{ fontSize: 11, color: isDark ? '#9AA3B2' : T.ink3, marginTop: 1 }}>Welcome back, {userName}</Text>
+          </View>
         </View>
-        <View style={styles.navRight}>
+        <View style={s.navRight}>
           <TouchableOpacity
-            style={[styles.navIconBtn, { backgroundColor: isDark ? '#252530' : '#FAFAFA', borderColor: bdr }]}
-            onPress={() => navigation.navigate('Chat')}
+            style={{ padding: 4 }}
+            onPress={() => navigation.navigate('Search')}
           >
-            <Text style={styles.navIcon}>💬</Text>
+            <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
+              <Path d="M11 19C15.4183 19 19 15.4183 19 11C19 6.58172 15.4183 3 11 3C6.58172 3 3 6.58172 3 11C3 15.4183 6.58172 19 11 19Z" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+              <Path d="M21 21L16.65 16.65" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+            </Svg>
           </TouchableOpacity>
           <NotificationBell />
         </View>
       </View>
 
-      {/* Welcome Header — auto-hides after 10 s */}
-      {showWelcome && (
-        <Animated.View style={[styles.pageHeader, { backgroundColor: card, borderBottomColor: bdr, opacity: welcomeOpacity }]}>
-          <Text style={[styles.welcomeText, { color: txt }]}>Welcome back, {userFirstName}!</Text>
-          <Text style={[styles.subText, { color: sub }]}>Here's a quick overview of your workspace.</Text>
-        </Animated.View>
-      )}
-
       <ScrollView
-        ref={scrollRef}
-        style={[styles.scroll, { backgroundColor: bg }]}
-        contentContainerStyle={{ paddingBottom: 40 }}
+        style={{ flex: 1 }}
+        contentContainerStyle={{ paddingHorizontal: 14, paddingTop: 16, paddingBottom: 100 }}
         showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchAll(true); }} tintColor={T.brand} />}
       >
-
-        {/* ── Section 1 — In Progress ───────────────────────────────────── */}
-        <View style={[styles.card, styles.fixedCard, { backgroundColor: card, borderColor: bdr }]}>
-          <View style={styles.cardHeader}>
-            <Text style={[styles.cardTitle, { color: txt, marginBottom: 0 }]}>
-              In Progress {inProgressTasks.length > 0 ? `(${inProgressTasks.length})` : ''}
-            </Text>
-            {inProgressTasks.length > 0 && (
-              <TouchableOpacity onPress={goToTasksFiltered}>
-                <Text style={[styles.viewAll, { color: sub }]}>View All →</Text>
-              </TouchableOpacity>
-            )}
+        {loading ? (
+          <View style={{ flex: 1, alignItems: 'center', paddingTop: 60 }}>
+            <ActivityIndicator color={T.brand} size="large" />
+            <Text style={{ color: T.ink3, marginTop: 12, fontSize: 13 }}>Loading dashboard…</Text>
           </View>
-
-          {loadingTasks ? (
-            <View style={styles.loadingState}>
-              <ActivityIndicator size="small" color="#4ECDC4" />
-            </View>
-          ) : inProgressTasks.length === 0 ? (
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyIcon}>🕐</Text>
-              <Text style={[styles.emptyLabel, { color: sub }]}>No in-progress tasks assigned to you</Text>
-              <Text style={[styles.emptySubLabel, { color: isDark ? '#6C6C80' : '#AAAABC' }]}>
-                Tasks you're actively working on will appear here.
-              </Text>
-            </View>
-          ) : (
-            <View style={{ gap: 8 }}>
-              {inProgressTasks.slice(0, 3).map((task) => {
-                const projName = task.project_details?.name || `Project #${task.project ?? '—'}`;
-                const due = task.end_date ? new Date(task.end_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : null;
-                const prioColor = PRIORITY_COLORS[(task.priority || '').toLowerCase()] || '#9CA3AF';
-                return (
-                  <View
-                    key={task.id}
-                    style={[styles.taskRow, { borderColor: bdr }]}
-                  >
-                    <View style={[styles.priorityBar, { backgroundColor: prioColor }]} />
-                    {/* Tapping the content opens the task detail */}
-                    <TouchableOpacity
-                      style={{ flex: 1 }}
-                      onPress={() => openTask(task)}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={[styles.taskHeading, { color: txt }]} numberOfLines={1}>
-                        {task.heading || 'Untitled task'}
-                      </Text>
-                      <View style={styles.taskMeta}>
-                        <Text style={[styles.taskMetaText, { color: sub }]} numberOfLines={1}>{projName}</Text>
-                        {due && (
-                          <>
-                            <Text style={[styles.taskMetaDot, { color: sub }]}>•</Text>
-                            <Text style={[styles.taskMetaText, { color: sub }]}>Due {due}</Text>
-                          </>
-                        )}
-                      </View>
-                    </TouchableOpacity>
-                    {/* Sibling tappable pill — opens status picker only */}
-                    <TouchableOpacity
-                      style={[styles.statusPill, { flexDirection: 'row', alignItems: 'center', gap: 4 }]}
-                      onPress={() => setStatusPicker({ type: 'task', id: task.id })}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={styles.statusPillText}>{TASK_STATUS_LABELS[task.status] || task.status || 'In Progress'}</Text>
-                      <Text style={[styles.statusPillText, { fontSize: 8 }]}>▾</Text>
-                    </TouchableOpacity>
-                  </View>
-                );
-              })}
-              {inProgressTasks.length > 3 && (
-                <TouchableOpacity onPress={goToTasksFiltered} style={{ paddingVertical: 6 }}>
-                  <Text style={[{ fontSize: fs(12), color: '#4ECDC4', fontWeight: '600', textAlign: 'center' }]}>
-                    +{inProgressTasks.length - 3} more
-                  </Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          )}
-        </View>
-
-        {/* ── Section 2 — Recent Documents ──────────────────────────────── */}
-        <View style={[styles.card, styles.fixedCard, { backgroundColor: card, borderColor: bdr }]}>
-          <View style={styles.cardHeader}>
-            <Text style={[styles.cardTitle, { color: txt, marginBottom: 0 }]}>Recent Documents</Text>
-            <TouchableOpacity onPress={() => navigation.navigate('Docs')}>
-              <Text style={[styles.viewAll, { color: sub }]}>View All →</Text>
-            </TouchableOpacity>
-          </View>
-
-          {loadingDocs ? (
-            <View style={styles.loadingState}>
-              <ActivityIndicator size="small" color="#4ECDC4" />
-            </View>
-          ) : recentDocs.length === 0 ? (
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyIcon}>📋</Text>
-              <Text style={[styles.emptyLabel, { color: sub }]}>No documents yet</Text>
-            </View>
-          ) : (
-            <View style={{ gap: 8 }}>
-              {recentDocs.map((doc) => {
-                const meta = fileMeta(doc.name);
-                const uploader = doc.created_by?.full_name || doc.created_by?.username || 'Unknown';
-                const when = fmtRelative(doc.created_at || doc.updated_at);
-                const docStatus = (doc.status || 'draft').toLowerCase();
-                const statusColor = DOC_STATUS_COLORS[docStatus] || '#888899';
-                return (
-                  <View
-                    key={doc.id}
-                    style={[styles.docRow, { borderColor: bdr }]}
-                  >
-                    <TouchableOpacity
-                      style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}
-                      onPress={() => navigation.navigate('Docs')}
-                      activeOpacity={0.7}
-                    >
-                      <View style={[styles.docIcon, { backgroundColor: meta.color + '22' }]}>
-                        <Text style={[styles.docIconText, { color: meta.color }]}>{meta.label}</Text>
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={[styles.docName, { color: txt }]} numberOfLines={1}>
-                          {doc.name || 'Untitled'}
-                        </Text>
-                        <Text style={[styles.docMeta, { color: sub }]} numberOfLines={1}>
-                          {uploader} • {when}
-                        </Text>
-                      </View>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.docStatusPill, { backgroundColor: statusColor + '20' }]}
-                      onPress={() => setStatusPicker({ type: 'doc', id: doc.id })}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={[styles.docStatusText, { color: statusColor }]} numberOfLines={1}>
-                        {(DOC_STATUS_LABELS[docStatus] || docStatus).toUpperCase()}
-                      </Text>
-                      <Text style={[styles.docStatusText, { color: statusColor, fontSize: 8 }]}>▾</Text>
-                    </TouchableOpacity>
-                  </View>
-                );
-              })}
-            </View>
-          )}
-        </View>
-
-        {/* ── Section 3 — Favourite Projects ────────────────────────────── */}
-        <View style={[styles.card, { backgroundColor: card, borderColor: bdr }]}>
-          <View style={styles.cardHeader}>
-            <Text style={[styles.cardTitle, { color: txt, marginBottom: 0 }]}>Favourite Projects</Text>
-            <TouchableOpacity onPress={() => (() => { try { navigation.jumpTo('Projects'); } catch { navigation.navigate('Main', { screen: 'Projects' }); } })()}>
-              <Text style={[styles.viewAll, { color: sub }]}>View All →</Text>
-            </TouchableOpacity>
-          </View>
-
-          {loadingProjects ? (
-            <View style={styles.loadingState}>
-              <ActivityIndicator size="small" color="#4ECDC4" />
-            </View>
-          ) : favProjects.length === 0 ? (
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyIcon}>📊</Text>
-              <Text style={[styles.emptyLabel, { color: sub }]}>No projects yet</Text>
-            </View>
-          ) : (
-            <View style={{ gap: 8 }}>
-              {favProjects.map((proj) => {
-                const initial = (proj.name || '?').charAt(0).toUpperCase();
-                const memberCount = (proj.members || proj.assigned_members || []).length;
-                const status = proj.status || proj.project_status;
-                // Detect if this project actually has the favourite flag set
-                // (true favourites). The section may also include "most recently
-                // updated" fallback rows when no favourites exist — those will
-                // show an unfilled star instead of gold.
-                const isFav = !!(
-                  proj.is_favourite || proj.is_favorite ||
-                  proj.is_starred   || proj.is_pinned   ||
-                  proj.favourite    || proj.favorite    ||
-                  proj.starred
-                );
-                const busy = togglingFavId === proj.id;
-                return (
-                  <View
-                    key={proj.id}
-                    style={[styles.projectRow, { borderColor: bdr }]}
-                  >
-                    <TouchableOpacity
-                      style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}
-                      onPress={() => openProject(proj)}
-                      activeOpacity={0.7}
-                    >
-                      <View style={styles.projectAvatar}>
-                        <Text style={styles.projectAvatarText}>{initial}</Text>
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={[styles.projectName, { color: txt }]} numberOfLines={1}>
-                          {proj.name || 'Untitled project'}
-                        </Text>
-                        <Text style={[styles.projectMeta, { color: sub }]} numberOfLines={1}>
-                          {memberCount > 0 ? `${memberCount} member${memberCount !== 1 ? 's' : ''}` : 'No members'}
-                          {status ? ` • ${status}` : ''}
-                        </Text>
-                      </View>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.projectFavBtn}
-                      onPress={() => {
-                        if (isFav) {
-                          toggleFavProject(proj);
-                        } else {
-                          Alert.alert(
-                            'Favourite this project?',
-                            'Use the star on the Projects tab to add it to your favourites.',
-                          );
-                        }
-                      }}
-                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                      disabled={busy}
-                      activeOpacity={0.6}
-                    >
-                      {busy ? (
-                        <ActivityIndicator size="small" color="#F59E0B" />
-                      ) : (
-                        <Text style={[styles.projectFavIcon, isFav && styles.projectFavIconActive]}>
-                          {isFav ? '★' : '☆'}
-                        </Text>
-                      )}
-                    </TouchableOpacity>
-                    <Text style={[styles.chevron, { color: sub }]}>›</Text>
-                  </View>
-                );
-              })}
-            </View>
-          )}
-        </View>
-
-        {/* ── Section 4 — Quick Actions (with inline Quick Notes expansion) ── */}
-        <View ref={quickActionsRef} style={[styles.card, { marginBottom: 10, backgroundColor: card, borderColor: bdr }]}>
-          <Text style={[styles.cardTitle, { color: txt }]}>Quick Actions</Text>
-          <View style={styles.quickGrid}>
-
-            {/* Events — Exam Form icon (purple clipboard with checklist) */}
-            <TouchableOpacity
-              style={styles.quickItem}
-              onPress={() => { try { navigation.jumpTo('Calendar'); } catch { navigation.navigate('Main', { screen: 'Calendar' }); } }}
+        ) : (
+          <>
+            {/* 1. Greeting card — blue gradient matching screenshot */}
+            <LinearGradient
+              colors={['#3B72EE', '#5B8FF5']}
+              start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+              style={s.greetCard}
             >
-              <View style={[styles.quickCircle, { backgroundColor: '#F3F0FF', borderColor: '#C4B5FD' }]}>
-                <View style={styles.examFormIcon}>
-                  <View style={[styles.efClip, { backgroundColor: '#7C3AED' }]} />
-                  <View style={[styles.efBody, { backgroundColor: '#fff', borderColor: '#C4B5FD' }]}>
-                    <View style={[styles.efLine, { backgroundColor: '#7C3AED', width: '80%' }]} />
-                    <View style={[styles.efLine, { backgroundColor: '#7C3AED', width: '60%' }]} />
-                    <View style={[styles.efLine, { backgroundColor: '#7C3AED', width: '70%' }]} />
-                    <View style={[styles.efDot, { backgroundColor: '#7C3AED' }]} />
-                  </View>
+              <View style={[s.decoCircle, { width: 160, height: 160, top: -40, right: -30, opacity: 0.07 }]} />
+              <View style={[s.decoCircle, { width: 90, height: 90, bottom: -20, left: 30, opacity: 0.05 }]} />
+              <Text style={s.greetDate}>{today()}</Text>
+              <Text style={s.greetMsg}>Here's what's happening with your workspace.</Text>
+              <View style={s.greetStats}>
+                <View style={s.greetStat}>
+                  <Text style={s.greetStatVal}>{upcomingTasks.length}</Text>
+                  <Text style={s.greetStatLbl}>Tasks today</Text>
+                </View>
+                <View style={s.greetDivider} />
+                <View style={s.greetStat}>
+                  <Text style={s.greetStatVal}>{inProgressTasks}</Text>
+                  <Text style={s.greetStatLbl}>Meetings</Text>
+                </View>
+                <View style={s.greetDivider} />
+                <View style={s.greetStat}>
+                  <Text style={s.greetStatVal}>{overdueTasks}</Text>
+                  <Text style={s.greetStatLbl}>Overdue</Text>
                 </View>
               </View>
-              <Text style={[styles.quickLabel, { color: sub }]}>Events</Text>
-            </TouchableOpacity>
+            </LinearGradient>
 
-            {/* My Tasks — Checkboard / Seating Plan style (people grid, blue) */}
-            <TouchableOpacity
-              style={styles.quickItem}
-              onPress={() => { try { navigation.jumpTo('Tasks'); } catch { navigation.navigate('Main', { screen: 'Tasks' }); } }}
-            >
-              <View style={[styles.quickCircle, { backgroundColor: '#EFF6FF', borderColor: '#93C5FD' }]}>
-                <View style={styles.seatingIcon}>
-                  {[0,1,2,3,4,5].map(i => (
-                    <View key={i} style={[styles.seatDot, { backgroundColor: i < 3 ? '#2563EB' : '#93C5FD' }]} />
+            {/* 2. Overview stat cards — 2-col grid with Feather icons + % badge + sparkline */}
+            <SectionHeader isDark={isDark}>Overview</SectionHeader>
+            <View style={s.overviewGrid}>
+              {OVERVIEW.map((item, idx) => {
+                return (
+                  <TouchableOpacity
+                    key={idx}
+                    onPress={item.onPress}
+                    activeOpacity={0.75}
+                    style={[s.statCard, idx === OVERVIEW.length - 1 && OVERVIEW.length % 2 !== 0 && { flex: 0, width: '48%' }]}
+                  >
+                    <Card isDark={isDark} padding={12}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                        <View style={[s.statIcon, { backgroundColor: isDark ? '#252530' : item.soft }]}>
+                          <Feather name={item.icon} size={14} color={item.color} />
+                        </View>
+                        <Text style={[s.statLabel, { color: isDark ? '#9AA3B2' : T.ink3 }]} numberOfLines={1}>{item.label}</Text>
+                      </View>
+                      <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 6 }}>
+                        <Text style={[s.statValue, { color: isDark ? '#fff' : T.ink }]}>{item.value}</Text>
+                        <Text style={{ fontSize: 10, fontWeight: '700', color: item.color }}>{item.pct}</Text>
+                      </View>
+                      {/* Mini sparkline — real data */}
+                      <View style={{ height: 28, marginTop: 8, overflow: 'hidden' }}>
+                        {(() => {
+                          const spark = item.spark || [0,0,0,0,0,0,0,item.value||1];
+                          const maxV  = Math.max(...spark, 1);
+                          const W = 80; const H = 28;
+                          const pts = spark.map((v, i) => {
+                            const x = (i / (spark.length - 1)) * W;
+                            const y = H - (v / maxV) * (H - 4) - 2;
+                            return `${x.toFixed(1)},${y.toFixed(1)}`;
+                          }).join(' ');
+                          return (
+                            <Svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+                              <Polyline points={pts} fill="none" stroke={item.color} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+                            </Svg>
+                          );
+                        })()}
+                        <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 14, backgroundColor: item.color + '18', borderRadius: 4 }} />
+                      </View>
+                    </Card>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {/* 3. Tasks by Status */}
+            <SectionHeader isDark={isDark} style={{ marginTop: 4 }}>
+              Tasks by Status
+            </SectionHeader>
+            <Card isDark={isDark} style={{ marginBottom: 22 }} padding={16}>
+              {/* Tasks by Status — SVG donut chart */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+                {/* SVG Donut */}
+                {(() => {
+                  const SIZE   = 88;
+                  const RADIUS = 32;
+                  const STROKE = 13;
+                  const CIRCUM = 2 * Math.PI * RADIUS;
+                  const cx     = SIZE / 2;
+                  const cy     = SIZE / 2;
+
+                  const segs = [
+                    { count: pendingTasks,    color: '#F59E0B' },
+                    { count: backlogTasks,    color: '#EF4444' },
+                    { count: inProgressTasks, color: '#3B82F6' },
+                    { count: completedTasks,  color: '#22C55E' },
+                    { count: reviewTasks,     color: '#A78BFA' },
+                  ].filter(s => s.count > 0);
+
+                  const total = segs.reduce((a, s) => a + s.count, 0) || 1;
+                  let offset  = CIRCUM * 0.25; // start from top (rotate -90°)
+
+                  return (
+                    <View style={{ width: SIZE, height: SIZE }}>
+                      <Svg width={SIZE} height={SIZE}>
+                        {/* Track */}
+                        <Circle
+                          cx={cx} cy={cy} r={RADIUS}
+                          fill="none"
+                          stroke={isDark ? '#252530' : '#EBEBF0'}
+                          strokeWidth={STROKE}
+                        />
+                        {/* Segments */}
+                        {segs.map((seg, i) => {
+                          const dash   = (seg.count / total) * CIRCUM;
+                          const gap    = CIRCUM - dash;
+                          const co     = offset;
+                          offset      -= dash;
+                          return (
+                            <Circle
+                              key={i}
+                              cx={cx} cy={cy} r={RADIUS}
+                              fill="none"
+                              stroke={seg.color}
+                              strokeWidth={STROKE}
+                              strokeDasharray={`${dash} ${gap}`}
+                              strokeDashoffset={co}
+                              strokeLinecap="butt"
+                            />
+                          );
+                        })}
+                      </Svg>
+                      {/* Center label */}
+                      <View style={{
+                        position: 'absolute', top: 0, left: 0,
+                        width: SIZE, height: SIZE,
+                        alignItems: 'center', justifyContent: 'center',
+                      }}>
+                        <Text style={{ fontSize: 15, fontWeight: '800', color: isDark ? '#fff' : T.ink }}>{totalTasks}</Text>
+                        <Text style={{ fontSize: 8, color: T.ink3 }}>Total</Text>
+                      </View>
+                    </View>
+                  );
+                })()}
+
+                {/* Legend */}
+                <View style={{ flex: 1, gap: 8 }}>
+                  {[
+                    { label: 'Pending',     count: pendingTasks,    color: '#F59E0B' },
+                    { label: 'Backlog',     count: backlogTasks,    color: '#EF4444' },
+                    { label: 'In Progress', count: inProgressTasks, color: '#3B82F6' },
+                    { label: 'Completed',   count: completedTasks,  color: '#22C55E' },
+                    { label: 'Review',      count: reviewTasks,     color: '#A78BFA' },
+                  ].map((item, i) => (
+                    <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: item.color, flexShrink: 0 }} />
+                      <Text style={{ width: 78, fontSize: 11, color: isDark ? '#9AA3B2' : T.ink2, fontWeight: '500' }} numberOfLines={1}>
+                        {item.label}
+                      </Text>
+                      {/* Progress bar */}
+                      <View style={{ flex: 1, height: 6, backgroundColor: isDark ? '#2A2A38' : '#EBEBF0', borderRadius: 3, overflow: 'hidden' }}>
+                        <View style={{ width: `${totalTasks > 0 ? Math.round((item.count / totalTasks) * 100) : 0}%`, height: '100%', backgroundColor: item.color, borderRadius: 3 }} />
+                      </View>
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: isDark ? '#fff' : T.ink, width: 26, textAlign: 'right' }}>
+                        {item.count}
+                      </Text>
+                    </View>
                   ))}
                 </View>
               </View>
-              <Text style={[styles.quickLabel, { color: sub }]}>My Tasks</Text>
-            </TouchableOpacity>
+            </Card>
 
-            {/* Documents — Report Card icon (teal, document with lines) */}
-            <TouchableOpacity
-              style={styles.quickItem}
-              onPress={() => { try { navigation.jumpTo('Docs'); } catch { navigation.navigate('Main', { screen: 'Docs' }); } }}
-            >
-              <View style={[styles.quickCircle, { backgroundColor: '#F0FDFA', borderColor: '#5EEAD4' }]}>
-                <View style={styles.reportCardIcon}>
-                  <View style={[styles.rcDoc, { backgroundColor: '#fff', borderColor: '#5EEAD4' }]}>
-                    <View style={[styles.rcLine, { backgroundColor: '#0D9488', width: '90%' }]} />
-                    <View style={[styles.rcLine, { backgroundColor: '#0D9488', width: '70%' }]} />
-                    <View style={[styles.rcBar, { backgroundColor: '#5EEAD4' }]} />
-                    <View style={[styles.rcBar, { backgroundColor: '#5EEAD4' }]} />
+            {/* Tasks Over Time — real data */}
+            <SectionHeader isDark={isDark} right={
+              <TouchableOpacity
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: isDark ? '#252530' : T.hairlineSoft, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 }}
+                onPress={() => setShowMonthPicker(v => !v)}
+              >
+                <Text style={{ fontSize: 11, color: isDark ? '#9AA3B2' : T.ink3, fontWeight: '600' }}>
+                  {new Date(selectedMonth.year, selectedMonth.month).toLocaleString('en-US', { month: 'short', year: 'numeric' })}
+                </Text>
+                <Text style={{ fontSize: 9, color: T.ink4 }}>▾</Text>
+              </TouchableOpacity>
+            }>
+              Tasks Over Time
+            </SectionHeader>
+            {showMonthPicker && (
+              <Card isDark={isDark} padding={8} style={{ marginBottom: 8 }}>
+                {Array.from({ length: 6 }, (_, i) => {
+                  const d = new Date(); d.setMonth(d.getMonth() - i);
+                  const yr = d.getFullYear(); const mo = d.getMonth();
+                  const label = d.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+                  const isSelected = selectedMonth.year === yr && selectedMonth.month === mo;
+                  return (
+                    <TouchableOpacity
+                      key={`${yr}-${mo}`}
+                      onPress={() => { setSelectedMonth({ year: yr, month: mo }); setShowMonthPicker(false); }}
+                      style={{ paddingVertical: 10, paddingHorizontal: 8, borderRadius: 8, backgroundColor: isSelected ? '#3B72EE18' : 'transparent' }}
+                    >
+                      <Text style={{ fontSize: 13, fontWeight: isSelected ? '700' : '500', color: isSelected ? '#3B72EE' : (isDark ? '#fff' : T.ink) }}>{label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </Card>
+            )}
+            <Card isDark={isDark} style={{ marginBottom: 22 }} padding={14}>
+              {(() => {
+                const { series, labels } = chartData;
+                const W = 280; const H = 110;
+                const allMax = Math.max(...series.flatMap(s => s.data), 1);
+                const toPoints = (data) => data.map((v, i) => {
+                  const x = ((i / (data.length - 1)) * W).toFixed(1);
+                  const y = (H - (v / allMax) * (H - 16) - 8).toFixed(1);
+                  return `${x},${y}`;
+                }).join(' ');
+                // Show 4 evenly spaced labels
+                const shownLabels = [labels[0], labels[2], labels[4], labels[7]];
+                return (
+                  <View>
+                    {/* Legend */}
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 10 }}>
+                      {series.map((s, i) => (
+                        <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                          <View style={{ width: 20, height: 2.5, backgroundColor: s.color, borderRadius: 2 }} />
+                          <Text style={{ fontSize: 10, color: isDark ? '#9AA3B2' : T.ink3, fontWeight: '500' }}>{s.label}</Text>
+                        </View>
+                      ))}
+                    </View>
+                    <Svg width={W} height={H}>
+                      {/* Gridlines */}
+                      {[0, 0.33, 0.66, 1].map((g, i) => (
+                        <Path key={i} d={`M0,${(H - g * (H - 16) - 8).toFixed(1)} L${W},${(H - g * (H - 16) - 8).toFixed(1)}`} stroke={isDark ? '#2A2A38' : '#EBEBF0'} strokeWidth={1} />
+                      ))}
+                      {/* Lines */}
+                      {series.map((s, i) => (
+                        <Polyline key={i} points={toPoints(s.data)} fill="none" stroke={s.color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+                      ))}
+                    </Svg>
+                    {/* Date axis */}
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4, paddingHorizontal: 2 }}>
+                      {shownLabels.map((l, i) => (
+                        <Text key={i} style={{ fontSize: 9, color: isDark ? '#555' : T.ink4 }}>{l}</Text>
+                      ))}
+                    </View>
                   </View>
-                </View>
-              </View>
-              <Text style={[styles.quickLabel, { color: sub }]}>Documents</Text>
-            </TouchableOpacity>
+                );
+              })()}
+            </Card>
 
-            {/* Quick Notes — Admit Card style (pink card with lightning) */}
-            <TouchableOpacity
-              style={styles.quickItem}
-              onPress={handleQuickNotesPress}
+            {/* My Tasks */}
+            <SectionHeader
+              isDark={isDark}
+              right={<TextLink onPress={() => { try { navigation.jumpTo('Tasks'); } catch { navigation.navigate('Tasks'); } }}>View all</TextLink>}
+              style={{ marginTop: 4 }}
             >
-              <View style={[styles.quickCircle, { backgroundColor: notesExpanded ? 'rgba(78,205,196,0.1)' : '#FFF1F2', borderColor: notesExpanded ? '#4ECDC4' : '#FDA4AF' }]}>
-                <View style={styles.admitCardIcon}>
-                  <View style={[styles.acCard, { backgroundColor: notesExpanded ? '#4ECDC4' : '#FB7185' }]}>
-                    <View style={[styles.acStripe, { backgroundColor: notesExpanded ? '#0D9488' : '#E11D48' }]} />
-                    <Text style={styles.acBolt}>⚡</Text>
-                  </View>
-                </View>
-              </View>
-              <Text style={[styles.quickLabel, { color: notesExpanded ? '#4ECDC4' : sub }]}>Quick Notes</Text>
-            </TouchableOpacity>
-
-          </View>
-
-          {/* Inline Quick Notes panel — shown when expanded */}
-          {notesExpanded && (
-            <View style={[styles.notesPanel, { borderTopColor: bdr }]}>
-              <View style={styles.notesPanelHeader}>
-                <Text style={[styles.notesPanelTitle, { color: txt }]}>⚡ Quick Notes</Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                  <TouchableOpacity onPress={openComposer}>
-                    <Text style={[styles.notesAddNew, { color: '#4ECDC4' }]}>+ New</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => setNotesExpanded(false)}>
-                    <Text style={[styles.notesCollapse, { color: sub }]}>✕</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-
-              {loadingNotes ? (
-                <View style={styles.notesEmpty}>
-                  <ActivityIndicator size="small" color="#4ECDC4" />
-                </View>
-              ) : quickNotes.length === 0 ? (
-                <View style={styles.notesEmpty}>
-                  <Text style={[styles.notesEmptyText, { color: sub }]}>No notes yet — tap + New to create one</Text>
+              My Tasks
+            </SectionHeader>
+            <Card isDark={isDark} style={{ marginBottom: 22 }} padding={12}>
+              <Tabs tabs={TABS} activeTab={activeTaskTab} onTab={setActiveTaskTab} />
+              {tasksByTab(activeTaskTab).length === 0 ? (
+                <View style={{ paddingVertical: 20, alignItems: 'center' }}>
+                  <Text style={{ fontSize: 13, color: T.ink4 }}>No tasks here</Text>
                 </View>
               ) : (
-                quickNotes.slice(0, 5).map((note, index, arr) => (
-                  <View
-                    key={note.id}
-                    style={[
-                      styles.noteCard,
-                      { borderBottomColor: isDark ? '#252530' : '#F5F5F7' },
-                      index === arr.length - 1 && { borderBottomWidth: 0, marginBottom: 0 },
-                    ]}
-                  >
-                    <View style={styles.noteLine} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.noteName, { color: txt }]} numberOfLines={1}>
-                        {note.title || 'Untitled note'}
-                      </Text>
-                      {!!note.content && (
-                        <Text style={[styles.noteDesc, { color: sub }]} numberOfLines={2}>
-                          {note.content}
+                tasksByTab(activeTaskTab).map((task, idx) => {
+                  const status = (task.status || '').toLowerCase();
+                  const priority = (task.priority || '').toLowerCase();
+                  const statusColor = STATUS_COLOR[status] || T.ink3;
+                  const priorityColor = PRIORITY_COLOR[priority] || T.ink3;
+                  return (
+                    <TouchableOpacity
+                      key={task.id}
+                      style={[s.taskRow, { borderColor: isDark ? '#252530' : T.hairline, backgroundColor: isDark ? '#1A1A20' : T.surface }]}
+                      onPress={() => navigation.navigate('Tasks')}
+                      activeOpacity={0.7}
+                    >
+                      {/* Circle checkbox */}
+                      <View style={{ width: 20, height: 20, borderRadius: 10, borderWidth: 1.5, borderColor: isDark ? '#404055' : '#CDCFDA', flexShrink: 0 }} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={[s.taskHeading, { color: isDark ? '#fff' : T.ink }]} numberOfLines={1}>
+                          {task.heading || task.title || 'Untitled'}
                         </Text>
-                      )}
-                      <Text style={[styles.noteDate, { color: isDark ? '#6C6C80' : '#AAAABC' }]}>
-                        {formatDate(note.created_at)}
+                        <View style={s.taskMeta}>
+                          <Text style={[s.taskMetaText, { color: isDark ? '#9AA3B2' : T.ink3 }]} numberOfLines={1}>
+                            {task.project_name || task.project || 'DYUKSA'}
+                          </Text>
+                          {task.due_date && (
+                            <>
+                              <Text style={[s.taskMetaDot, { color: T.ink4 }]}>·</Text>
+                              <Text style={[s.taskMetaText, { color: isDark ? '#9AA3B2' : T.ink3 }]}>{task.due_date}</Text>
+                            </>
+                          )}
+                        </View>
+                      </View>
+                      <View style={[s.statusPill, { backgroundColor: statusColor + '18' }]}>
+                        <Text style={[s.statusPillText, { color: statusColor }]}>
+                          {status.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })
+              )}
+            </Card>
+
+            {/* Projects Overview */}
+            <SectionHeader isDark={isDark} right={<TextLink onPress={() => navigation.navigate('Projects')}>View All</TextLink>}>
+              Projects Overview
+            </SectionHeader>
+            <Card isDark={isDark} style={{ marginBottom: 22, padding: 0 }}>
+              {projects.length === 0 ? (
+                <View style={{ paddingVertical: 20, alignItems: 'center' }}>
+                  <Text style={{ fontSize: 13, color: T.ink4 }}>No projects yet</Text>
+                </View>
+              ) : (
+                projects.slice(0, 5).map((proj, idx) => {
+                  const colors = [T.cBlue, T.cPurple, T.cGreen, T.cYellow, T.cRed];
+                  const color = colors[idx % colors.length];
+                  const taskCount = proj.task_count || proj.tasks_count || proj.total_tasks || 0;
+                  const progress = proj.progress || proj.completion_percentage || 0;
+                  const memberCount = (proj.members || proj.assigned_members || []).length || proj.member_count || 0;
+                  return (
+                    <TouchableOpacity
+                      key={proj.id}
+                      onPress={() => navigation.navigate('Projects')}
+                      activeOpacity={0.7}
+                      style={[
+                        s.projectRow,
+                        idx < Math.min(projects.length, 5) - 1 && { borderBottomWidth: 1, borderBottomColor: isDark ? '#252530' : T.hairlineSoft },
+                      ]}
+                    >
+                      <View style={[s.projectBar, { backgroundColor: color }]} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ fontSize: 13, fontWeight: '650', color: isDark ? '#fff' : T.ink }} numberOfLines={1}>
+                          {proj.name || 'Untitled'}
+                        </Text>
+                        <Text style={{ fontSize: 11, color: isDark ? '#9AA3B2' : T.ink3, marginTop: 2 }}>
+                          {taskCount} task{taskCount !== 1 ? 's' : ''}
+                          {memberCount > 0 ? ` · ${memberCount} member${memberCount !== 1 ? 's' : ''}` : ''}
+                        </Text>
+                      </View>
+                      <View style={{ width: 80, marginRight: 10 }}>
+                        <Progress value={progress} color={color} h={5} trackColor={isDark ? '#2A2A38' : T.hairlineSoft} />
+                      </View>
+                      <Text style={{ fontSize: 12, fontWeight: '650', color: isDark ? '#9AA3B2' : T.ink2, minWidth: 34, textAlign: 'right' }}>
+                        {progress}%
                       </Text>
+                    </TouchableOpacity>
+                  );
+                })
+              )}
+            </Card>
+
+            {/* Recent Activity */}
+            <SectionHeader isDark={isDark} right={<TextLink onPress={() => navigation.navigate('Docs')}>View All</TextLink>}>
+              Recent Activity
+            </SectionHeader>
+            <Card isDark={isDark} style={{ marginBottom: 22, padding: 0 }}>
+              {recentDocs.length === 0 ? (
+                <View style={{ paddingVertical: 20, alignItems: 'center' }}>
+                  <Text style={{ fontSize: 13, color: T.ink4 }}>No recent activity</Text>
+                </View>
+              ) : (
+                recentDocs.map((doc, idx) => {
+                  const ext = (doc.name || doc.file_name || '').split('.').pop()?.toLowerCase() || 'doc';
+                  const projectName = doc.project_name || doc.project?.name || doc.project_details?.name || '';
+                  const folderName  = doc.folder_name || doc.category || '';
+                  const path = [projectName, folderName].filter(Boolean).join(' / ');
+                  const when = fmtRelative(doc.created_at || doc.updated_at);
+                  return (
+                    <View
+                      key={doc.id}
+                      style={[
+                        s.activityRow,
+                        idx < recentDocs.length - 1 && { borderBottomWidth: 1, borderBottomColor: isDark ? '#252530' : T.hairlineSoft },
+                      ]}
+                    >
+                      <FileTile ext={ext} size={40} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ fontSize: 13, fontWeight: '600', color: isDark ? '#fff' : T.ink }} numberOfLines={1}>
+                          {doc.name || doc.file_name || 'Untitled'}
+                        </Text>
+                        <Text style={{ fontSize: 11, color: isDark ? '#9AA3B2' : T.ink3, marginTop: 2 }} numberOfLines={1}>
+                          {path ? `Uploaded in ${path}` : 'Uploaded'}
+                        </Text>
+                      </View>
+                      <Text style={{ fontSize: 11, color: T.ink4, flexShrink: 0 }}>{when}</Text>
                     </View>
+                  );
+                })
+              )}
+            </Card>
+
+            {/* Quick Actions */}
+            <SectionHeader isDark={isDark}>Quick Actions</SectionHeader>
+            <View style={s.quickGrid}>
+              {QUICK_ACTIONS.map((action, idx) => (
+                <TouchableOpacity key={idx} style={[s.quickBtn, { backgroundColor: isDark ? '#1A1A20' : T.surface, borderColor: isDark ? '#252530' : T.hairline }]} onPress={action.onPress} activeOpacity={0.7}>
+                  <View style={[s.quickIcon, { backgroundColor: isDark ? action.color + '22' : action.soft }]}>
+                    <Feather name={action.icon} size={20} color={action.color} />
                   </View>
-                ))
-              )}
+                  <Text style={[s.quickLabel, { color: isDark ? '#ccc' : T.ink2 }]}>{action.label}</Text>
+                </TouchableOpacity>
+              ))}
             </View>
-          )}
-        </View>
-
+          </>
+        )}
       </ScrollView>
-
-      {/* ── Quick Note Composer Modal ────────────────────────────────────── */}
-      <Modal
-        visible={composerVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={closeComposer}
-      >
-        <View style={styles.composerBackdrop}>
-          <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            style={{ width: '100%', alignItems: 'center' }}
-          >
-            <View style={[styles.composerCard, { backgroundColor: card, borderColor: bdr }]}>
-              <View style={styles.composerHeader}>
-                <Text style={[styles.composerTitle, { color: txt }]}>New Quick Note</Text>
-                <TouchableOpacity onPress={closeComposer} disabled={savingNote} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                  <Text style={[styles.composerClose, { color: sub }]}>✕</Text>
-                </TouchableOpacity>
-              </View>
-              <Text style={[styles.composerHint, { color: sub }]}>
-                Title is generated automatically when you save.
-              </Text>
-
-              <TextInput
-                style={[styles.composerInput, { color: txt, borderColor: bdr, backgroundColor: bg }]}
-                placeholder="Type your note here…"
-                placeholderTextColor={isDark ? '#5C5C6E' : '#AAAABC'}
-                value={draftContent}
-                onChangeText={setDraftContent}
-                multiline
-                autoFocus
-                editable={!savingNote}
-              />
-
-              {/* Folder + Project pickers (both required by backend) */}
-              <View style={{ flexDirection: 'row', gap: 8 }}>
-                <TouchableOpacity
-                  style={[styles.composerPickerBtn, { borderColor: bdr }]}
-                  onPress={() => setPicker('folder')}
-                  disabled={savingNote}
-                >
-                  <Text style={[styles.composerPickerLabel, { color: sub }]}>Folder</Text>
-                  <Text style={[styles.composerPickerValue, { color: txt }]} numberOfLines={1}>
-                    {foldersList.find(f => f.id === draftFolderId)?.name || 'Choose folder'}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.composerPickerBtn, { borderColor: bdr }]}
-                  onPress={() => setPicker('project')}
-                  disabled={savingNote}
-                >
-                  <Text style={[styles.composerPickerLabel, { color: sub }]}>Project</Text>
-                  <Text style={[styles.composerPickerValue, { color: txt }]} numberOfLines={1}>
-                    {projectsList.find(p => p.id === draftProjectId)?.name || 'Choose project'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
-              <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
-                <TouchableOpacity
-                  style={[styles.composerBtn, styles.composerCancel, { borderColor: bdr }]}
-                  onPress={closeComposer}
-                  disabled={savingNote}
-                >
-                  <Text style={[styles.composerCancelText, { color: txt }]}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.composerBtn, styles.composerSave, savingNote && { opacity: 0.6 }]}
-                  onPress={submitNote}
-                  disabled={savingNote}
-                >
-                  {savingNote ? (
-                    <ActivityIndicator size="small" color="#fff" />
-                  ) : (
-                    <Text style={styles.composerSaveText}>Save Note</Text>
-                  )}
-                </TouchableOpacity>
-              </View>
-            </View>
-          </KeyboardAvoidingView>
-        </View>
-      </Modal>
-
-      {/* Folder / Project picker (nested modal, shown above composer) */}
-      <Modal
-        visible={!!picker}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setPicker(null)}
-      >
-        <TouchableOpacity
-          style={styles.composerBackdrop}
-          activeOpacity={1}
-          onPress={() => setPicker(null)}
-        >
-          <View style={[styles.pickerSheet, { backgroundColor: card, borderColor: bdr }]}>
-            <Text style={[styles.composerTitle, { color: txt, marginBottom: 10 }]}>
-              Choose {picker === 'folder' ? 'folder' : 'project'}
-            </Text>
-            <ScrollView style={{ maxHeight: 320 }}>
-              {(picker === 'folder' ? foldersList : projectsList).map(item => {
-                const active = picker === 'folder' ? item.id === draftFolderId : item.id === draftProjectId;
-                return (
-                  <TouchableOpacity
-                    key={item.id}
-                    style={[styles.pickerItem, { borderBottomColor: bdr }, active && { backgroundColor: 'rgba(78,205,196,0.08)' }]}
-                    onPress={() => {
-                      if (picker === 'folder') setDraftFolderId(item.id);
-                      else setDraftProjectId(item.id);
-                      setPicker(null);
-                    }}
-                  >
-                    <Text style={[{ fontSize: 14, color: txt, flex: 1 }, active && { color: '#4ECDC4', fontWeight: '700' }]}>
-                      {item.name || `#${item.id}`}
-                    </Text>
-                    {active && <Text style={{ color: '#4ECDC4', fontSize: 14, fontWeight: '700' }}>✓</Text>}
-                  </TouchableOpacity>
-                );
-              })}
-              {(picker === 'folder' ? foldersList : projectsList).length === 0 && (
-                <Text style={[styles.notesEmptyText, { color: sub, padding: 16 }]}>
-                  Loading…
-                </Text>
-              )}
-            </ScrollView>
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* ── Status Picker Modal (used by both task pills and doc pills) ─── */}
-      <Modal
-        visible={!!statusPicker}
-        transparent
-        animationType="fade"
-        onRequestClose={() => !savingStatus && setStatusPicker(null)}
-      >
-        <TouchableOpacity
-          style={styles.composerBackdrop}
-          activeOpacity={1}
-          onPress={() => !savingStatus && setStatusPicker(null)}
-        >
-          <View style={[styles.statusPickerCard, { backgroundColor: card, borderColor: bdr }]}>
-            {(() => {
-              if (!statusPicker) return null;
-              const isTask = statusPicker.type === 'task';
-              const target = isTask
-                ? inProgressTasks.find(x => x.id === statusPicker.id)
-                : recentDocs.find(x => x.id === statusPicker.id);
-              const opts    = isTask ? TASK_STATUS_OPTIONS : DOC_STATUS_OPTIONS;
-              const labels  = isTask ? TASK_STATUS_LABELS  : DOC_STATUS_LABELS;
-              const colors  = isTask ? TASK_STATUS_COLORS  : DOC_STATUS_COLORS;
-              const current = (target?.status || (isTask ? 'in_progress' : 'draft')).toLowerCase();
-              return (
-                <>
-                  <Text style={[styles.composerTitle, { color: txt }]}>
-                    Change {isTask ? 'Task' : 'Document'} Status
-                  </Text>
-                  <Text style={[styles.composerHint, { color: sub }]} numberOfLines={1}>
-                    {target?.heading || target?.name || ''}
-                  </Text>
-                  <View style={{ height: 6 }} />
-                  {opts.map(opt => {
-                    const active = current === opt;
-                    const color  = colors[opt] || '#888';
-                    return (
-                      <TouchableOpacity
-                        key={opt}
-                        style={[
-                          styles.statusOptionRow,
-                          { borderColor: bdr },
-                          active && { backgroundColor: color + '15', borderColor: color },
-                        ]}
-                        onPress={() => updateStatus(opt)}
-                        disabled={savingStatus}
-                        activeOpacity={0.7}
-                      >
-                        <View style={[styles.statusDot, { backgroundColor: color }]} />
-                        <Text style={[
-                          styles.statusOptionText,
-                          { color: txt },
-                          active && { color, fontWeight: '700' },
-                        ]}>
-                          {labels[opt]}
-                        </Text>
-                        {active && <Text style={[styles.statusOptionCheck, { color }]}>✓</Text>}
-                      </TouchableOpacity>
-                    );
-                  })}
-                  {savingStatus && (
-                    <View style={styles.statusOverlay}>
-                      <ActivityIndicator size="small" color="#4ECDC4" />
-                    </View>
-                  )}
-                </>
-              );
-            })()}
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#F5F5F7' },
-  navbar: { backgroundColor: '#fff', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#EBEBF0', elevation: 2 },
+/* ------------------------------------------------------------------ */
+/*  Styles                                                             */
+/* ------------------------------------------------------------------ */
+const s = StyleSheet.create({
+  safe: { flex: 1 },
+
+  // Navbar
+  navbar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1 },
   navLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   navRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  navIconBtn: { width: 36, height: 36, borderRadius: 8, borderWidth: 1, justifyContent: 'center', alignItems: 'center' },
+  navIcon: { fontSize: 16 },
   logoBox: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center' },
   logoText: { color: '#4ECDC4', fontSize: 15, fontWeight: '800' },
-  brandName: { fontSize: 15, fontWeight: '700', color: '#1A1A2E', letterSpacing: 1 },
-  navIconBtn: { width: 36, height: 36, borderRadius: 8, borderWidth: 1, borderColor: '#EBEBF0', justifyContent: 'center', alignItems: 'center', backgroundColor: '#FAFAFA' },
-  navIcon: { fontSize: 16 },
-  pageHeader: { backgroundColor: '#fff', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#EBEBF0' },
-  welcomeText: { fontSize: 18, fontWeight: '700', color: '#1A1A2E' },
-  subText: { fontSize: 12, color: '#888899', marginTop: 2 },
-  scroll: { flex: 1, padding: 12 },
-  card: { backgroundColor: '#fff', borderRadius: 14, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: '#EBEBF0' },
-  fixedCard: { minHeight: 160 },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  cardTitle: { fontSize: 14, fontWeight: '600', color: '#1A1A2E', marginBottom: 10 },
-  viewAll: { fontSize: 12, color: '#888899' },
+  brandName: { fontWeight: '700', fontSize: 15 },
 
-  // Empty / loading states
-  emptyState: { alignItems: 'center', paddingVertical: 16, gap: 8 },
-  loadingState: { paddingVertical: 28, alignItems: 'center' },
-  emptyIcon: { fontSize: 28, opacity: 0.3 },
-  emptyLabel: { fontSize: 13, color: '#888899', textAlign: 'center', fontWeight: '500' },
-  emptySubLabel: { fontSize: 11, color: '#AAAABC', textAlign: 'center' },
+  // Greeting card
+  greetCard: { borderRadius: T.rLg, padding: 20, marginBottom: 22, overflow: 'hidden' },
+  decoCircle: { position: 'absolute', borderRadius: 999, backgroundColor: '#fff' },
+  greetDate: { fontSize: 13, fontWeight: '600', color: 'rgba(255,255,255,0.8)', marginBottom: 4 },
+  greetMsg: { fontSize: 15, fontWeight: '500', color: '#fff', lineHeight: 21, marginBottom: 18 },
+  greetStats: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 6 },
+  greetStat: { flex: 1, alignItems: 'center' },
+  greetStatVal: { fontSize: 18, fontWeight: '700', color: '#fff' },
+  greetStatLbl: { fontSize: 11, fontWeight: '500', color: 'rgba(255,255,255,0.7)', marginTop: 2 },
+  greetDivider: { width: 1, height: 28, backgroundColor: 'rgba(255,255,255,0.25)' },
 
-  // Task row (In Progress section)
-  taskRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingVertical: 10, paddingHorizontal: 10,
-    borderRadius: 10, borderWidth: 1, overflow: 'hidden',
-  },
+  // Overview grid
+  overviewGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 22 },
+  statCard: { width: '48%', flexGrow: 1 },
+  statIcon: { width: 30, height: 30, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
+  statLabel: { fontSize: 11.5, fontWeight: '500', flex: 1 },
+  statValue: { fontSize: 22, fontWeight: '700', letterSpacing: -0.4, marginTop: 2 },
+
+  // Task rows
+  taskRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, paddingHorizontal: 10, borderRadius: 10, borderWidth: 1, overflow: 'hidden', marginBottom: 6 },
   priorityBar: { width: 3, height: 36, borderRadius: 2 },
   taskHeading: { fontSize: 13, fontWeight: '600' },
   taskMeta: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
   taskMetaText: { fontSize: 11, flexShrink: 1 },
   taskMetaDot: { fontSize: 11 },
-  statusPill: {
-    backgroundColor: 'rgba(245,158,11,0.12)',
-    paddingHorizontal: 8, paddingVertical: 3,
-    borderRadius: 6,
-  },
-  statusPillText: { color: '#F59E0B', fontSize: 10, fontWeight: '700' },
+  statusPill: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
+  statusPillText: { fontSize: 10, fontWeight: '700' },
 
-  // Doc row (Recent Documents section)
-  docRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingVertical: 10, paddingHorizontal: 10,
-    borderRadius: 10, borderWidth: 1,
-  },
-  docIcon: {
-    width: 38, height: 38, borderRadius: 8,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  docIconText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
-  docName: { fontSize: 13, fontWeight: '600' },
-  docMeta: { fontSize: 11, marginTop: 2 },
-  chevron: { fontSize: 22, fontWeight: '300' },
+  // Projects
+  projectRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, paddingHorizontal: 14 },
+  projectBar: { width: 8, height: 36, borderRadius: 4 },
 
-  // Project row (Favourite Projects section)
-  projectRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingVertical: 10, paddingHorizontal: 10,
-    borderRadius: 10, borderWidth: 1,
-  },
-  projectAvatar: {
-    width: 38, height: 38, borderRadius: 19,
-    backgroundColor: '#4ECDC4',
-    justifyContent: 'center', alignItems: 'center',
-  },
-  projectAvatarText: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  projectName: { fontSize: 13, fontWeight: '600' },
-  projectMeta: { fontSize: 11, marginTop: 2 },
+  // Activity / docs
+  activityRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, paddingHorizontal: 14 },
 
   // Quick Actions
-  quickRow: { flexDirection: 'row', gap: 10 },
-  quickGrid: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4, paddingHorizontal: 4 },
-  quickItem: { alignItems: 'center', gap: 8, width: '25%' },
-  quickCircle: { width: 60, height: 60, borderRadius: 30, borderWidth: 2, justifyContent: 'center', alignItems: 'center' },
-  quickBtn: { width: '48%', alignItems: 'center', paddingVertical: 18, borderRadius: 10, borderWidth: 1, borderColor: '#EBEBF0', gap: 8 },
-  quickBtnActive: { borderColor: '#4ECDC4', backgroundColor: 'rgba(78,205,196,0.06)' },
-  quickIcon: { fontSize: 26 },
-  quickLabel: { fontSize: 11, textAlign: 'center', fontWeight: '600', lineHeight: 14 },
-  quickLabelActive: { color: '#4ECDC4', fontWeight: '700' },
-
-  // ── Exam Form icon (Events) ──
-  examFormIcon: { alignItems: 'center', width: 36, height: 40 },
-  efClip: { width: 14, height: 5, borderRadius: 3, marginBottom: -2, zIndex: 1 },
-  efBody: { width: 30, height: 36, borderRadius: 4, borderWidth: 1.5, padding: 5, gap: 3, justifyContent: 'center' },
-  efLine: { height: 2.5, borderRadius: 2 },
-  efDot: { width: 6, height: 6, borderRadius: 3, alignSelf: 'flex-start', marginTop: 1 },
-
-  // ── Seating / People grid icon (My Tasks) ──
-  seatingIcon: { flexDirection: 'row', flexWrap: 'wrap', width: 36, height: 28, gap: 4, justifyContent: 'center', alignContent: 'center' },
-  seatDot: { width: 9, height: 9, borderRadius: 5 },
-
-  // ── Report Card icon (Documents) ──
-  reportCardIcon: { alignItems: 'center' },
-  rcDoc: { width: 32, height: 38, borderRadius: 4, borderWidth: 1.5, padding: 5, gap: 4, justifyContent: 'center' },
-  rcLine: { height: 2.5, borderRadius: 2 },
-  rcBar: { height: 5, borderRadius: 2, width: '100%' },
-
-  // ── Admit Card icon (Quick Notes) ──
-  admitCardIcon: { alignItems: 'center' },
-  acCard: { width: 34, height: 26, borderRadius: 5, justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
-  acStripe: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 8 },
-  acBolt: { fontSize: 14, marginLeft: 6 },
-
-  // Inline notes panel inside Quick Actions card
-  notesPanel: { marginTop: 14, borderTopWidth: 1, borderTopColor: '#F0F0F5', paddingTop: 12 },
-  notesPanelHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-  notesPanelTitle: { fontSize: 13, fontWeight: '700', color: '#1A1A2E' },
-  notesCollapse: { fontSize: 13, color: '#AAAABC', fontWeight: '600', paddingHorizontal: 4 },
-  notesEmpty: { paddingVertical: 14, alignItems: 'center' },
-  notesEmptyText: { fontSize: 12, color: '#AAAABC' },
-  noteCard: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F5F5F7', marginBottom: 2 },
-  noteLine: { width: 3, height: 40, backgroundColor: '#4ECDC4', borderRadius: 2, marginTop: 2 },
-  noteName: { fontSize: 13, fontWeight: '600', color: '#1A1A2E' },
-  noteDesc: { fontSize: 12, color: '#888899', marginTop: 2, lineHeight: 17 },
-  noteDate: { fontSize: 11, color: '#AAAABC', marginTop: 4 },
-  noteBadge: { borderRadius: 20, paddingHorizontal: 9, paddingVertical: 3, alignSelf: 'flex-start', marginTop: 2 },
-  noteBadgeText: { fontSize: 10, fontWeight: '600' },
-  notesAddNew: { fontSize: 12, fontWeight: '700' },
-
-  // ── Quick Note Composer Modal ─────────────────────────────────────────
-  composerBackdrop: {
-    flex: 1, backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'center', alignItems: 'center',
-    paddingHorizontal: 16,
-  },
-  composerCard: {
-    width: '100%', maxWidth: 400,
-    borderRadius: 14, borderWidth: 1,
-    padding: 16,
-  },
-  composerHeader: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    marginBottom: 4,
-  },
-  composerTitle: { fontSize: 16, fontWeight: '700' },
-  composerClose: { fontSize: 18, fontWeight: '600', paddingHorizontal: 4 },
-  composerHint: { fontSize: 11, marginBottom: 10 },
-  composerInput: {
-    minHeight: 110, maxHeight: 200,
-    borderWidth: 1, borderRadius: 10,
-    paddingHorizontal: 12, paddingVertical: 10,
-    fontSize: 14, lineHeight: 20,
-    textAlignVertical: 'top',
-    marginBottom: 10,
-  },
-  composerPickerBtn: {
-    flex: 1, borderWidth: 1, borderRadius: 10,
-    paddingHorizontal: 12, paddingVertical: 8,
-  },
-  composerPickerLabel: { fontSize: 10, fontWeight: '600', marginBottom: 2 },
-  composerPickerValue: { fontSize: 13, fontWeight: '600' },
-  composerBtn: {
-    flex: 1, height: 42, borderRadius: 10,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  composerCancel: { borderWidth: 1, backgroundColor: 'transparent' },
-  composerCancelText: { fontSize: 14, fontWeight: '600' },
-  composerSave: { backgroundColor: '#1A1A2E' },
-  composerSaveText: { color: '#fff', fontSize: 14, fontWeight: '700' },
-
-  // Folder / Project picker sheet (shown above composer)
-  pickerSheet: {
-    width: '100%', maxWidth: 360,
-    borderRadius: 14, borderWidth: 1,
-    padding: 14,
-  },
-  pickerItem: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 10, paddingVertical: 12,
-    borderBottomWidth: 1,
-  },
-
-  // Doc status pill in Recent Documents
-  docStatusPill: {
-    flexDirection: 'row', alignItems: 'center', gap: 3,
-    paddingHorizontal: 8, paddingVertical: 4,
-    borderRadius: 6,
-  },
-  docStatusText: { fontSize: 9, fontWeight: '700', letterSpacing: 0.4 },
-
-  // Favourite star button on Favourite Projects rows
-  projectFavBtn: {
-    paddingHorizontal: 6, paddingVertical: 2,
-    marginRight: 4,
-    minWidth: 28, alignItems: 'center',
-  },
-  projectFavIcon: { fontSize: 20, color: '#C0C0CE', lineHeight: 22 },
-  projectFavIconActive: { color: '#F59E0B' },
-
-  // Status picker modal (shared between task and doc)
-  statusPickerCard: {
-    width: '100%', maxWidth: 360,
-    borderRadius: 14, borderWidth: 1,
-    padding: 16,
-  },
-  statusOptionRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingHorizontal: 12, paddingVertical: 11,
-    borderRadius: 10, borderWidth: 1, marginBottom: 6,
-  },
-  statusDot: { width: 10, height: 10, borderRadius: 5 },
-  statusOptionText: { flex: 1, fontSize: 13, fontWeight: '500' },
-  statusOptionCheck: { fontSize: 14, fontWeight: '700' },
-  statusOverlay: {
-    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: 'rgba(255,255,255,0.55)',
-    borderRadius: 14,
-    justifyContent: 'center', alignItems: 'center',
-  },
+  quickGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 22 },
+  quickBtn: { width: '31%', flexGrow: 1, borderRadius: T.rMd, borderWidth: 1, paddingVertical: 16, alignItems: 'center', gap: 8 },
+  quickIcon: { width: 42, height: 42, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  quickLabel: { fontSize: 11.5, fontWeight: '600' },
 });
