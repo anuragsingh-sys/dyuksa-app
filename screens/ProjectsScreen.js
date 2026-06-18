@@ -1,7 +1,7 @@
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   Modal, TextInput, StatusBar, Platform,
-  ScrollView, Animated, Image, Alert, ActivityIndicator,
+  ScrollView, Animated, Image, Alert, ActivityIndicator, RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useState, useRef, useContext, useEffect, useCallback, useMemo } from 'react';
@@ -244,7 +244,6 @@ export default function ProjectsScreen() {
     const currentlyFav = isProjectFav(project);
     const next = !currentlyFav;
     setProjects(prev => prev.map(p => p.id === project.id ? { ...p, [key]: next } : p));
-    if (selectedProject?.id === project.id) setSelectedProject(p => p ? { ...p, [key]: next } : p);
     try {
       const token = await getAccessToken();
       const res = await fetch(`${API_BASE}/api/v1/projects/${project.id}/`, {
@@ -255,7 +254,6 @@ export default function ProjectsScreen() {
       if (!res.ok) throw new Error(`${res.status}`);
     } catch (e) {
       setProjects(prev => prev.map(p => p.id === project.id ? { ...p, [key]: currentlyFav } : p));
-      if (selectedProject?.id === project.id) setSelectedProject(p => p ? { ...p, [key]: currentlyFav } : p);
       Alert.alert('Could not update favourite', e?.message || 'Try again later.');
     }
   };
@@ -401,9 +399,11 @@ export default function ProjectsScreen() {
         contentContainerStyle={{ padding: 14, paddingBottom: 110 }}
         showsVerticalScrollIndicator={false}
         refreshControl={
-          <ActivityIndicator
-            animating={loadingProjects}
-            color={T.brand}
+          <RefreshControl
+            refreshing={loadingProjects}
+            onRefresh={fetchProjects}
+            tintColor={T.brand}
+            colors={[T.brand]}
           />
         }
       >
