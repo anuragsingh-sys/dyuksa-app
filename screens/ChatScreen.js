@@ -1082,7 +1082,7 @@ const styles = StyleSheet.create({
   navRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   logoBox: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center' },
   logoText: { color: '#3B72EE', fontSize: 15, fontWeight: '800' },
-  brandName: { fontWeight: '700', fontSize: 15 },
+  brandName: { fontWeight: '700', fontSize: 17 },
 
   // Search
   searchWrap: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, height: 42 },

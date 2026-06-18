@@ -824,7 +824,7 @@ const s = StyleSheet.create({
   navIcon: { fontSize: 16 },
   logoBox: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center' },
   logoText: { color: '#4ECDC4', fontSize: 15, fontWeight: '800' },
-  brandName: { fontWeight: '700', fontSize: 15 },
+  brandName: { fontWeight: '700', fontSize: 17 },
 
   // Greeting card
   greetCard: { borderRadius: T.rLg, padding: 20, marginBottom: 22, overflow: 'hidden' },

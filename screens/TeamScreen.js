@@ -200,7 +200,7 @@ const s = StyleSheet.create({
   navLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   logoBox: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center' },
   logoText: { color: '#4ECDC4', fontSize: 15, fontWeight: '800' },
-  brandName: { fontWeight: '700', fontSize: 15 },
+  brandName: { fontWeight: '700', fontSize: 17 },
   searchWrap: { paddingHorizontal: 12, paddingVertical: 8, borderBottomWidth: 1 },
   searchBar: { flexDirection: 'row', alignItems: 'center', borderRadius: 12, height: 42, paddingHorizontal: 12, borderWidth: 1 },
   searchInput: { flex: 1, fontSize: 14, height: 42 },
