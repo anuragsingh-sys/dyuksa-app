@@ -10,17 +10,30 @@ import { AuthContext } from '../context/AuthContext';
 import { useWorkspace } from '../context/WorkspaceContext';
 import { canCreateWorkspace, canManageMembers } from '../utils/permissions';
 import { Feather } from '@expo/vector-icons';
+import Svg, { Path, Rect } from 'react-native-svg';
 
 const SIDEBAR_WIDTH  = 260;
 
-const SidebarItem = ({ icon, label, active, hasArrow, onPress, isDarkMode }) => (
+const NotebookIcon = ({ color, size = 18 }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+    <Path d="M2 6h4"/>
+    <Path d="M2 10h4"/>
+    <Path d="M2 14h4"/>
+    <Path d="M2 18h4"/>
+    <Rect width="16" height="20" x="4" y="2" rx="2"/>
+    <Path d="M16 2v20"/>
+  </Svg>
+);
+
+const SidebarItem = ({ icon, svgIcon, label, active, hasArrow, onPress, isDarkMode }) => (
   <TouchableOpacity
     style={[styles.sidebarItem, active && styles.sidebarItemActive]}
     onPress={onPress}
     activeOpacity={0.7}
   >
     <View style={styles.sidebarItemIconWrap}>
-      <Feather name={icon} size={18} color={active ? '#2D6AE3' : (isDarkMode ? '#9898A6' : '#6B7588')} />
+      {svgIcon ? svgIcon({ color: active ? '#3B72EE' : (isDarkMode ? '#9898A6' : '#6B7588'), size: 18 })
+               : <Feather name={icon} size={18} color={active ? '#2D6AE3' : (isDarkMode ? '#9898A6' : '#6B7588')} />}
     </View>
     <Text style={[styles.sidebarItemLabel, { color: isDarkMode ? '#9898A6' : '#3B4658' }, active && styles.sidebarItemLabelActive]}>{label}</Text>
     {hasArrow && <Feather name="chevron-right" size={14} color={isDarkMode ? '#5C5C6E' : '#9AA3B2'} style={{ marginLeft: 'auto' }} />}
@@ -103,8 +116,8 @@ export default function SidebarMenu({ activeScreen }) {
                 onPress={() => goToStack('Profile')}
                 activeOpacity={0.7}
               >
-                {user?.avatarUrl ? (
-                  <Image source={{ uri: user.avatarUrl }} style={styles.userAvatarImage} />
+                {user?.avatarUrl || user?.avatar ? (
+                  <Image source={{ uri: user.avatarUrl || user.avatar }} style={styles.userAvatarImage} />
                 ) : (
                   <View style={styles.userAvatar}>
                     <Text style={styles.userAvatarText}>{user?.avatar || user?.name?.[0]?.toUpperCase() || 'U'}</Text>
@@ -129,7 +142,7 @@ export default function SidebarMenu({ activeScreen }) {
                 <SidebarItem icon="calendar"      label="Calendar"       active={activeScreen === 'Calendar'}   onPress={() => goToTab('Calendar')} isDarkMode={isDark} />
                 <SidebarItem icon="briefcase"     label="My Work"        active={activeScreen === 'MyWork'}     onPress={() => goToStack('MyWork')} isDarkMode={isDark} />
                 <SidebarItem icon="bar-chart-2"   label="Reports"        active={activeScreen === 'Reports'}    onPress={() => goToStack('Reports')} isDarkMode={isDark} />
-                <SidebarItem icon="zap"           label="Quick Notes"    active={activeScreen === 'QuickNotes'} onPress={() => goToStack('QuickNotes')} isDarkMode={isDark} />
+                <SidebarItem svgIcon={NotebookIcon} label="Notes"         active={activeScreen === 'QuickNotes'} onPress={() => goToStack('QuickNotes')} isDarkMode={isDark} />
                 {canManageMembers(user?.role) && (
                   <SidebarItem icon="users"       label="Team Management" onPress={() => goToStack('TeamManagement')} isDarkMode={isDark} />
                 )}
@@ -151,7 +164,7 @@ export default function SidebarMenu({ activeScreen }) {
                   <Text style={styles.wsLabel}>Workspace</Text>
                 </View>
                 {loadingWorkspaces
-                  ? <ActivityIndicator size="small" color="#4ECDC4" />
+                  ? <ActivityIndicator size="small" color="#3B72EE" />
                   : <Text style={styles.wsChevron}>{wsExpanded ? '▲' : '▾'}</Text>
                 }
               </TouchableOpacity>
@@ -190,7 +203,7 @@ export default function SidebarMenu({ activeScreen }) {
                               {ws.name}
                             </Text>
                             {switching
-                              ? <ActivityIndicator size="small" color="#4ECDC4" />
+                              ? <ActivityIndicator size="small" color="#3B72EE" />
                               : isActive
                                 ? <Text style={styles.wsItemCheck}>✓</Text>
                                 : null
@@ -263,7 +276,7 @@ const styles = StyleSheet.create({
   sidebarDivider: { height: 1, backgroundColor: 'rgba(0,0,0,0.08)', marginHorizontal: 16, marginVertical: 6 },
 
   sidebarFooter: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 10 },
-  userAvatar: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#4ECDC4', justifyContent: 'center', alignItems: 'center' },
+  userAvatar: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#3B72EE', justifyContent: 'center', alignItems: 'center' },
   userAvatarImage: { width: 34, height: 34, borderRadius: 17 },
   userAvatarText: { color: '#1A1A2E', fontWeight: '700', fontSize: 14 },
   userName: { fontSize: 13, fontWeight: '600' },
@@ -277,7 +290,7 @@ const styles = StyleSheet.create({
     marginHorizontal: 12,
     marginBottom: 8,
     paddingHorizontal: 14,
-    paddingVertical: 11,
+    paddingVertical: 8,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: '#E6E9EF',
@@ -318,17 +331,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14, paddingVertical: 11,
     borderRadius: 8, marginHorizontal: 6, marginBottom: 2,
   },
-  wsItemActive: { backgroundColor: 'rgba(78,205,196,0.14)' },
+  wsItemActive: { backgroundColor: 'rgba(59,114,238,0.10)' },
   wsItemAvatar: {
     width: 26, height: 26, borderRadius: 7,
     backgroundColor: '#EEF0F4',
     justifyContent: 'center', alignItems: 'center',
   },
-  wsItemAvatarActive: { backgroundColor: '#4ECDC4' },
+  wsItemAvatarActive: { backgroundColor: '#3B72EE' },
   wsItemAvatarText: { color: '#6B7280', fontSize: 11, fontWeight: '700' },
   wsItemName: { flex: 1, color: '#3A3A4A', fontSize: 13, fontWeight: '500' },
-  wsItemNameActive: { color: '#1AA89E', fontWeight: '700' },
-  wsItemCheck: { color: '#1AA89E', fontSize: 14, fontWeight: '700' },
+  wsItemNameActive: { color: '#3B72EE', fontWeight: '700' },
+  wsItemCheck: { color: '#3B72EE', fontSize: 14, fontWeight: '700' },
   wsEmpty: { color: '#9098A6', fontSize: 12, textAlign: 'center', padding: 12 },
   wsFooterNote: {
     borderTopWidth: 1, borderTopColor: '#E6E9EF',
@@ -337,7 +350,7 @@ const styles = StyleSheet.create({
   },
   wsFooterNoteText: { color: '#9098A6', fontSize: 10, textAlign: 'center' },
 
-  sidebarBottom: { flexDirection: 'row', paddingHorizontal: 12, paddingBottom: 16, gap: 8, borderTopWidth: 1, borderTopColor: 'rgba(0,0,0,0.06)' },
+  sidebarBottom: { flexDirection: 'row', paddingHorizontal: 12, paddingBottom: 16, gap: 8 },
   sidebarBottomBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(0,0,0,0.08)' },
   sidebarBottomIcon: { fontSize: 14 },
   sidebarBottomText: { color: '#9898A6', fontSize: 12, fontWeight: '500' },

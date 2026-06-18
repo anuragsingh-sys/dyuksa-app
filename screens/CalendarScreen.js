@@ -4,6 +4,7 @@ import {
   KeyboardAvoidingView, Keyboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import Svg, { Circle, Line } from 'react-native-svg';
 import React, { useState, useCallback, useContext, useRef, useEffect } from 'react';
 import { useNavigation, useFocusEffect, useRoute } from '@react-navigation/native';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -29,7 +30,7 @@ const HOURS = Array.from({ length: 16 }, (_, i) => i + 7); // 07:00 to 22:00
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const STATUS_COLORS = { pending: '#FBBF24', in_progress: '#4ECDC4', completed: '#4ADE80', deployed: '#3B82F6', deferred: '#888899', review: '#A78BFA' };
+const STATUS_COLORS = { pending: '#FBBF24', in_progress: '#3B72EE', completed: '#4ADE80', deployed: '#3B82F6', deferred: '#888899', review: '#A78BFA' };
 const EVENT_TYPES = [
   { id: 'Meeting',   label: 'Meeting',   color: '#2D6AE3', soft: '#E6EEFC' },
   { id: 'Review',    label: 'Review',    color: '#A78BFA', soft: '#EEEAFE' },
@@ -117,7 +118,7 @@ function WheelColumn({ data, selectedIndex, onChange, txtColor, subColor, accent
   );
 }
 
-function WheelTimePicker({ value, onChange, txtColor, subColor, bdrColor, accent = '#4ECDC4' }) {
+function WheelTimePicker({ value, onChange, txtColor, subColor, bdrColor, accent = '#3B72EE' }) {
   // Derive 12-hour display values
   const d = value instanceof Date ? value : new Date();
   const hours24 = d.getHours();
@@ -156,7 +157,7 @@ function WheelTimePicker({ value, onChange, txtColor, subColor, bdrColor, accent
           top:    WHEEL_ITEM_HEIGHT * 2,
           height: WHEEL_ITEM_HEIGHT,
           left: 0, right: 0,
-          backgroundColor: (accent || '#4ECDC4') + '12',
+          backgroundColor: (accent || '#3B72EE') + '12',
           borderRadius: 8,
         }} />
         <View style={{ width: 80 }}>
@@ -1609,7 +1610,7 @@ export default function CalendarScreen() {
               }}
             >
               <View style={[styles.miniDateCircle, isToday && styles.miniDateToday, isSelected && !isToday && styles.miniDateSelected]}>
-                <Text style={[styles.miniDateText, { color: txt }, isToday && { color: '#fff' }, isSelected && !isToday && { color: '#4ECDC4', fontWeight: '700' }]}>{d}</Text>
+                <Text style={[styles.miniDateText, { color: txt }, isToday && { color: '#fff' }, isSelected && !isToday && { color: '#3B72EE', fontWeight: '700' }]}>{d}</Text>
               </View>
               {hasEv && <View style={styles.miniDot} />}
             </TouchableOpacity>
@@ -1653,7 +1654,7 @@ export default function CalendarScreen() {
                       {dayEvs.slice(0, 3).map((ev, i) => (
                         <View key={i} style={{
                           width: 5, height: 5, borderRadius: 3,
-                          backgroundColor: ev.color || (ev.type === 'task' ? '#4ECDC4' : '#2D6AE3'),
+                          backgroundColor: ev.color || (ev.type === 'task' ? '#3B72EE' : '#2D6AE3'),
                         }} />
                       ))}
                     </View>
@@ -1677,7 +1678,7 @@ export default function CalendarScreen() {
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10 }}>
                 <Text style={{ fontSize: 14, fontWeight: '700', color: txt }}>{label} Events</Text>
                 <TouchableOpacity onPress={() => { setCurrentDate(selectedMonthDate); setViewMode('day'); }}>
-                  <Text style={{ fontSize: 12, color: '#4ECDC4', fontWeight: '600' }}>Open day →</Text>
+                  <Text style={{ fontSize: 12, color: '#3B72EE', fontWeight: '600' }}>Open day →</Text>
                 </TouchableOpacity>
               </View>
               {selEvs.length === 0 ? (
@@ -1687,7 +1688,7 @@ export default function CalendarScreen() {
               ) : selEvs.map((ev, i) => {
                 const startTime = ev.eventTimestamp ? new Date(ev.eventTimestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) : '';
                 const endTime   = ev.eventEndTimestamp ? new Date(ev.eventEndTimestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) : '';
-                const color     = ev.color || (ev.type === 'task' ? '#4ECDC4' : '#2D6AE3');
+                const color     = ev.color || (ev.type === 'task' ? '#3B72EE' : '#2D6AE3');
                 return (
                   <TouchableOpacity
                     key={ev.id || i}
@@ -1851,13 +1852,6 @@ export default function CalendarScreen() {
       <View style={[styles.navbar, { backgroundColor: card, borderBottomColor: bdr }]}>
         <View style={styles.navLeft}>
           <SidebarMenu activeScreen="Calendar" />
-          <TouchableOpacity
-            style={styles.logoBox}
-            onPress={() => { try { navigation.jumpTo('Dashboard'); } catch { navigation.navigate('Main', { screen: 'Dashboard' }); } }}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.logoText}>D</Text>
-          </TouchableOpacity>
           <Text style={[styles.brandName, { color: txt }]}>Calendar</Text>
         </View>
         <View style={styles.navRight}>
@@ -1876,7 +1870,7 @@ export default function CalendarScreen() {
         {[
           { label: 'TOTAL',   value: totalEvents,  color: txt,        filter: 'All' },
           { label: 'DONE',    value: doneEvents,   color: '#4ADE80',  filter: 'completed' },
-          { label: 'ACTIVE',  value: activeEvents, color: '#4ECDC4',  filter: 'in_progress' },
+          { label: 'ACTIVE',  value: activeEvents, color: '#3B72EE',  filter: 'in_progress' },
           { label: 'PENDING', value: pendingEvents, color: '#FBBF24', filter: 'pending' },
         ].map((s, i, arr) => (
           <TouchableOpacity
@@ -1996,7 +1990,7 @@ export default function CalendarScreen() {
             <View style={[styles.legend, { borderTopColor: bdr }]}>
               {[
                 { label: 'Pending',     color: '#FBBF24' },
-                { label: 'In Progress', color: '#4ECDC4' },
+                { label: 'In Progress', color: '#3B72EE' },
                 { label: 'Completed',   color: '#4ADE80' },
                 { label: 'Deployed',    color: '#3B82F6' },
                 { label: 'Deferred',    color: '#888899' },
@@ -2037,21 +2031,20 @@ export default function CalendarScreen() {
                   activeOpacity={0.7}
                   hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                 >
-                  {/* "Share" glyph: 3 dots connected by 2 lines, drawn with Views.
-                      The icon resembles the network/share symbol from the website. */}
-                  <View style={styles.shareGlyph}>
-                    <View style={[styles.shareGlyphLine, styles.shareGlyphLineTop]} />
-                    <View style={[styles.shareGlyphLine, styles.shareGlyphLineBottom]} />
-                    <View style={[styles.shareGlyphDot, styles.shareGlyphDotTopRight]} />
-                    <View style={[styles.shareGlyphDot, styles.shareGlyphDotLeft]} />
-                    <View style={[styles.shareGlyphDot, styles.shareGlyphDotBottomRight]} />
-                  </View>
+                  {/* lucide share-2 icon */}
+                  <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
+                    <Circle cx={18} cy={5}  r={3} stroke="#10B981" strokeWidth={2} />
+                    <Circle cx={6}  cy={12} r={3} stroke="#10B981" strokeWidth={2} />
+                    <Circle cx={18} cy={19} r={3} stroke="#10B981" strokeWidth={2} />
+                    <Line x1={8.59}  y1={13.51} x2={15.42} y2={17.49} stroke="#10B981" strokeWidth={2} strokeLinecap="round" />
+                    <Line x1={15.41} y1={6.51}  x2={8.59}  y2={10.49} stroke="#10B981" strokeWidth={2} strokeLinecap="round" />
+                  </Svg>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[
                     styles.sharedPill,
                     calendarShared
-                      ? { backgroundColor: '#4ECDC4', borderColor: '#4ECDC4' }
+                      ? { backgroundColor: '#3B72EE', borderColor: '#3B72EE' }
                       : { backgroundColor: 'transparent', borderColor: isDark ? '#3A3A48' : '#DEDEE8' },
                   ]}
                   onPress={() => setCalendarShared(s => !s)}
@@ -2069,7 +2062,7 @@ export default function CalendarScreen() {
                 const isToday = d.toDateString() === today.toDateString();
                 return (
                   <View key={i} style={[styles.dayHeaderCell, { borderColor: bdr }]}>
-                    <Text style={[styles.dayHeaderDay, { color: isToday ? '#4ECDC4' : sub }]}>
+                    <Text style={[styles.dayHeaderDay, { color: isToday ? '#000000' : sub }]}>
                       {DAY_LABELS[d.getDay()]}
                     </Text>
                     <TouchableOpacity
@@ -2139,13 +2132,13 @@ export default function CalendarScreen() {
                 {/* Create Task CTA (moved to top, matching web) */}
                 <View style={{ alignItems: 'center', marginBottom: 16 }}>
                   <TouchableOpacity
-                    style={[du.createTaskTopBtn, { backgroundColor: isDark ? 'rgba(78,205,196,0.12)' : '#EEF2FF', borderColor: isDark ? 'rgba(78,205,196,0.3)' : '#C7D2FE' }]}
+                    style={[du.createTaskTopBtn, { backgroundColor: isDark ? 'rgba(59,114,238,0.12)' : '#EEF2FF', borderColor: isDark ? 'rgba(59,114,238,0.3)' : '#C7D2FE' }]}
                     onPress={() => {
                       closeDailyPanel();
                       setTimeout(() => navigation.jumpTo('Tasks', { openCreateModal: true, returnTo: 'Calendar' }), 250);
                     }}
                   >
-                    <Text style={[du.createTaskTopText, { color: isDark ? '#4ECDC4' : '#4F46E5' }]}>✓  Create Task</Text>
+                    <Text style={[du.createTaskTopText, { color: isDark ? '#3B72EE' : '#4F46E5' }]}>✓  Create Task</Text>
                   </TouchableOpacity>
                 </View>
 
@@ -2156,10 +2149,10 @@ export default function CalendarScreen() {
                 {dailyPanelDateClass === 'today' && !editingUpdate && !dailyUpdates[dateKey(dailyPanelDate)] && (
                   // Today, no update yet → show "+ Add Daily Update" button (image 3)
                   <TouchableOpacity
-                    style={[du.addUpdateBtn, { backgroundColor: isDark ? 'rgba(78,205,196,0.12)' : '#EEF2FF', borderColor: isDark ? 'rgba(78,205,196,0.3)' : '#C7D2FE' }]}
+                    style={[du.addUpdateBtn, { backgroundColor: isDark ? 'rgba(59,114,238,0.12)' : '#EEF2FF', borderColor: isDark ? 'rgba(59,114,238,0.3)' : '#C7D2FE' }]}
                     onPress={() => setEditingUpdate(true)}
                   >
-                    <Text style={[du.addUpdateText, { color: isDark ? '#4ECDC4' : '#4F46E5' }]}>📝  Add Daily Update</Text>
+                    <Text style={[du.addUpdateText, { color: isDark ? '#3B72EE' : '#4F46E5' }]}>📝  Add Daily Update</Text>
                   </TouchableOpacity>
                 )}
 
@@ -2169,12 +2162,12 @@ export default function CalendarScreen() {
                     <View style={du.updateHeaderRow}>
                       <View style={{ flex: 1 }}>
                         <Text style={[du.updateTitle, { color: txt }]}>Daily Update</Text>
-                        <Text style={[du.updateSubtitle, { color: '#4ECDC4' }]}>
+                        <Text style={[du.updateSubtitle, { color: '#3B72EE' }]}>
                           {dailyPanelDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
                         </Text>
                       </View>
                       <TouchableOpacity onPress={() => setEditingUpdate(true)}>
-                        <Text style={[du.editLink, { color: '#4ECDC4' }]}>Edit</Text>
+                        <Text style={[du.editLink, { color: '#3B72EE' }]}>Edit</Text>
                       </TouchableOpacity>
                     </View>
                     {renderUpdateField('Today\'s Priorities', dailyUpdates[dateKey(dailyPanelDate)].priorities, txt, sub)}
@@ -2190,7 +2183,7 @@ export default function CalendarScreen() {
                     <View style={du.formHeader}>
                       <View style={{ flex: 1 }}>
                         <Text style={[du.updateTitle, { color: txt }]}>Daily Update</Text>
-                        <Text style={[du.updateSubtitle, { color: '#4ECDC4' }]}>
+                        <Text style={[du.updateSubtitle, { color: '#3B72EE' }]}>
                           {dailyPanelDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
                         </Text>
                       </View>
@@ -2220,7 +2213,7 @@ export default function CalendarScreen() {
                 {/* ── Team Updates Section ── */}
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 18, marginBottom: 10 }}>
                   <Text style={[du.sectionLabel, { color: sub, marginBottom: 0 }]}>TEAM UPDATES</Text>
-                  {loadingUpdates && <ActivityIndicator size="small" color="#4ECDC4" />}
+                  {loadingUpdates && <ActivityIndicator size="small" color="#3B72EE" />}
                 </View>
                 {(() => {
                   const teamList = teamUpdates[dateKey(dailyPanelDate)] || [];
@@ -2236,7 +2229,7 @@ export default function CalendarScreen() {
                       key={u.id || idx}
                       style={[du.teamCard, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}
                     >
-                      <Text style={[du.teamName, { color: '#4ECDC4' }]}>{u.user_name}</Text>
+                      <Text style={[du.teamName, { color: '#3B72EE' }]}>{u.user_name}</Text>
                       {u.priorities ? (
                         <View style={{ marginTop: 8 }}>
                           <Text style={[du.teamFieldLabel, { color: txt }]}>Today's Priorities</Text>
@@ -2503,7 +2496,7 @@ export default function CalendarScreen() {
                   <Text style={[styles.teamsBtnText, { color: sub }, teamsMeeting && styles.teamsBtnTextOn]}>
                     Teams meeting
                   </Text>
-                  {teamsMeeting && <Text style={{ marginLeft: 8, color: '#4ECDC4', fontWeight: '700' }}>✓</Text>}
+                  {teamsMeeting && <Text style={{ marginLeft: 8, color: '#3B72EE', fontWeight: '700' }}>✓</Text>}
                 </TouchableOpacity>
 
                 {/* Description */}
@@ -3027,7 +3020,7 @@ export default function CalendarScreen() {
                           // Status → display config (matches the website's pill colours)
                           const statusInfo = (s) => {
                             const v = String(s || '').toUpperCase();
-                            if (v === 'ORGANIZER') return { label: 'Organizer', color: '#4ECDC4' };
+                            if (v === 'ORGANIZER') return { label: 'Organizer', color: '#3B72EE' };
                             if (v === 'ACCEPTED')  return { label: 'Accepted',  color: '#4ADE80' };
                             if (v === 'PENDING')   return { label: 'Pending',   color: '#F59E0B' };
                             if (v === 'DECLINED')  return { label: 'Declined',  color: '#EF4444' };
@@ -3272,11 +3265,11 @@ export default function CalendarScreen() {
                             {EVENT_TYPES.map(t => (
                               <TouchableOpacity
                                 key={t.id}
-                                style={[detailStyles.dropdownItem, { borderBottomColor: bdr }, t.id === editType && { backgroundColor: 'rgba(78,205,196,0.08)' }]}
+                                style={[detailStyles.dropdownItem, { borderBottomColor: bdr }, t.id === editType && { backgroundColor: 'rgba(59,114,238,0.08)' }]}
                                 onPress={() => { setEditType(t.id); setShowEditTypeMenu(false); }}
                               >
                                 <Text style={{ color: txt, fontSize: 14 }}>{t.icon} {t.label}</Text>
-                                {t.id === editType && <Text style={{ color: '#4ECDC4', fontWeight: '700' }}>✓</Text>}
+                                {t.id === editType && <Text style={{ color: '#3B72EE', fontWeight: '700' }}>✓</Text>}
                               </TouchableOpacity>
                             ))}
                           </View>
@@ -3285,13 +3278,13 @@ export default function CalendarScreen() {
 
                       {/* Online meeting toggle */}
                       <TouchableOpacity
-                        style={[detailStyles.toggleRow, { borderColor: bdr, backgroundColor: editOnline ? 'rgba(78,205,196,0.08)' : 'transparent' }]}
+                        style={[detailStyles.toggleRow, { borderColor: bdr, backgroundColor: editOnline ? 'rgba(59,114,238,0.08)' : 'transparent' }]}
                         onPress={() => setEditOnline(v => !v)}
                         activeOpacity={0.7}
                       >
                         <Text style={{ fontSize: 16 }}>📹</Text>
                         <Text style={{ flex: 1, color: txt, fontSize: 14 }}>Online meeting</Text>
-                        <View style={[detailStyles.toggleSwitch, editOnline && { backgroundColor: '#4ECDC4' }]}>
+                        <View style={[detailStyles.toggleSwitch, editOnline && { backgroundColor: '#3B72EE' }]}>
                           <View style={[detailStyles.toggleKnob, editOnline && { transform: [{ translateX: 16 }] }]} />
                         </View>
                       </TouchableOpacity>
@@ -3361,14 +3354,14 @@ export default function CalendarScreen() {
                                   return (
                                     <TouchableOpacity
                                       key={u.id}
-                                      style={[detailStyles.attendeeListItem, { borderBottomColor: bdr }, selected && { backgroundColor: 'rgba(78,205,196,0.08)' }]}
+                                      style={[detailStyles.attendeeListItem, { borderBottomColor: bdr }, selected && { backgroundColor: 'rgba(59,114,238,0.08)' }]}
                                       onPress={() => toggleEditAttendee(u.id)}
                                     >
                                       <View style={detailStyles.attendeeAvatar}>
                                         <Text style={detailStyles.attendeeInitial}>{(name || '?').charAt(0).toUpperCase()}</Text>
                                       </View>
                                       <Text style={{ flex: 1, color: txt, fontSize: 13 }}>{name}</Text>
-                                      {selected && <Text style={{ color: '#4ECDC4', fontWeight: '700' }}>✓</Text>}
+                                      {selected && <Text style={{ color: '#3B72EE', fontWeight: '700' }}>✓</Text>}
                                     </TouchableOpacity>
                                   );
                                 })
@@ -3471,13 +3464,13 @@ export default function CalendarScreen() {
           {/* Header */}
           <View style={shareStyles.header}>
             <View style={shareStyles.headerIcon}>
-              <View style={[styles.shareGlyph, { width: 18, height: 18 }]}>
-                <View style={[styles.shareGlyphLine, styles.shareGlyphLineTop, { left: 5, top: 5.5, width: 10 }]} />
-                <View style={[styles.shareGlyphLine, styles.shareGlyphLineBottom, { left: 5, bottom: 5.5, width: 10 }]} />
-                <View style={[styles.shareGlyphDot, styles.shareGlyphDotTopRight, { width: 6, height: 6, borderRadius: 3 }]} />
-                <View style={[styles.shareGlyphDot, styles.shareGlyphDotLeft, { width: 6, height: 6, borderRadius: 3, top: 6 }]} />
-                <View style={[styles.shareGlyphDot, styles.shareGlyphDotBottomRight, { width: 6, height: 6, borderRadius: 3 }]} />
-              </View>
+              <Svg width={18} height={18} viewBox="0 0 24 24" fill="none">
+                <Circle cx={18} cy={5}  r={3} stroke="#10B981" strokeWidth={2} />
+                <Circle cx={6}  cy={12} r={3} stroke="#10B981" strokeWidth={2} />
+                <Circle cx={18} cy={19} r={3} stroke="#10B981" strokeWidth={2} />
+                <Line x1={8.59}  y1={13.51} x2={15.42} y2={17.49} stroke="#10B981" strokeWidth={2} strokeLinecap="round" />
+                <Line x1={15.41} y1={6.51}  x2={8.59}  y2={10.49} stroke="#10B981" strokeWidth={2} strokeLinecap="round" />
+              </Svg>
             </View>
             <View style={{ flex: 1 }}>
               <Text style={[shareStyles.title, { color: txt }]}>Share Calendar</Text>
@@ -3851,7 +3844,7 @@ const styles = StyleSheet.create({
   navLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   navRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   logoBox: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center' },
-  logoText: { color: '#4ECDC4', fontSize: 15, fontWeight: '800' },
+  logoText: { color: '#3B72EE', fontSize: 15, fontWeight: '800' },
   brandName: { fontSize: 15, fontWeight: '700' },
   navIconBtn: { width: 36, height: 36, borderRadius: 8, borderWidth: 1, borderColor: '#EBEBF0', justifyContent: 'center', alignItems: 'center', backgroundColor: '#FAFAFA' },
   navIcon: { fontSize: 16 },
@@ -3896,14 +3889,14 @@ const styles = StyleSheet.create({
   arrowBtn: { width: 28, height: 28, justifyContent: 'center', alignItems: 'center' },
   arrowText: { fontSize: 22, fontWeight: '300' },
   dateRange: { fontSize: 13, fontWeight: '600' },
-  newEventBtn: { backgroundColor: '#4ECDC4', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5 },
+  newEventBtn: { backgroundColor: '#3B72EE', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5 },
   newEventBtnText: { color: '#fff', fontSize: 12, fontWeight: '600' },
 
   // View-mode dropdown menu (positioned dynamically — see openViewMenu)
   viewMenu: { position: 'absolute', minWidth: 140, borderRadius: 8, borderWidth: 1, paddingVertical: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.12, shadowRadius: 12, elevation: 12 },
   viewMenuItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingVertical: 10 },
   viewMenuItemText: { fontSize: 13 },
-  viewMenuCheck: { color: '#4ECDC4', fontSize: 13, fontWeight: '700' },
+  viewMenuCheck: { color: '#3B72EE', fontSize: 13, fontWeight: '700' },
 
   // Sidebar
   miniCalOverlay: { position: 'absolute', top: 0, left: 0, width: 300, borderRadius: 12, borderWidth: 1, zIndex: 100, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.12, shadowRadius: 12, elevation: 20, padding: 8 },
@@ -3920,9 +3913,9 @@ const styles = StyleSheet.create({
   miniDateCell: { width: '14.28%', alignItems: 'center', paddingVertical: 3 },
   miniDateCircle: { width: 30, height: 30, borderRadius: 15, justifyContent: 'center', alignItems: 'center' },
   miniDateToday: { backgroundColor: '#1A1A2E' },
-  miniDateSelected: { borderWidth: 1.5, borderColor: '#4ECDC4' },
+  miniDateSelected: { borderWidth: 1.5, borderColor: '#3B72EE' },
   miniDateText: { fontSize: 13, fontWeight: '500' },
-  miniDot: { width: 4, height: 4, borderRadius: 2, backgroundColor: '#4ECDC4', marginTop: 1 },
+  miniDot: { width: 4, height: 4, borderRadius: 2, backgroundColor: '#3B72EE', marginTop: 1 },
 
   legend: { borderTopWidth: 1, paddingTop: 10, paddingHorizontal: 10, gap: 7, flexDirection: 'row', flexWrap: 'wrap' },
   legendItem: { flexDirection: 'row', alignItems: 'center', gap: 5, width: '48%' },
@@ -3951,15 +3944,15 @@ const styles = StyleSheet.create({
   dayHeaderCell: { flex: 1, alignItems: 'center', paddingVertical: 7, borderLeftWidth: 1 },
   dayHeaderDay: { fontSize: 10, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase' },
   dayHeaderNum: { width: 28, height: 28, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginTop: 2 },
-  dayHeaderNumToday: { backgroundColor: '#2D6AE3' },
+  dayHeaderNumToday: { backgroundColor: '#000000' },
   dayHeaderNumText: { fontSize: 14, fontWeight: '700' },
 
   // All day row
   allDayRow: { flexDirection: 'row', minHeight: 36, borderBottomWidth: 1 },
   dayCol: { flex: 1, borderLeftWidth: 1, minHeight: 56, padding: 2 },
   noTasksText: { fontSize: 9, textAlign: 'center', marginTop: 6 },
-  allDayEvent: { backgroundColor: '#4ECDC415', borderRadius: 4, paddingHorizontal: 4, paddingVertical: 2, marginBottom: 2, borderLeftWidth: 2, borderLeftColor: '#4ECDC4' },
-  allDayEventText: { fontSize: 9, color: '#4ECDC4', fontWeight: '600' },
+  allDayEvent: { backgroundColor: '#3B72EE15', borderRadius: 4, paddingHorizontal: 4, paddingVertical: 2, marginBottom: 2, borderLeftWidth: 2, borderLeftColor: '#3B72EE' },
+  allDayEventText: { fontSize: 9, color: '#3B72EE', fontWeight: '600' },
   allDayHeader: { alignItems: 'center', justifyContent: 'flex-start', paddingTop: 4, gap: 1 },
   allDayChevron: { fontSize: 14, fontWeight: '700', lineHeight: 14 },
   allDayCountText: { fontSize: 9, fontWeight: '500', marginTop: 1 },
@@ -3970,7 +3963,7 @@ const styles = StyleSheet.create({
   hourRow: { flexDirection: 'row', minHeight: 58, borderBottomWidth: 1 },
   currentHourCol: { backgroundColor: 'rgba(239,68,68,0.04)' },
   currentTimeLine: { position: 'absolute', left: 0, right: 0, top: 0, height: 2, backgroundColor: '#EF4444', borderRadius: 1 },
-  eventBlock: { backgroundColor: '#4ECDC4', borderRadius: 6, padding: 4, marginBottom: 2, borderLeftWidth: 3, borderLeftColor: 'rgba(0,0,0,0.15)' },
+  eventBlock: { backgroundColor: '#5B8FF5', borderRadius: 6, padding: 4, marginBottom: 2, borderLeftWidth: 3, borderLeftColor: 'rgba(0,0,0,0.12)' },
   eventBlockText: { fontSize: 10, color: '#fff', fontWeight: '700' },
   eventBlockTime: { fontSize: 9, color: 'rgba(255,255,255,0.8)', marginTop: 1 },
 
@@ -3982,8 +3975,8 @@ const styles = StyleSheet.create({
   monthCell: { width: '14.28%', minHeight: 64, borderTopWidth: 1, padding: 4, alignItems: 'center' },
   monthDateCircle: { width: 28, height: 28, borderRadius: 14, justifyContent: 'center', alignItems: 'center' },
   monthDateText: { fontSize: 13, fontWeight: '500' },
-  monthEventChip: { backgroundColor: '#4ECDC415', borderRadius: 4, paddingHorizontal: 4, paddingVertical: 2, marginTop: 2, borderLeftWidth: 2, borderLeftColor: '#4ECDC4', alignSelf: 'stretch' },
-  monthEventChipText: { fontSize: 9, color: '#4ECDC4', fontWeight: '650' },
+  monthEventChip: { backgroundColor: '#3B72EE15', borderRadius: 4, paddingHorizontal: 4, paddingVertical: 2, marginTop: 2, borderLeftWidth: 2, borderLeftColor: '#3B72EE', alignSelf: 'stretch' },
+  monthEventChipText: { fontSize: 9, color: '#3B72EE', fontWeight: '650' },
   monthMoreText: { fontSize: 8, color: '#888899', marginTop: 1 },
 
   // Modal
@@ -4006,8 +3999,8 @@ const styles = StyleSheet.create({
   pickerCancelText: { fontSize: 14, color: '#888899', fontWeight: '500' },
   pickerDoneBtn: { paddingHorizontal: 16, paddingVertical: 8, backgroundColor: '#1A1A2E', borderRadius: 8 },
   pickerDoneText: { fontSize: 14, color: '#fff', fontWeight: '700' },
-  alertInfoBox: { backgroundColor: 'rgba(78,205,196,0.08)', borderWidth: 1, borderColor: 'rgba(78,205,196,0.3)', borderRadius: 10, padding: 12, marginBottom: 14 },
-  alertInfoText: { fontSize: 12, color: '#4ECDC4', fontWeight: '500', lineHeight: 18 },
+  alertInfoBox: { backgroundColor: 'rgba(59,114,238,0.08)', borderWidth: 1, borderColor: 'rgba(59,114,238,0.3)', borderRadius: 10, padding: 12, marginBottom: 14 },
+  alertInfoText: { fontSize: 12, color: '#3B72EE', fontWeight: '500', lineHeight: 18 },
   modalBtns: { flexDirection: 'row', gap: 10 },
   cancelBtn: { flex: 1, height: 48, borderRadius: 10, borderWidth: 1, borderColor: '#EBEBF0', justifyContent: 'center', alignItems: 'center' },
   cancelBtnText: { color: '#888899', fontSize: 14, fontWeight: '500' },
@@ -4069,10 +4062,10 @@ const styles = StyleSheet.create({
     marginBottom: 14, backgroundColor: '#FAFAFA',
   },
   teamsBtnOn: {
-    borderColor: '#4ECDC4', backgroundColor: 'rgba(78,205,196,0.08)',
+    borderColor: '#3B72EE', backgroundColor: 'rgba(59,114,238,0.08)',
   },
   teamsBtnText: { fontSize: 13, color: '#5C5C6E', fontWeight: '600' },
-  teamsBtnTextOn: { color: '#4ECDC4' },
+  teamsBtnTextOn: { color: '#3B72EE' },
 
   // Location
   locationWrap: {
@@ -4090,7 +4083,7 @@ const styles = StyleSheet.create({
     marginBottom: 8, marginTop: 4,
   },
   participantsToggle: {
-    fontSize: 13, color: '#4ECDC4', fontWeight: '700',
+    fontSize: 13, color: '#3B72EE', fontWeight: '700',
   },
   noParticipants: {
     alignItems: 'center', paddingVertical: 18, gap: 6,
@@ -4105,7 +4098,7 @@ const styles = StyleSheet.create({
   },
   participantChip: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: 'rgba(78,205,196,0.1)',
+    backgroundColor: 'rgba(59,114,238,0.1)',
     borderRadius: 16, paddingLeft: 4, paddingRight: 10, paddingVertical: 3,
   },
   participantChipAvatar: {
@@ -4113,7 +4106,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#1A1A2E',
     justifyContent: 'center', alignItems: 'center',
   },
-  participantChipAvatarText: { color: '#4ECDC4', fontSize: 10, fontWeight: '700' },
+  participantChipAvatarText: { color: '#3B72EE', fontSize: 10, fontWeight: '700' },
   participantChipName: { fontSize: 12, color: '#1A1A2E', fontWeight: '600' },
   participantChipRemove: { color: '#888899', fontSize: 11, fontWeight: '700', paddingHorizontal: 2 },
   participantsPicker: {
@@ -4141,7 +4134,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#1A1A2E',
     justifyContent: 'center', alignItems: 'center', marginRight: 10,
   },
-  userAvatarText: { color: '#4ECDC4', fontSize: 12, fontWeight: '700' },
+  userAvatarText: { color: '#3B72EE', fontSize: 12, fontWeight: '700' },
   userName: { flex: 1, fontSize: 13, color: '#1A1A2E', fontWeight: '500' },
   userCheckbox: {
     width: 22, height: 22, borderRadius: 11,
@@ -4149,7 +4142,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center',
   },
   userCheckboxActive: {
-    backgroundColor: '#4ECDC4', borderColor: '#4ECDC4',
+    backgroundColor: '#3B72EE', borderColor: '#3B72EE',
   },
   userCheckmark: { color: '#fff', fontSize: 13, fontWeight: '700' },
 });
@@ -4273,11 +4266,11 @@ const detailStyles = StyleSheet.create({
   title: { fontSize: 17, fontWeight: '700' },
   organizerBadge: {
     alignSelf: 'flex-start',
-    backgroundColor: 'rgba(78,205,196,0.12)',
+    backgroundColor: 'rgba(59,114,238,0.12)',
     paddingHorizontal: 8, paddingVertical: 2,
     borderRadius: 4, marginTop: 4,
   },
-  organizerBadgeText: { color: '#4ECDC4', fontSize: 9, fontWeight: '700', letterSpacing: 0.4 },
+  organizerBadgeText: { color: '#3B72EE', fontSize: 9, fontWeight: '700', letterSpacing: 0.4 },
   closeBtn: { fontSize: 18, fontWeight: '700', paddingHorizontal: 4 },
 
   label: { fontSize: 10, fontWeight: '700', letterSpacing: 0.6, marginBottom: 4 },
@@ -4293,7 +4286,7 @@ const detailStyles = StyleSheet.create({
 
   attendeeChip: {
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: 'rgba(78,205,196,0.10)',
+    backgroundColor: 'rgba(59,114,238,0.10)',
     paddingHorizontal: 8, paddingVertical: 5,
     borderRadius: 16, gap: 6,
     maxWidth: 180,
@@ -4305,7 +4298,7 @@ const detailStyles = StyleSheet.create({
   attendeeStatus: { fontSize: 11, fontWeight: '600', marginTop: 1 },
   attendeeAvatar: {
     width: 32, height: 32, borderRadius: 16,
-    backgroundColor: '#4ECDC4',
+    backgroundColor: '#3B72EE',
     justifyContent: 'center', alignItems: 'center',
   },
   attendeeInitial: { color: '#fff', fontSize: 13, fontWeight: '700' },
@@ -4390,7 +4383,7 @@ const detailStyles = StyleSheet.create({
   },
   pickerTitle: { fontSize: 14, fontWeight: '700' },
   pickerCancel: { fontSize: 14, fontWeight: '500' },
-  pickerDone:   { fontSize: 14, fontWeight: '700', color: '#4ECDC4' },
+  pickerDone:   { fontSize: 14, fontWeight: '700', color: '#3B72EE' },
 
   // Inline (non-modal) date/time spinner that appears below the field
   inlinePickerWrap: {

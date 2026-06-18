@@ -13,7 +13,7 @@ import { getUsers, getProjects, createProject, getAccessToken } from '../service
 import SidebarMenu from '../components/SidebarMenu';
 import { ThemeContext } from '../context/ThemeContext';
 import NotificationBell from '../components/NotificationBell';
-import Svg, { Path, Circle, Line } from 'react-native-svg';
+import Svg, { Path, Circle, Line, Rect } from 'react-native-svg';
 
 import { API_BASE as CONFIG_API_BASE, BASE_URL } from '../config';
 
@@ -201,6 +201,7 @@ export default function ProjectsScreen() {
   const [search,          setSearch]          = useState('');
   const [sortOrder,       setSortOrder]       = useState('default');
   const [sortDropOpen,    setSortDropOpen]    = useState(false);
+  const [gridMode,        setGridMode]        = useState(false);
 
   // ── Create modal state ────────────────────────────────────────────────────
   const [modalVisible, setModalVisible] = useState(false);
@@ -216,6 +217,9 @@ export default function ProjectsScreen() {
 
   // ── Init ──────────────────────────────────────────────────────────────────
   useEffect(() => { fetchProjects(); fetchUsers(); }, []);
+
+  // Refetch on every focus so pinned state is always fresh from API
+  useFocusEffect(useCallback(() => { fetchProjects(); }, []));
 
   const fetchProjects = async () => {
     setLoadingProjects(true);
@@ -559,7 +563,24 @@ export default function ProjectsScreen() {
               <Text style={{ fontSize: 15, fontWeight: '700', color: isDark ? '#ccc' : T.ink }}>
                 All projects ({filtered.length})
               </Text>
-              <View>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                {/* Grid/List toggle */}
+                <TouchableOpacity onPress={() => setGridMode(v => !v)} style={{ padding: 4 }}>
+                  {gridMode ? (
+                    <Svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke={sub} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                      <Path d="M3 12h18M3 6h18M3 18h18"/>
+                    </Svg>
+                  ) : (
+                    <Svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke={sub} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                      <Rect x="3" y="3" width="7" height="7" rx="1"/>
+                      <Rect x="14" y="3" width="7" height="7" rx="1"/>
+                      <Rect x="14" y="14" width="7" height="7" rx="1"/>
+                      <Rect x="3" y="14" width="7" height="7" rx="1"/>
+                    </Svg>
+                  )}
+                </TouchableOpacity>
+                {/* Sort dropdown */}
+                <View>
                 <TouchableOpacity
                   onPress={() => setSortDropOpen(o => !o)}
                   style={{ flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: isDark ? '#252530' : T.hairlineSoft, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 }}
@@ -610,8 +631,10 @@ export default function ProjectsScreen() {
                   </View>
                 )}
               </View>
+              </View>
             </View>
 
+            <View style={gridMode ? { flexDirection: 'row', flexWrap: 'wrap', gap: 10 } : {}}>
             {filtered.map((proj, idx) => {
               const color = getProjectColor(idx);
               const progress = proj.progress || proj.completion_percentage || 0;
@@ -626,7 +649,7 @@ export default function ProjectsScreen() {
                   key={proj.id}
                   onPress={() => openDetails(proj)}
                   activeOpacity={0.75}
-                  style={[s.listCard, { backgroundColor: card, borderColor: bdr }]}
+                  style={[s.listCard, { backgroundColor: card, borderColor: bdr }, gridMode && { width: '47.5%' }]}
                 >
                   {/* Top row — icon + name + description + status chip */}
                   <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
@@ -716,6 +739,7 @@ export default function ProjectsScreen() {
                 </TouchableOpacity>
               );
             })}
+            </View>
           </>
         )}
       </ScrollView>

@@ -32,7 +32,6 @@ import CreateTaskScreen from './screens/CreateTaskScreen';
 import DocumentsScreen from './screens/DocumentsScreen';
 import ChatScreen      from './screens/ChatScreen';
 import SettingsScreen  from './screens/SettingsScreen';
-import ProfileScreen   from './screens/ProfileScreen';
 import QuickNotesScreen      from './screens/QuickNotesScreen';
 import ProjectDetailScreen      from './screens/ProjectDetailScreen';
 import TaskDetailScreen         from './screens/TaskDetailScreen';
@@ -584,7 +583,7 @@ function RootNavigator() {
           <Stack.Screen name="Settings"        component={SettingsScreen} />
           <Stack.Screen name="Docs"            component={DocumentsScreen} />
           <Stack.Screen name="QuickNotes"      component={QuickNotesScreen} />
-          <Stack.Screen name="Profile"         component={ProfileScreen} />
+          <Stack.Screen name="Profile"         component={EditProfileScreen} />
           <Stack.Screen name="TeamManagement"  component={TeamManagementScreen} />
           <Stack.Screen name="EditProfile"     component={EditProfileScreen} />
           <Stack.Screen name="ChangePassword"  component={ChangePasswordScreen} />

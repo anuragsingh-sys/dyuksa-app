@@ -31,19 +31,12 @@ function PinIcon({ size = 20, color = '#888', filled = false }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Path
-        d="M20 4L4 20"
-        stroke={color} strokeWidth={1.8} strokeLinecap="round"
-      />
-      <Path
-        d="M17.657 6.343C19.22 7.905 19.47 10.28 18.192 12.12L11.88 18.433C10.04 19.71 7.665 19.46 6.103 17.898C4.54 16.335 4.29 13.96 5.568 12.12L11.88 5.808C13.72 4.53 16.095 4.78 17.657 6.343Z"
-        stroke={color} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"
+        d="M15 3l-6 6-4 1 9 9 1-4 6-6-6-6z"
         fill={filled ? color : 'none'}
+        stroke={color}
+        strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"
       />
-      <Path
-        d="M10 14L14 10"
-        stroke={filled ? (color === '#6366F1' ? '#fff' : '#fff') : color}
-        strokeWidth={1.5} strokeLinecap="round"
-      />
+      <Path d="M9 9l6 6M3 21l4-4" stroke={color} strokeWidth={2} strokeLinecap="round"/>
     </Svg>
   );
 }
@@ -131,7 +124,7 @@ const getRoomDisplayName = (room, myUsername) => {
 };
 
 const ROOM_COLORS = {
-  private: '#4ECDC4',
+  private: '#3B72EE',
   project: '#6366F1',
   team:    '#F59E0B',
   thread:  '#10B981',
@@ -152,7 +145,7 @@ const ROOM_ICONS = {
 const CHANNEL_COLORS = ['#6366F1', '#8B5CF6', '#10B981', '#F59E0B', '#EF4444', '#3B82F6'];
 const AVATAR_COLORS  = ['#3B82F6', '#8B5CF6', '#22A06B', '#F59E0B', '#E5484D', '#0EA5E9', '#EC4899'];
 
-function RoomItem({ room, onPress, isDark, card, txt, sub, bdr, myUsername }) {
+function RoomItem({ room, onPress, isDark, card, txt, sub, bdr, myUsername, allUsers }) {
   const isDirect  = room.room_type === 'private';
   const isChannel = room.room_type === 'project' || room.room_type === 'thread';
   const isAiBot   = room.room_type === 'ai_bot';
@@ -192,11 +185,22 @@ function RoomItem({ room, onPress, isDark, card, txt, sub, bdr, myUsername }) {
           <Text style={{ fontSize: 20, fontWeight: '700', color: channelColor }}>#</Text>
         </View>
       ) : (
-        /* Direct — colored circle with initials + online dot */
+        /* Direct — show real avatar photo if available, else colored circle with initials + online dot */
         <View style={{ position: 'relative' }}>
-          <View style={{ width: 46, height: 46, borderRadius: 23, backgroundColor: avatarColor, justifyContent: 'center', alignItems: 'center' }}>
-            <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }}>{getInitials(displayName)}</Text>
-          </View>
+          {(() => {
+            const peerUser = allUsers?.find(u =>
+              (u.username || '').toLowerCase() === (displayName || '').toLowerCase() ||
+              (`${u.first_name || ''} ${u.last_name || ''}`.trim().toLowerCase()) === (displayName || '').toLowerCase()
+            );
+            const avatarUri = peerUser?.avatar || null;
+            return avatarUri ? (
+              <Image source={{ uri: avatarUri }} style={{ width: 46, height: 46, borderRadius: 23 }} />
+            ) : (
+              <View style={{ width: 46, height: 46, borderRadius: 23, backgroundColor: avatarColor, justifyContent: 'center', alignItems: 'center' }}>
+                <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }}>{getInitials(displayName)}</Text>
+              </View>
+            );
+          })()}
           {isDirect && (
             <View style={{ position: 'absolute', bottom: 1, right: 1, width: 11, height: 11, borderRadius: 6, backgroundColor: '#22C55E', borderWidth: 2, borderColor: card }} />
           )}
@@ -245,17 +249,23 @@ const getSenderUsername = (msg) => {
   return String(s);
 };
 
-function MessageBubble({ msg, isMine, isDark, sub }) {
-  const bg       = isMine ? '#4ECDC4' : (isDark ? '#252530' : '#F3F4F6');
+function MessageBubble({ msg, isMine, isDark, sub, allUsers }) {
+  const bg       = isMine ? '#5B8FF5' : (isDark ? '#252530' : '#FFFFFF');
   const txtColor = isMine ? '#fff' : (isDark ? '#fff' : '#1A1A2E');
   const content  = stripHtml(msg.content || msg.content_preview || '');
+  const senderUsername = getSenderUsername(msg);
+  const senderUser = allUsers?.find(u => (u.username || '').toLowerCase() === (senderUsername || '').toLowerCase());
 
   return (
     <View style={[styles.bubbleWrap, isMine && styles.bubbleWrapMine]}>
       {!isMine && (
-        <View style={[styles.bubbleAvatar, { backgroundColor: '#6366F1' }]}>
-          <Text style={styles.bubbleAvatarTxt}>{getInitials(getSenderName(msg))}</Text>
-        </View>
+        senderUser?.avatar ? (
+          <Image source={{ uri: senderUser.avatar }} style={[styles.bubbleAvatar, { borderRadius: 16 }]} />
+        ) : (
+          <View style={[styles.bubbleAvatar, { backgroundColor: '#6366F1' }]}>
+            <Text style={styles.bubbleAvatarTxt}>{getInitials(getSenderName(msg))}</Text>
+          </View>
+        )
       )}
       <View style={{ maxWidth: '75%' }}>
         {!isMine && getSenderName(msg) !== '?' && (
@@ -332,7 +342,7 @@ export default function ChatScreen({ route }) {
     }
   }, []);
 
-  useFocusEffect(useCallback(() => { fetchRooms(); }, [fetchRooms]));
+  useFocusEffect(useCallback(() => { fetchRooms(); fetchUsersForModal(); }, [fetchRooms, fetchUsersForModal]));
 
   // ── Fetch messages for a room ──────────────────────────────────────
   const fetchMessages = useCallback(async (roomId) => {
@@ -499,8 +509,7 @@ export default function ChatScreen({ route }) {
       if (!res.ok) return;
       const data = await res.json();
       const list = Array.isArray(data) ? data : (data.results || []);
-      // Exclude self
-      setAllUsers(list.filter(u => u.username !== myUsername && u.id !== user?.id));
+      setAllUsers(list); // keep all users including self for avatar matching
     } catch (e) {
       console.warn('fetchUsersForModal:', e.message);
     } finally {
@@ -624,7 +633,7 @@ export default function ChatScreen({ route }) {
 
   // ── MESSAGES VIEW ──────────────────────────────────────────────────
   if (view === 'messages' && activeRoom) {
-    const roomColor = ROOM_COLORS[activeRoom.room_type] || '#4ECDC4';
+    const roomColor = ROOM_COLORS[activeRoom.room_type] || '#3B72EE';
     return (
       <SafeAreaView style={[styles.safe, { backgroundColor: bg }]} edges={['top', 'left', 'right']}>
         <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={card} />
@@ -632,11 +641,24 @@ export default function ChatScreen({ route }) {
         {/* Chat header */}
         <View style={[styles.chatHeader, { backgroundColor: card, borderBottomColor: bdr }]}>
           <TouchableOpacity onPress={() => setView('rooms')} style={styles.backBtn}>
-            <Text style={{ color: '#4ECDC4', fontSize: 24 }}>‹</Text>
+            <Text style={{ color: '#3B72EE', fontSize: 24 }}>‹</Text>
           </TouchableOpacity>
-          <View style={[styles.chatHeaderAvatar, { backgroundColor: roomColor }]}>
-            <Text style={styles.chatHeaderAvatarTxt}>{getInitials(activeRoom.name)}</Text>
-          </View>
+          {/* Header avatar — show real photo for DMs */}
+          {(() => {
+            const isDM = activeRoom.room_type === 'private';
+            const displayName = getRoomDisplayName(activeRoom, myUsername);
+            const peerUser = isDM ? allUsers.find(u =>
+              (u.username || '').toLowerCase() === (displayName || '').toLowerCase() ||
+              (`${u.first_name || ''} ${u.last_name || ''}`.trim().toLowerCase()) === (displayName || '').toLowerCase()
+            ) : null;
+            return peerUser?.avatar ? (
+              <Image source={{ uri: peerUser.avatar }} style={[styles.chatHeaderAvatar, { borderRadius: 22 }]} />
+            ) : (
+              <View style={[styles.chatHeaderAvatar, { backgroundColor: roomColor }]}>
+                <Text style={styles.chatHeaderAvatarTxt}>{getInitials(displayName || activeRoom.name)}</Text>
+              </View>
+            );
+          })()}
           <View style={{ flex: 1 }}>
             <Text style={[styles.chatHeaderName, { color: txt }]} numberOfLines={1}>{getRoomDisplayName(activeRoom, myUsername) || activeRoom.name}</Text>
             <Text style={[styles.chatHeaderMeta, { color: sub }]}>
@@ -669,7 +691,7 @@ export default function ChatScreen({ route }) {
           {/* Messages */}
           {msgLoading ? (
             <View style={styles.centerState}>
-              <ActivityIndicator color="#4ECDC4" size="large" />
+              <ActivityIndicator color="#3B72EE" size="large" />
             </View>
           ) : messages.length === 0 ? (
             <View style={styles.centerState}>
@@ -706,6 +728,7 @@ export default function ChatScreen({ route }) {
                         isMine={isMine}
                         isDark={isDark}
                         sub={sub}
+                        allUsers={allUsers}
                       />
                     );
                   })}
@@ -716,9 +739,15 @@ export default function ChatScreen({ route }) {
 
           {/* Input bar */}
           <SafeAreaView edges={['bottom']} style={[styles.inputBar, { backgroundColor: card, borderTopColor: bdr }]}>
+            {/* Attachment button */}
+            <TouchableOpacity style={{ padding: 6 }} onPress={() => {}}>
+              <Svg width={22} height={22} viewBox="0 0 24 24" fill="none">
+                <Path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" stroke={sub} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+              </Svg>
+            </TouchableOpacity>
             <TextInput
               style={[styles.input, { backgroundColor: isDark ? '#252530' : '#F5F5F7', color: txt, borderColor: bdr }]}
-              placeholder="Type a message…"
+              placeholder={`Message ${getRoomDisplayName(activeRoom, myUsername) || 'here'}…`}
               placeholderTextColor={sub}
               value={input}
               onChangeText={setInput}
@@ -729,13 +758,15 @@ export default function ChatScreen({ route }) {
               blurOnSubmit={false}
             />
             <TouchableOpacity
-              style={[styles.sendBtn, { backgroundColor: input.trim() ? '#4ECDC4' : bdr }]}
+              style={[styles.sendBtn, { backgroundColor: input.trim() ? '#5B8FF5' : isDark ? '#252530' : '#E8EDF5' }]}
               onPress={sendMessage}
               disabled={!input.trim() || sending}
             >
               {sending
-                ? <ActivityIndicator color="#fff" size="small" />
-                : <Text style={{ color: '#fff', fontSize: 18 }}>➤</Text>
+                ? <ActivityIndicator color={input.trim() ? '#fff' : sub} size="small" />
+                : <Svg width={18} height={18} viewBox="0 0 24 24" fill="none">
+                    <Path d="M22 2L11 13M22 2L15 22 11 13 2 9l20-7z" stroke={input.trim() ? '#fff' : sub} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+                  </Svg>
               }
             </TouchableOpacity>
           </SafeAreaView>
@@ -771,7 +802,7 @@ export default function ChatScreen({ route }) {
       {/* Search */}
       <View style={{ paddingHorizontal: 12, paddingTop: 10 }}>
         <View style={[styles.searchWrap, { backgroundColor: card, borderColor: bdr }]}>
-          <Text style={{ fontSize: 14, marginRight: 6 }}>🔍</Text>
+          <Svg width={15} height={15} viewBox="0 0 24 24" fill="none" style={{ marginRight: 6 }}><Path d="M11 19C15.4183 19 19 15.4183 19 11C19 6.58172 15.4183 3 11 3C6.58172 3 3 6.58172 3 11C3 15.4183 6.58172 19 11 19Z" stroke="#9AA3B2" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/><Path d="M21 21L16.65 16.65" stroke="#9AA3B2" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/></Svg>
           <TextInput
             style={[styles.searchInput, { color: txt }]}
             placeholder="Search conversations…"
@@ -851,7 +882,7 @@ export default function ChatScreen({ route }) {
             ];
           })()}
           keyExtractor={(item) => item._type === 'section' ? item._key : item.id}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchRooms(); }} tintColor="#4ECDC4" />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchRooms(); }} tintColor="#3B72EE" />}
           ListEmptyComponent={
             <View style={styles.centerState}>
               <Text style={{ fontSize: 36, opacity: 0.2 }}>💬</Text>
@@ -879,6 +910,7 @@ export default function ChatScreen({ route }) {
                 sub={sub}
                 bdr={bdr}
                 myUsername={myUsername}
+                allUsers={allUsers}
               />
             );
           }}
@@ -948,7 +980,7 @@ export default function ChatScreen({ route }) {
             {/* User search */}
             <View style={{ paddingHorizontal: 14, paddingBottom: 8 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: isDark ? '#252530' : '#F2F3F7', borderRadius: 10, paddingHorizontal: 12, height: 40, borderWidth: StyleSheet.hairlineWidth, borderColor: bdr }}>
-                <Text style={{ fontSize: 14, marginRight: 6 }}>🔍</Text>
+                <Svg width={15} height={15} viewBox="0 0 24 24" fill="none" style={{ marginRight: 6 }}><Path d="M11 19C15.4183 19 19 15.4183 19 11C19 6.58172 15.4183 3 11 3C6.58172 3 3 6.58172 3 11C3 15.4183 6.58172 19 11 19Z" stroke="#9AA3B2" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/><Path d="M21 21L16.65 16.65" stroke="#9AA3B2" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/></Svg>
                 <TextInput
                   style={{ flex: 1, fontSize: 13, color: txt }}
                   placeholder="Search people…"
@@ -973,6 +1005,7 @@ export default function ChatScreen({ route }) {
             ) : (
               <ScrollView keyboardShouldPersistTaps="handled" style={{ paddingHorizontal: 14 }}>
                 {allUsers
+                  .filter(u => u.username !== myUsername && u.id !== user?.id)
                   .filter(u => !userSearch.trim() ||
                     (u.full_name || '').toLowerCase().includes(userSearch.toLowerCase()) ||
                     (u.username  || '').toLowerCase().includes(userSearch.toLowerCase()))
@@ -987,8 +1020,14 @@ export default function ChatScreen({ route }) {
                         onPress={() => toggleSelectUser(u)}
                         activeOpacity={0.7}
                       >
-                        <View style={{ width: 42, height: 42, borderRadius: 21, backgroundColor: avatarColor, justifyContent: 'center', alignItems: 'center' }}>
-                          <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700' }}>{getInitials(u.full_name || u.username)}</Text>
+                        <View style={{ position: 'relative' }}>
+                          {u.avatar ? (
+                            <Image source={{ uri: u.avatar }} style={{ width: 42, height: 42, borderRadius: 21 }} />
+                          ) : (
+                            <View style={{ width: 42, height: 42, borderRadius: 21, backgroundColor: avatarColor, justifyContent: 'center', alignItems: 'center' }}>
+                              <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700' }}>{getInitials(u.full_name || u.username)}</Text>
+                            </View>
+                          )}
                         </View>
                         <View style={{ flex: 1 }}>
                           <Text style={{ fontSize: 14, fontWeight: '600', color: txt }}>{u.full_name || u.username}</Text>
@@ -1000,7 +1039,7 @@ export default function ChatScreen({ route }) {
                       </TouchableOpacity>
                     );
                   })}
-                {allUsers.filter(u => !userSearch.trim() ||
+                {allUsers.filter(u => u.username !== myUsername && u.id !== user?.id).filter(u => !userSearch.trim() ||
                   (u.full_name || '').toLowerCase().includes(userSearch.toLowerCase()) ||
                   (u.username  || '').toLowerCase().includes(userSearch.toLowerCase())).length === 0 && (
                   <View style={{ paddingVertical: 30, alignItems: 'center' }}>
@@ -1042,7 +1081,7 @@ const styles = StyleSheet.create({
   navLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   navRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   logoBox: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center' },
-  logoText: { color: '#4ECDC4', fontSize: 15, fontWeight: '800' },
+  logoText: { color: '#3B72EE', fontSize: 15, fontWeight: '800' },
   brandName: { fontWeight: '700', fontSize: 15 },
 
   // Search
@@ -1054,7 +1093,7 @@ const styles = StyleSheet.create({
   tab: { paddingVertical: 10, paddingHorizontal: 6, marginRight: 20, position: 'relative' },
   tabActive: {},
   tabTxt: { fontSize: 13, fontWeight: '600' },
-  tabUnderline: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 2, backgroundColor: '#4ECDC4', borderRadius: 1 },
+  tabUnderline: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 2, backgroundColor: '#3B72EE', borderRadius: 1 },
   tabBadge: { backgroundColor: '#EF4444', borderRadius: 9, minWidth: 16, height: 16, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 3 },
   tabBadgeTxt: { color: '#fff', fontSize: 8, fontWeight: '800' },
 
@@ -1070,7 +1109,7 @@ const styles = StyleSheet.create({
   roomTime: { fontSize: 11 },
   roomPreviewRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   roomPreview: { fontSize: 12, flex: 1 },
-  unreadBadge: { backgroundColor: '#4ECDC4', borderRadius: 10, minWidth: 18, height: 18, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 4 },
+  unreadBadge: { backgroundColor: '#3B72EE', borderRadius: 10, minWidth: 18, height: 18, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 4 },
   unreadBadgeTxt: { color: '#fff', fontSize: 10, fontWeight: '800' },
 
   // Chat header

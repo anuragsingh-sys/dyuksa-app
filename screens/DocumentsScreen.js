@@ -310,12 +310,21 @@ export default function DocumentsScreen() {
   });
   const clearSelection = () => setSelectedIds(new Set());
   const [uploadModalVisible, setUploadModalVisible] = useState(false);
-  const [uploadFile,         setUploadFile]         = useState(null);   // { name, uri, mimeType, size }
+  const [uploadFile,         setUploadFile]         = useState(null);
   const [uploadProjectId,    setUploadProjectId]    = useState(null);
   const [uploadProjectSearch,setUploadProjectSearch]= useState('');
   const [uploadProjects,     setUploadProjects]     = useState([]);
   const [uploading,          setUploading]          = useState(false);
   const [uploadPickerOpen,   setUploadPickerOpen]   = useState(false);
+
+  // Create text document modal
+  const [createDocModal,       setCreateDocModal]       = useState(false);
+  const [createDocName,        setCreateDocName]        = useState('');
+  const [createDocContent,     setCreateDocContent]     = useState('');
+  const [createDocProject,     setCreateDocProject]     = useState(null);
+  const [createDocFormat,      setCreateDocFormat]      = useState(null);
+  const [createDocCustomFormat,setCreateDocCustomFormat]= useState('');
+  const [creatingDoc,          setCreatingDoc]          = useState(false);
 
   // ── Fetch all documents (follow `next` pagination) ──
   const fetchDocs = useCallback(async () => {
@@ -449,7 +458,6 @@ export default function DocumentsScreen() {
 
   const submitUpload = async () => {
     if (!uploadFile) { Alert.alert('No file', 'Please pick a file first.'); return; }
-    if (!uploadProjectId) { Alert.alert('No project', 'Please select a project.'); return; }
     setUploading(true);
     try {
       const formData = new FormData();
@@ -458,8 +466,9 @@ export default function DocumentsScreen() {
         name: uploadFile.name,
         type: uploadFile.mimeType,
       });
-      formData.append('project', String(uploadProjectId));
-      formData.append('name',    uploadFile.name);
+      // Project is optional — only append if selected
+      if (uploadProjectId) formData.append('project', String(uploadProjectId));
+      formData.append('name', uploadFile.name);
 
       const res = await fetch(DOCS_API, {
         method: 'POST',
@@ -486,6 +495,57 @@ export default function DocumentsScreen() {
   const filteredUploadProjects = uploadProjects.filter(p =>
     (p.name || '').toLowerCase().includes(uploadProjectSearch.toLowerCase())
   );
+
+  const openCreateDocModal = async () => {
+    // Reuse uploadProjects list
+    if (uploadProjects.length === 0) {
+      try {
+        const res = await fetch(PROJECTS_API, { headers: await buildAuthHeaders() });
+        if (res.ok) {
+          const data = await res.json();
+          setUploadProjects(Array.isArray(data) ? data : (data.results || []));
+        }
+      } catch {}
+    }
+    setCreateDocName('');
+    setCreateDocContent('');
+    setCreateDocProject(null);
+    setCreateDocFormat(null);
+    setCreateDocCustomFormat('');
+    setUploadPickerOpen(false);
+    setCreateDocModal(true);
+  };
+
+  const submitCreateDoc = async () => {
+    if (!createDocName.trim()) { Alert.alert('Name required', 'Please enter a document name.'); return; }
+    setCreatingDoc(true);
+    try {
+      const fmt = createDocCustomFormat.trim() || createDocFormat || 'txt';
+      const body = {
+        name: createDocName.trim(),
+        content: createDocContent,
+        format: fmt.replace('.', ''),
+      };
+      if (createDocProject) body.project = createDocProject;
+      const res = await fetch(DOCS_API, {
+        method: 'POST',
+        headers: await buildAuthHeaders(),
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        let detail = `${res.status}`;
+        try { const e = await res.json(); detail = e.detail || JSON.stringify(e); } catch {}
+        throw new Error(detail);
+      }
+      setCreateDocModal(false);
+      setLoading(true);
+      loadAll();
+    } catch (e) {
+      Alert.alert('Could not create document', e.message || 'Try again.');
+    } finally {
+      setCreatingDoc(false);
+    }
+  };
 
   useFocusEffect(useCallback(() => { loadAll(); }, [loadAll]));
 
@@ -1075,22 +1135,44 @@ export default function DocumentsScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor='#3B72EE' />}
         contentContainerStyle={{ paddingBottom: 100 }}
       >
-        {/* ── Storage card ── */}
-        <View style={{ paddingHorizontal: 14, paddingTop: 14 }}>
-          <View style={[styles.storageCard]}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-              <Text style={{ fontSize: 12, color: 'rgba(255,255,255,0.75)', fontWeight: '500' }}>Storage</Text>
-              <TouchableOpacity style={styles.upgradeBtn}>
-                <Text style={{ fontSize: 12, color: '#3B72EE', fontWeight: '700' }}>Upgrade</Text>
-              </TouchableOpacity>
+        {/* ── Action banners ── */}
+        <View style={{ paddingHorizontal: 14, paddingTop: 14, gap: 10 }}>
+          {/* Upload file */}
+          <TouchableOpacity
+            style={[styles.storageCard, { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 16 }]}
+            onPress={openUploadModal}
+            activeOpacity={0.88}
+          >
+            <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.2)', justifyContent: 'center', alignItems: 'center' }}>
+              <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
+                <Path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" stroke="#fff" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+              </Svg>
             </View>
-            <Text style={{ fontSize: 26, fontWeight: '700', color: '#fff', marginBottom: 4 }}>
-              {storageUsed} <Text style={{ fontSize: 14, fontWeight: '400', color: 'rgba(255,255,255,0.7)' }}>/ {storageTotal} GB used</Text>
-            </Text>
-            <View style={styles.progressTrack}>
-              <View style={[styles.progressFill, { width: `${storagePercent}%` }]} />
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 15 }}>Upload document</Text>
+              <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, marginTop: 2 }}>PDF, DOCX, images and more</Text>
             </View>
-          </View>
+            <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 22 }}>›</Text>
+          </TouchableOpacity>
+
+          {/* Create text document */}
+          <TouchableOpacity
+            style={[styles.storageCard, { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 16, backgroundColor: '#22A06B' }]}
+            onPress={openCreateDocModal}
+            activeOpacity={0.88}
+          >
+            <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.2)', justifyContent: 'center', alignItems: 'center' }}>
+              <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
+                <Path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke="#fff" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+                <Path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" stroke="#fff" strokeWidth={2} strokeLinecap="round"/>
+              </Svg>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 15 }}>Create new document</Text>
+              <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, marginTop: 2 }}>Write and save a text document</Text>
+            </View>
+            <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 22 }}>›</Text>
+          </TouchableOpacity>
         </View>
 
         {/* ── Folders ── */}
@@ -1137,6 +1219,21 @@ export default function DocumentsScreen() {
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, zIndex: 20 }}>
             <Text style={{ fontSize: 16, fontWeight: '700', color: txt }}>All files</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              {/* Grid toggle — before Recent */}
+              <TouchableOpacity onPress={() => setGridView(v => !v)} style={{ padding: 4 }}>
+                {gridView ? (
+                  <Svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke={sub} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                    <Path d="M3 12h18M3 6h18M3 18h18"/>
+                  </Svg>
+                ) : (
+                  <Svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke={sub} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                    <Rect x="3" y="3" width="7" height="7" rx="1"/>
+                    <Rect x="14" y="3" width="7" height="7" rx="1"/>
+                    <Rect x="14" y="14" width="7" height="7" rx="1"/>
+                    <Rect x="3" y="14" width="7" height="7" rx="1"/>
+                  </Svg>
+                )}
+              </TouchableOpacity>
               {/* Recent dropdown */}
               <View style={{ position: 'relative' }}>
                 <TouchableOpacity
@@ -1179,9 +1276,6 @@ export default function DocumentsScreen() {
                   </View>
                 )}
               </View>
-              <TouchableOpacity onPress={() => setGridView(v => !v)} style={{ padding: 4 }}>
-                <Text style={{ fontSize: 29, color: sub, lineHeight: 29 }}>{gridView ? '☰' : '⊞'}</Text>
-              </TouchableOpacity>
             </View>
           </View>
           {/* Dismiss dropdown on outside tap */}
@@ -1541,6 +1635,156 @@ export default function DocumentsScreen() {
         </View>
       </Modal>
 
+      {/* ── Create Text Document Modal ── */}
+      <Modal
+        visible={createDocModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => !creatingDoc && setCreateDocModal(false)}
+      >
+        <Pressable style={styles.pickerBackdrop} onPress={() => !creatingDoc && setCreateDocModal(false)}>
+          <Pressable style={[styles.uploadSheet, { backgroundColor: card, borderColor: bdr }]} onPress={() => {}}>
+            {/* Header */}
+            <View style={[styles.pickerHeader, { borderBottomColor: bdr }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <Svg width={18} height={18} viewBox="0 0 24 24" fill="none">
+                  <Path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke="#22A06B" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+                  <Path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" stroke="#22A06B" strokeWidth={2} strokeLinecap="round"/>
+                </Svg>
+                <Text style={[styles.pickerTitle, { color: txt, fontSize: 16 }]}>Create New Document</Text>
+              </View>
+              <TouchableOpacity onPress={() => !creatingDoc && setCreateDocModal(false)}>
+                <Text style={{ color: sub, fontSize: 18 }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+              <ScrollView style={{ padding: 16 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+
+                {/* Project (Optional) */}
+                <Text style={[styles.uploadLabel, { color: sub }]}>Project <Text style={{ fontWeight: '400' }}>(Optional)</Text></Text>
+                <TouchableOpacity
+                  style={[styles.projectSelector, { borderColor: bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7', marginBottom: 6 }]}
+                  onPress={() => setUploadPickerOpen(o => !o)}
+                >
+                  <Text style={[{ flex: 1, fontSize: 13, color: createDocProject ? txt : sub }]} numberOfLines={1}>
+                    {uploadProjects.find(p => p.id === createDocProject)?.name || 'All Documents (No specific project)'}
+                  </Text>
+                  <Text style={{ color: sub, fontSize: 12 }}>{uploadPickerOpen ? '▲' : '▾'}</Text>
+                </TouchableOpacity>
+                <Text style={{ fontSize: 11, color: sub, marginBottom: 14 }}>
+                  Leave as "All Documents" to create without a project, or select a project to organize your document.
+                </Text>
+                {uploadPickerOpen && (
+                  <View style={[styles.uploadDropdown, { backgroundColor: card, borderColor: '#3B72EE', marginBottom: 12 }]}>
+                    <TouchableOpacity
+                      style={[styles.uploadDropdownItem, { borderBottomColor: bdr }]}
+                      onPress={() => { setCreateDocProject(null); setUploadPickerOpen(false); }}
+                    >
+                      <Text style={{ fontSize: 13, color: !createDocProject ? '#3B72EE' : txt, fontWeight: !createDocProject ? '700' : '500' }}>
+                        All Documents (No specific project)
+                      </Text>
+                      {!createDocProject && <Text style={{ color: '#3B72EE' }}>✓</Text>}
+                    </TouchableOpacity>
+                    {uploadProjects.map(p => (
+                      <TouchableOpacity
+                        key={p.id}
+                        style={[styles.uploadDropdownItem, { borderBottomColor: bdr }]}
+                        onPress={() => { setCreateDocProject(p.id); setUploadPickerOpen(false); }}
+                      >
+                        <Text style={{ flex: 1, fontSize: 13, color: createDocProject === p.id ? '#3B72EE' : txt, fontWeight: createDocProject === p.id ? '700' : '500' }}>
+                          {p.name}
+                        </Text>
+                        {createDocProject === p.id && <Text style={{ color: '#3B72EE' }}>✓</Text>}
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+
+                {/* Document Name */}
+                <Text style={[styles.uploadLabel, { color: sub }]}>Document Name *</Text>
+                <TextInput
+                  style={[{ borderWidth: 1.5, borderRadius: 12, borderColor: bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7', color: txt, fontSize: 14, paddingHorizontal: 14, height: 48, marginBottom: 14 }]}
+                  placeholder="Enter document name"
+                  placeholderTextColor={sub}
+                  value={createDocName}
+                  onChangeText={setCreateDocName}
+                />
+
+                {/* Content */}
+                <Text style={[styles.uploadLabel, { color: sub }]}>Content</Text>
+                <TextInput
+                  style={[{ borderWidth: 1.5, borderRadius: 12, borderColor: bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7', color: txt, fontSize: 14, padding: 14, minHeight: 140, textAlignVertical: 'top', marginBottom: 16 }]}
+                  placeholder="Type or paste your content here..."
+                  placeholderTextColor={sub}
+                  value={createDocContent}
+                  onChangeText={setCreateDocContent}
+                  multiline
+                  numberOfLines={6}
+                />
+
+                {/* Select Format */}
+                <Text style={[styles.uploadLabel, { color: sub }]}>Select Format</Text>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
+                  {['.txt', '.pdf', '.docx', '.xlsx', '.md', '.json'].map(fmt => {
+                    const isActive = createDocContent.endsWith(fmt) || createDocName.endsWith(fmt) || (createDocFormat === fmt);
+                    const fmtColors = { '.txt': '#6B7588', '.pdf': '#EF4444', '.docx': '#3B72EE', '.xlsx': '#22C55E', '.md': '#9370DB', '.json': '#F59E0B' };
+                    const color = fmtColors[fmt] || '#6B7588';
+                    return (
+                      <TouchableOpacity
+                        key={fmt}
+                        onPress={() => setCreateDocFormat(isActive ? null : fmt)}
+                        style={{ width: 72, paddingVertical: 10, borderRadius: 10, borderWidth: 1.5, borderColor: isActive ? color : bdr, backgroundColor: isActive ? color + '18' : (isDark ? '#252530' : '#F5F5F7'), alignItems: 'center', gap: 6 }}
+                      >
+                        <View style={{ width: 28, height: 28, borderRadius: 6, backgroundColor: color + '20', justifyContent: 'center', alignItems: 'center' }}>
+                          <Text style={{ fontSize: 10, fontWeight: '800', color }}>{fmt.replace('.', '').toUpperCase().slice(0,3)}</Text>
+                        </View>
+                        <Text style={{ fontSize: 11, color: isActive ? color : sub, fontWeight: isActive ? '700' : '500' }}>{fmt}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                {/* Custom Format */}
+                <Text style={[styles.uploadLabel, { color: sub }]}>Or Type Custom Format</Text>
+                <TextInput
+                  style={[{ borderWidth: 1.5, borderRadius: 12, borderColor: bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7', color: txt, fontSize: 14, paddingHorizontal: 14, height: 48, marginBottom: 20 }]}
+                  placeholder="e.g., csv, html, xml"
+                  placeholderTextColor={sub}
+                  value={createDocCustomFormat}
+                  onChangeText={setCreateDocCustomFormat}
+                  autoCapitalize="none"
+                />
+
+                {/* Buttons */}
+                <View style={{ flexDirection: 'row', gap: 10, marginBottom: 32 }}>
+                  <TouchableOpacity
+                    style={[styles.uploadCancelBtn, { borderColor: bdr }]}
+                    onPress={() => setCreateDocModal(false)}
+                    disabled={creatingDoc}
+                  >
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: sub }}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.uploadSubmitBtn, { backgroundColor: '#22A06B', opacity: creatingDoc ? 0.7 : 1 }]}
+                    onPress={submitCreateDoc}
+                    disabled={creatingDoc}
+                  >
+                    {creatingDoc
+                      ? <ActivityIndicator color="#fff" size="small" />
+                      : <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <Text style={{ color: '#fff', fontSize: 16 }}>+</Text>
+                          <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>Create Document</Text>
+                        </View>
+                    }
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
+            </KeyboardAvoidingView>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       {/* ── Upload / New Document Modal ─────────────────────────────────── */}
       <Modal
         visible={uploadModalVisible}
@@ -1586,8 +1830,12 @@ export default function DocumentsScreen() {
                     )}
                   </View>
                 ) : (
-                  <View style={{ alignItems: 'center', gap: 6 }}>
-                    <Text style={{ fontSize: 32 }}>📁</Text>
+                  <View style={{ alignItems: 'center', gap: 8 }}>
+                    <View style={{ width: 56, height: 56, borderRadius: 16, backgroundColor: '#3B72EE18', justifyContent: 'center', alignItems: 'center' }}>
+                      <Svg width={28} height={28} viewBox="0 0 24 24" fill="none">
+                        <Path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+                      </Svg>
+                    </View>
                     <Text style={[{ fontSize: fs(13), fontWeight: '600', color: sub }]}>Tap to choose a file</Text>
                     <Text style={[{ fontSize: fs(11), color: isDark ? '#5C5C6E' : '#AAAABC' }]}>
                       PDF, DOCX, XLSX, PPTX, images, and more
@@ -1606,7 +1854,7 @@ export default function DocumentsScreen() {
               </TouchableOpacity>
 
               {/* Project selector */}
-              <Text style={[styles.uploadLabel, { color: sub, marginTop: 14 }]}>Project *</Text>
+              <Text style={[styles.uploadLabel, { color: sub, marginTop: 14 }]}>Project <Text style={{ fontWeight: '400' }}>(optional)</Text></Text>
               <TouchableOpacity
                 style={[styles.projectSelector, { borderColor: uploadPickerOpen ? '#3B72EE' : bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
                 onPress={() => setUploadPickerOpen(o => !o)}
@@ -1614,7 +1862,7 @@ export default function DocumentsScreen() {
                 disabled={uploading}
               >
                 <Text style={[{ flex: 1, fontSize: fs(13), fontWeight: '600', color: uploadProjectId ? txt : sub }]} numberOfLines={1}>
-                  {uploadProjects.find(p => p.id === uploadProjectId)?.name || 'Select project…'}
+                  {uploadProjects.find(p => p.id === uploadProjectId)?.name || 'No project'}
                 </Text>
                 <Text style={{ color: sub, fontSize: 12 }}>{uploadPickerOpen ? '▲' : '▾'}</Text>
               </TouchableOpacity>
@@ -1624,7 +1872,10 @@ export default function DocumentsScreen() {
                 <View style={[styles.uploadDropdown, { backgroundColor: card, borderColor: '#3B72EE' }]}>
                   {/* Search */}
                   <View style={[styles.uploadDropdownSearch, { borderBottomColor: bdr }]}>
-                    <Text style={{ fontSize: 12, marginRight: 6 }}>🔍</Text>
+                    <Svg width={15} height={15} viewBox="0 0 24 24" fill="none" style={{ marginRight: 6 }}>
+                      <Path d="M11 19C15.4183 19 19 15.4183 19 11C19 6.58172 15.4183 3 11 3C6.58172 3 3 6.58172 3 11C3 15.4183 6.58172 19 11 19Z" stroke={sub} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+                      <Path d="M21 21L16.65 16.65" stroke={sub} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+                    </Svg>
                     <TextInput
                       style={[{ flex: 1, fontSize: fs(13), color: txt }]}
                       placeholder="Search projects…"
@@ -1635,6 +1886,16 @@ export default function DocumentsScreen() {
                     />
                   </View>
                   <ScrollView style={{ maxHeight: 180 }} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                    {/* No project option */}
+                    <TouchableOpacity
+                      style={[styles.uploadDropdownItem, { borderBottomColor: bdr }, !uploadProjectId && { backgroundColor: isDark ? '#252530' : '#F5F6FA' }]}
+                      onPress={() => { setUploadProjectId(null); setUploadPickerOpen(false); setUploadProjectSearch(''); }}
+                    >
+                      <Text style={[{ flex: 1, fontSize: fs(13), color: !uploadProjectId ? '#3B72EE' : sub, fontWeight: !uploadProjectId ? '700' : '400', fontStyle: 'italic' }]} numberOfLines={1}>
+                        No project
+                      </Text>
+                      {!uploadProjectId && <Text style={{ color: '#3B72EE', fontSize: 14 }}>✓</Text>}
+                    </TouchableOpacity>
                     {filteredUploadProjects.length === 0 ? (
                       <Text style={[{ fontSize: fs(12), color: sub, padding: 14, textAlign: 'center', fontStyle: 'italic' }]}>No projects found</Text>
                     ) : (
@@ -1659,9 +1920,12 @@ export default function DocumentsScreen() {
               )}
 
               {/* Info box */}
-              <View style={[styles.uploadInfo, { borderColor: 'rgba(78,205,196,0.3)', backgroundColor: 'rgba(78,205,196,0.06)' }]}>
-                <Text style={{ fontSize: fs(12), color: '#3B72EE', lineHeight: 18 }}>
-                  💾  File will be uploaded and linked to the selected project. It will appear in the Documents list immediately.
+              <View style={[styles.uploadInfo, { borderColor: '#3B72EE30', backgroundColor: '#3B72EE08' }]}>
+                <Svg width={14} height={14} viewBox="0 0 24 24" fill="none" style={{ marginTop: 2, flexShrink: 0 }}>
+                  <Path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+                </Svg>
+                <Text style={{ flex: 1, fontSize: fs(12), color: '#3B72EE', lineHeight: 18 }}>
+                  File will be uploaded to your workspace. If a project is selected, it will be linked to that project immediately.
                 </Text>
               </View>
 
@@ -1675,13 +1939,18 @@ export default function DocumentsScreen() {
                   <Text style={[{ fontSize: fs(14), fontWeight: '600', color: sub }]}>Cancel</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.uploadSubmitBtn, (!uploadFile || !uploadProjectId || uploading) && { opacity: 0.6 }]}
+                  style={[styles.uploadSubmitBtn, (!uploadFile || uploading) && { opacity: 0.6 }]}
                   onPress={submitUpload}
-                  disabled={!uploadFile || !uploadProjectId || uploading}
+                  disabled={!uploadFile || uploading}
                 >
                   {uploading
                     ? <ActivityIndicator color="#fff" size="small" />
-                    : <Text style={{ color: '#fff', fontSize: fs(14), fontWeight: '700' }}>⬆ Upload</Text>
+                    : <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Svg width={15} height={15} viewBox="0 0 24 24" fill="none">
+                          <Path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" stroke="#fff" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+                        </Svg>
+                        <Text style={{ color: '#fff', fontSize: fs(14), fontWeight: '700' }}>Upload</Text>
+                      </View>
                   }
                 </TouchableOpacity>
               </View>
@@ -1908,5 +2177,42 @@ const styles = StyleSheet.create({
     borderWidth: 1, padding: 12,
     marginBottom: 0,
   },
+
+  // Upload modal
+  pickerBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  uploadSheet: {
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    borderWidth: 1,
+    maxHeight: '90%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    elevation: 20,
+  },
+  pickerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+  },
+  pickerTitle:  { fontWeight: '700' },
+  uploadLabel:  { fontSize: 12, fontWeight: '600', marginBottom: 6, letterSpacing: 0.3 },
+  filePicker:   { borderWidth: 1.5, borderRadius: 12, borderStyle: 'dashed', padding: 24, alignItems: 'center', justifyContent: 'center', marginBottom: 4, minHeight: 110 },
+  projectSelector: { flexDirection: 'row', alignItems: 'center', borderWidth: 1.5, borderRadius: 12, paddingHorizontal: 14, height: 48, marginBottom: 4 },
+  uploadDropdown: { borderWidth: 1.5, borderRadius: 12, marginTop: 4, overflow: 'hidden', marginBottom: 8 },
+  uploadDropdownSearch: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1 },
+  uploadDropdownItem: { paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth },
+  uploadInfoBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderWidth: 1, borderRadius: 10, padding: 12, marginTop: 8, marginBottom: 8 },
+  uploadInfo:   { flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderWidth: 1, borderRadius: 10, padding: 12, marginTop: 8, marginBottom: 8 },
+  uploadBtn:    { borderRadius: 14, height: 52, justifyContent: 'center', alignItems: 'center', marginTop: 8, marginBottom: 4 },
+  uploadBtnTxt: { color: '#fff', fontSize: 15, fontWeight: '700' },
 
 });

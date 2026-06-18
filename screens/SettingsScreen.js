@@ -1,7 +1,7 @@
 import React, { useContext, useState, useCallback, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Switch, StatusBar, Alert, ActivityIndicator,
+  Switch, StatusBar, Alert, ActivityIndicator, Image, Modal,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -76,7 +76,8 @@ export default function SettingsScreen() {
   const insets            = useSafeAreaInsets();
   const { theme, setTheme } = useContext(ThemeContext);
   const { logout, user }  = useContext(AuthContext);
-  const { currentWorkspace } = useWorkspace();
+  const { currentWorkspace, workspaces, loadingWorkspaces, switchingId, fetchWorkspaces, handleSwitch } = useWorkspace();
+  const [wsModalOpen, setWsModalOpen] = useState(false);
   const { tasks }         = useTasksCache();
   const isDark = theme === 'Dark';
 
@@ -150,14 +151,18 @@ export default function SettingsScreen() {
         <View style={[styles.profileCard, { backgroundColor: card, borderColor: bdr }]}>
           {/* Avatar + info */}
           <View style={styles.profileTop}>
-            <View style={styles.avatarWrap}>
-              <View style={[styles.avatar, { backgroundColor: ACCENT }]}>
-                <Text style={styles.avatarText}>{initials}</Text>
-              </View>
-              <TouchableOpacity style={styles.editDot} onPress={() => navigation.navigate('EditProfile')}>
+            <TouchableOpacity style={styles.avatarWrap} onPress={() => navigation.navigate('EditProfile')} activeOpacity={0.8}>
+              {user?.avatarUrl || user?.avatar ? (
+                <Image source={{ uri: user.avatarUrl || user.avatar }} style={[styles.avatar, { borderRadius: 32 }]} />
+              ) : (
+                <View style={[styles.avatar, { backgroundColor: ACCENT }]}>
+                  <Text style={styles.avatarText}>{initials}</Text>
+                </View>
+              )}
+              <View style={styles.editDot}>
                 <Text style={{ color: '#fff', fontSize: 10 }}>+</Text>
-              </TouchableOpacity>
-            </View>
+              </View>
+            </TouchableOpacity>
             <View style={{ flex: 1 }}>
               <Text style={[styles.profileName, { color: txt }]}>{userName}</Text>
               <Text style={[styles.profileEmail, { color: sub }]}>{userEmail}</Text>
@@ -194,7 +199,7 @@ export default function SettingsScreen() {
         {/* ── WORKSPACE ── */}
         <Section title="WORKSPACE" sub={sub} />
         <View style={[styles.card, { backgroundColor: card, borderColor: bdr }]}>
-          <Row iconName="folder"  iconBg={blue.bg}    iconColor={blue.color}   label="Workspace"     value={wsName}                                          onPress={() => {}} isDark={isDark} bdr={bdr} txt={txt} sub={sub} />
+          <Row iconName="folder"  iconBg={blue.bg}    iconColor={blue.color}   label="Workspace"     value={wsName}                                          onPress={() => { fetchWorkspaces(); setWsModalOpen(true); }} isDark={isDark} bdr={bdr} txt={txt} sub={sub} />
           <Row iconName="users"   iconBg={purple.bg}  iconColor={purple.color} label="Members"       value={memberCount != null ? String(memberCount) : '—'} onPress={() => navigation.navigate('TeamManagement')} isDark={isDark} bdr={bdr} txt={txt} sub={sub} />
           <Row iconName="link"    iconBg={green.bg}   iconColor={green.color}  label="Integrations"  value="—"                                               onPress={() => {}} isDark={isDark} bdr={bdr} txt={txt} sub={sub} />
           <Row iconName="credit"  iconBg={yellow.bg}  iconColor={yellow.color} label="Billing"       value="Pro plan"                                        onPress={() => {}} isDark={isDark} bdr={bdr} txt={txt} sub={sub} isLast />
@@ -228,6 +233,64 @@ export default function SettingsScreen() {
 
         <Text style={[styles.version, { color: sub }]}>Dyuksa for iOS · v2.6.1</Text>
       </ScrollView>
+      {/* ── Workspace Switcher Modal ── */}
+      <Modal visible={wsModalOpen} transparent animationType="slide" onRequestClose={() => setWsModalOpen(false)}>
+        <TouchableOpacity style={styles.wsOverlay} activeOpacity={1} onPress={() => setWsModalOpen(false)} />
+        <View style={[styles.wsPanel, { backgroundColor: card, borderColor: bdr }]}>
+          <View style={[styles.wsHandle]} />
+          <View style={[styles.wsPanelHeader, { borderBottomColor: bdr }]}>
+            <Text style={[styles.wsPanelTitle, { color: txt }]}>Switch Workspace</Text>
+            <TouchableOpacity onPress={() => setWsModalOpen(false)}>
+              <Text style={{ color: sub, fontSize: 22, fontWeight: '300' }}>✕</Text>
+            </TouchableOpacity>
+          </View>
+          {loadingWorkspaces ? (
+            <View style={{ padding: 32, alignItems: 'center' }}>
+              <ActivityIndicator color={ACCENT} />
+            </View>
+          ) : (
+            <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false}>
+              {workspaces.map((ws, i) => {
+                const isActive   = String(ws.id) === String(currentWorkspace?.id);
+                const switching  = switchingId === ws.id;
+                const initial    = (ws.name || 'W')[0].toUpperCase();
+                return (
+                  <TouchableOpacity
+                    key={ws.id}
+                    style={[styles.wsItem, { borderBottomColor: bdr, backgroundColor: isActive ? ACCENT + '10' : 'transparent' }, i === workspaces.length - 1 && { borderBottomWidth: 0 }]}
+                    onPress={() => {
+                      if (isActive) { setWsModalOpen(false); return; }
+                      handleSwitch(ws)
+                        .then(() => {
+                          setWsModalOpen(false);
+                          try { navigation.jumpTo('Dashboard'); }
+                          catch { navigation.navigate('Main', { screen: 'Dashboard' }); }
+                        })
+                        .catch(e => Alert.alert('Could not switch', e.message || 'Try again.'));
+                    }}
+                    disabled={!!switchingId}
+                    activeOpacity={0.7}
+                  >
+                    <View style={[styles.wsItemAvatar, { backgroundColor: isActive ? ACCENT : ACCENT + '22' }]}>
+                      <Text style={{ color: isActive ? '#fff' : ACCENT, fontSize: 15, fontWeight: '700' }}>{initial}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.wsItemName, { color: txt, fontWeight: isActive ? '700' : '500' }]} numberOfLines={1}>{ws.name}</Text>
+                      {ws.description ? <Text style={{ fontSize: 11, color: sub }} numberOfLines={1}>{ws.description}</Text> : null}
+                    </View>
+                    {switching
+                      ? <ActivityIndicator size="small" color={ACCENT} />
+                      : isActive
+                        ? <Text style={{ color: ACCENT, fontSize: 16, fontWeight: '700' }}>✓</Text>
+                        : null
+                    }
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          )}
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -273,4 +336,14 @@ const styles = StyleSheet.create({
   logoutText: { fontSize: 15, fontWeight: '600', color: '#E5484D' },
 
   version: { textAlign: 'center', fontSize: 12, paddingBottom: 4 },
+
+  // Workspace modal
+  wsOverlay:     { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.4)' },
+  wsPanel:       { position: 'absolute', bottom: 0, left: 0, right: 0, borderTopLeftRadius: 24, borderTopRightRadius: 24, borderWidth: 1, borderBottomWidth: 0, paddingBottom: 32 },
+  wsHandle:      { width: 40, height: 4, backgroundColor: '#D0D5E0', borderRadius: 2, alignSelf: 'center', marginTop: 12, marginBottom: 4 },
+  wsPanelHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1 },
+  wsPanelTitle:  { fontSize: 17, fontWeight: '700' },
+  wsItem:        { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1 },
+  wsItemAvatar:  { width: 40, height: 40, borderRadius: 10, justifyContent: 'center', alignItems: 'center', flexShrink: 0 },
+  wsItemName:    { fontSize: 15 },
 });

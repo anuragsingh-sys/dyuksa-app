@@ -11,7 +11,7 @@ import { AuthContext } from '../context/AuthContext';
 import SidebarMenu from '../components/SidebarMenu';
 import NotificationBell from '../components/NotificationBell';
 import { getAccessToken } from '../services/ApiService';
-import Svg, { Path } from 'react-native-svg';
+import Svg, { Path, Rect } from 'react-native-svg';
 import { API_BASE } from '../config';
 
 // ── Module-level cache ────────────────────────────────────────────────────────
@@ -396,10 +396,23 @@ export default function QuickNotesScreen() {
           {/* + and Grid/list toggle */}
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
             <TouchableOpacity onPress={() => { setFolderName(''); setFolderModal(true); }} style={{ padding: 4 }}>
-              <Text style={{ fontSize: 31, color: '#3B72EE', fontWeight: '300', lineHeight: 34 }}>+</Text>
+              <Svg width={22} height={22} viewBox="0 0 24 24" fill="none">
+                <Path d="M12 5v14M5 12h14" stroke="#3B72EE" strokeWidth={2.5} strokeLinecap="round"/>
+              </Svg>
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => setGridMode(v => !v)} style={{ padding: 4, marginTop: 4 }}>
-              <Text style={{ fontSize: 30, color: sub, lineHeight: 30 }}>{gridMode ? '☰' : '⊞'}</Text>
+            <TouchableOpacity onPress={() => setGridMode(v => !v)} style={{ padding: 4 }}>
+              {gridMode ? (
+                <Svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke={sub} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <Path d="M3 12h18M3 6h18M3 18h18"/>
+                </Svg>
+              ) : (
+                <Svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke={sub} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <Rect x="3" y="3" width="7" height="7" rx="1"/>
+                  <Rect x="14" y="3" width="7" height="7" rx="1"/>
+                  <Rect x="14" y="14" width="7" height="7" rx="1"/>
+                  <Rect x="3" y="14" width="7" height="7" rx="1"/>
+                </Svg>
+              )}
             </TouchableOpacity>
           </View>
         </View>
