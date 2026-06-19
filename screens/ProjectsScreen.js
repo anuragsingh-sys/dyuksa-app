@@ -484,15 +484,13 @@ export default function ProjectsScreen() {
                         </Text>
                       </View>
                       <View style={{ flex: 1 }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                          <Text style={{ fontSize: 14, fontWeight: '700', color: txt, flex: 1 }} numberOfLines={1}>{proj.name}</Text>
-                          <View style={[s.statusChip, { backgroundColor: (proj.is_active ? T.cBlue : T.cGreen) + '20' }]}>
-                            <Text style={{ fontSize: 10, fontWeight: '700', color: proj.is_active ? T.cBlue : T.cGreen }}>
-                              {proj.is_active ? 'In Progress' : 'Completed'}
-                            </Text>
-                          </View>
+                        <Text style={{ fontSize: 14, fontWeight: '700', color: txt, marginBottom: 4 }} numberOfLines={1}>{proj.name}</Text>
+                        <View style={[s.statusChip, { backgroundColor: (proj.is_active ? T.cBlue : T.cGreen) + '20', alignSelf: 'flex-start' }]}>
+                          <Text style={{ fontSize: 10, fontWeight: '700', color: proj.is_active ? T.cBlue : T.cGreen }}>
+                            {proj.is_active ? 'In Progress' : 'Completed'}
+                          </Text>
                         </View>
-                        <Text style={{ fontSize: 12, color: sub, marginTop: 2 }} numberOfLines={1}>
+                        <Text style={{ fontSize: 12, color: sub, marginTop: 4 }} numberOfLines={1}>
                           {proj.description || TASK_TYPE_LABELS[proj.task_type] || proj.task_type || ''}
                         </Text>
                       </View>

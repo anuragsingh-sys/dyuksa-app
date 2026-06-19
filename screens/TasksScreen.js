@@ -637,11 +637,11 @@ export default function TasksScreen() {
           return s === 'pending' || s === 'in_progress';
         })
       : filter === 'overdue'
-      // Overdue: any task (except completed/deployed) with a past due date
-      // pending + backlog + review + deferred — all show here if past due
+      // Overdue: backlog/deferred/review always + pending with past due date
       ? tasks.filter(t => {
           const s = (t.status||'').toLowerCase();
           const due = t.end_date || t.due_date;
+          if (['backlog', 'deferred', 'review'].includes(s)) return true;
           return !['completed','deployed','done','in_progress'].includes(s) && due && due < today;
         })
       : filter === 'completed'
@@ -712,9 +712,11 @@ export default function TasksScreen() {
             <Text style={{ fontSize: 11, color: sub, marginTop: 1 }}>
               {tasks.length} total{tasks.filter(t => {
                 const s = (t.status||'').toLowerCase(); const due = t.end_date || t.due_date;
+                if (['backlog','deferred','review'].includes(s)) return true;
                 return !['completed','deployed','done','in_progress'].includes(s) && due && due < new Date().toISOString().slice(0,10);
               }).length > 0 ? ` · ${tasks.filter(t => {
                 const s = (t.status||'').toLowerCase(); const due = t.end_date || t.due_date;
+                if (['backlog','deferred','review'].includes(s)) return true;
                 return !['completed','deployed','done','in_progress'].includes(s) && due && due < new Date().toISOString().slice(0,10);
               }).length} overdue` : ''}
             </Text>
@@ -761,7 +763,7 @@ export default function TasksScreen() {
         <View style={{ flexDirection: 'row' }}>
           {[
             { key: 'upcoming',  label: 'Upcoming',  count: tasks.filter(t => { const s = (t.status||'').toLowerCase(); return s === 'pending' || s === 'in_progress'; }).length },
-            { key: 'overdue',   label: 'Overdue',   count: tasks.filter(t => { const s = (t.status||'').toLowerCase(); const due = t.end_date||t.due_date; return !['completed','deployed','done','in_progress'].includes(s) && due && due < new Date().toISOString().slice(0,10); }).length },
+            { key: 'overdue',   label: 'Overdue',   count: tasks.filter(t => { const s = (t.status||'').toLowerCase(); const due = t.end_date||t.due_date; if (['backlog','deferred','review'].includes(s)) return true; return !['completed','deployed','done','in_progress'].includes(s) && due && due < new Date().toISOString().slice(0,10); }).length },
             { key: 'completed', label: 'Completed', count: tasks.filter(t => ['completed','done','deployed'].includes(t.status)).length },
           ].map(({ key, label, count }) => {
             const isActive = filter === key;
@@ -1022,7 +1024,7 @@ const styles = StyleSheet.create({
   navRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   logoBox: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center' },
   logoText: { color: '#3B72EE', fontSize: 15, fontWeight: '800' },
-  brandName: { fontSize: 17, fontWeight: '700' },
+  brandName: { fontSize: 15, fontWeight: '700' },
   navIconBtn: { width: 36, height: 36, borderRadius: 8, borderWidth: 1, justifyContent: 'center', alignItems: 'center' },
   navIcon: { fontSize: 16 },
 

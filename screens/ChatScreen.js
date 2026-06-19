@@ -916,13 +916,6 @@ export default function ChatScreen({ route }) {
           }}
         />
       )}
-      {/* FAB */}
-      <TouchableOpacity
-        style={{ position: 'absolute', right: 18, bottom: 24, width: 62, height: 62, borderRadius: 31, backgroundColor: '#3B82F6', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.25, shadowRadius: 10, elevation: 8 }}
-        onPress={openNewChatModal}
-      >
-        <Text style={{ color: '#fff', fontSize: 36, fontWeight: '300', lineHeight: 42, marginTop: -2 }}>+</Text>
-      </TouchableOpacity>
       </View>
 
       {/* ── New Team Chat Modal ──────────────────────────────────────── */}
@@ -1082,7 +1075,7 @@ const styles = StyleSheet.create({
   navRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   logoBox: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center' },
   logoText: { color: '#3B72EE', fontSize: 15, fontWeight: '800' },
-  brandName: { fontWeight: '700', fontSize: 17 },
+  brandName: { fontWeight: '700', fontSize: 15 },
 
   // Search
   searchWrap: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, height: 42 },

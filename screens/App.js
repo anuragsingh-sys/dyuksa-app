@@ -148,6 +148,7 @@ function BottomNavBar({ state, navigation }) {
         return (
           <Animated.View key={tab.key} style={[navStyles.tabItem, { transform: [{ scale: scales[i] }] }]}>
             <TouchableOpacity onPress={() => handlePress(tab.key, i)} activeOpacity={0.7} style={navStyles.tabTouch}>
+              {isActive && <View style={navStyles.activeDot} />}
               <Icon filled={isActive} />
               <Text style={[navStyles.tabLabel, isActive && navStyles.tabLabelActive]}>{tab.key}</Text>
             </TouchableOpacity>
@@ -158,8 +159,8 @@ function BottomNavBar({ state, navigation }) {
   );
 
   return (
-    <View style={[navStyles.wrapper, { paddingBottom: insets.bottom }]}>
-      <View style={navStyles.pill}>
+    <View style={[navStyles.wrapper, { paddingBottom: insets.bottom || 10 }]}>
+      <View style={[navStyles.pill, navStyles.pillGlass]}>
         <PillContent />
       </View>
     </View>
@@ -167,15 +168,16 @@ function BottomNavBar({ state, navigation }) {
 }
 
 const navStyles = StyleSheet.create({
-  wrapper:     { position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 999, backgroundColor: '#FFFFFF', borderTopWidth: 1, borderTopColor: '#EEF0F4' },
-  pill:        { overflow: 'hidden' },
-  pillGlass:   { backgroundColor: '#FFFFFF' },
-  pillRow:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-evenly', height: 54 },
+  wrapper:     { position: 'absolute', bottom: 0, left: 0, right: 0, paddingHorizontal: 16, zIndex: 999 },
+  pill:        { height: 66, borderRadius: 33, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.5)' },
+  pillGlass:   { backgroundColor: 'rgba(255,255,255,0.25)', borderColor: 'rgba(255,255,255,0.5)' },
+  pillRow:     { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-evenly', height: 66 },
   tabItem:     { flex: 1, alignItems: 'center', justifyContent: 'center', height: '100%' },
   tabTouch:    { alignItems: 'center', justifyContent: 'center', padding: 4, position: 'relative' },
   tabLabel:    { fontSize: 9, fontWeight: '500', color: '#9AA3B2', marginTop: 2 },
   tabLabelActive: { color: '#3B72EE', fontWeight: '700' },
-  fab:         { width: 50, height: 50, borderRadius: 25, alignItems: 'center', justifyContent: 'center', backgroundColor: '#3B72EE', shadowColor: '#3B72EE', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.35, shadowRadius: 8, elevation: 6 },
+  activeDot:   { position: 'absolute', top: -6, width: 5, height: 5, borderRadius: 2.5, backgroundColor: '#3B72EE' },
+  fab:         { width: 50, height: 50, borderRadius: 25, alignItems: 'center', justifyContent: 'center', borderWidth: 2.5, borderColor: 'rgba(255,255,255,0.55)', shadowColor: '#3B72EE', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.45, shadowRadius: 12, elevation: 10 },
 });
 
 // ── Draggable Floating FAB ────────────────────────────────────────────────────
@@ -682,6 +684,7 @@ function GlobalNavBar() {
         return (
           <Animated.View key={tab.key} style={[navStyles.tabItem, { transform: [{ scale: scales[i] }] }]}>
             <TouchableOpacity onPress={() => handlePress(tab.key, i)} activeOpacity={0.7} style={navStyles.tabTouch}>
+              {isActive && <View style={navStyles.activeDot} />}
               <Icon filled={isActive} />
               <Text style={[navStyles.tabLabel, isActive && navStyles.tabLabelActive]}>{tab.key}</Text>
             </TouchableOpacity>
@@ -692,8 +695,8 @@ function GlobalNavBar() {
   );
 
   return (
-    <View style={[navStyles.wrapper, { paddingBottom: insets.bottom }]}>
-      <View style={navStyles.pill}>
+    <View style={[navStyles.wrapper, { paddingBottom: insets.bottom || 10 }]}>
+      <View style={[navStyles.pill, navStyles.pillGlass]}>
         <PillContent />
       </View>
     </View>

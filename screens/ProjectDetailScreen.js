@@ -124,17 +124,22 @@ export default function ProjectDetailScreen() {
   const projColor = '#4A7FE5';
   const memberList  = getProjectMembers(project);
   const memberCount = project?.member_count ?? memberList.length;
-  const progress    = project?.progress || project?.completion_percentage || 0;
 
   const totalT    = projectTasks.length;
-  const doneT     = projectTasks.filter(t => (t.status||'').toLowerCase() === 'completed').length;
+  const doneT     = projectTasks.filter(t => ['completed', 'deployed', 'done'].includes((t.status||'').toLowerCase())).length;
   const inProgT   = projectTasks.filter(t => (t.status||'').toLowerCase() === 'in_progress').length;
   const pendingT  = projectTasks.filter(t => (t.status||'').toLowerCase() === 'pending').length;
   const overdueT  = projectTasks.filter(t => {
     const s = (t.status||'').toLowerCase();
     const due = t.end_date || t.due_date;
-    return s !== 'completed' && due && due < new Date().toISOString().slice(0, 10);
+    if (['backlog', 'deferred', 'review'].includes(s)) return true;
+    return !['completed', 'deployed', 'done', 'in_progress'].includes(s) && due && due < new Date().toISOString().slice(0, 10);
   }).length;
+
+  // Calculate real progress from tasks; fall back to API field if no tasks loaded yet
+  const progress = totalT > 0
+    ? Math.round(doneT / totalT * 100)
+    : (project?.progress || project?.completion_percentage || 0);
   const dueFmt = project?.end_date || project?.due_date
     ? new Date(project.end_date || project.due_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
     : '—';
