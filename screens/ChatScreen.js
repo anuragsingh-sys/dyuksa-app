@@ -704,7 +704,7 @@ export default function ChatScreen({ route }) {
               ref={flatRef}
               data={groupedMessages}
               keyExtractor={(item, i) => item.date + i}
-              contentContainerStyle={{ padding: 12, paddingBottom: 16 }}
+              contentContainerStyle={{ padding: 12, paddingBottom: 90 }}
               showsVerticalScrollIndicator={false}
               onContentSizeChange={() => flatRef.current?.scrollToEnd({ animated: false })}
               renderItem={({ item: group }) => (
@@ -916,6 +916,13 @@ export default function ChatScreen({ route }) {
           }}
         />
       )}
+      {/* FAB */}
+      <TouchableOpacity
+        style={{ position: 'absolute', right: 18, bottom: 24, width: 62, height: 62, borderRadius: 31, backgroundColor: '#3B82F6', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.25, shadowRadius: 10, elevation: 8 }}
+        onPress={openNewChatModal}
+      >
+        <Text style={{ color: '#fff', fontSize: 36, fontWeight: '300', lineHeight: 42, marginTop: -2 }}>+</Text>
+      </TouchableOpacity>
       </View>
 
       {/* ── New Team Chat Modal ──────────────────────────────────────── */}

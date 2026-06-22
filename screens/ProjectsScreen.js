@@ -8,7 +8,8 @@ import { useState, useContext, useEffect, useCallback, useMemo } from 'react';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { NotificationsContext } from '../context/NotificationsContext';
 import { AuthContext } from '../context/AuthContext';
-import { getUsers, getProjects, getTasks } from '../services/ApiService';
+import { getProjects, getTasks, getAccessToken } from '../services/ApiService';
+import { API_BASE } from '../config';
 import SidebarMenu from '../components/SidebarMenu';
 import { ThemeContext } from '../context/ThemeContext';
 import NotificationBell from '../components/NotificationBell';
@@ -177,8 +178,6 @@ export default function ProjectsScreen() {
     // Optimistic update
     setProjects(prev => prev.map(p => p.id === project.id ? { ...p, [key]: next } : p));
     try {
-      const { getAccessToken } = require('../services/ApiService');
-      const { API_BASE } = require('../config');
       const token = await getAccessToken();
       const res = await fetch(`${API_BASE}/api/v1/projects/${project.id}/`, {
         method: 'PATCH',

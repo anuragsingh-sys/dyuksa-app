@@ -145,7 +145,7 @@ export default function SettingsScreen() {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 40 }}
+        contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 90 }}
       >
         {/* ── Profile card ── */}
         <View style={[styles.profileCard, { backgroundColor: card, borderColor: bdr }]}>

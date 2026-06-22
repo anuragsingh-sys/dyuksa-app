@@ -12,7 +12,7 @@ import { AuthContext } from '../context/AuthContext';
 import { getAccessToken, getWorkspaceId } from '../services/ApiService';
 import SidebarMenu from '../components/SidebarMenu';
 import NotificationBell from '../components/NotificationBell';
-import { BASE_URL } from '../config';
+import { BASE_URL, API_BASE } from '../config';
 import { Feather } from '@expo/vector-icons';
 import { useTasksCache } from '../hooks/useTasksCache';
 
@@ -189,8 +189,8 @@ export default function DashboardScreen() {
       const headers = await authHeaders();
 
       const [projectsRes, docsRes] = await Promise.all([
-        fetch(`${BASE_URL}/projects/?page_size=20`, { headers }),
-        fetch(`${BASE_URL}/documents/?page_size=10`, { headers }),
+        fetch(`${API_BASE}/api/v1/projects/?page_size=20`, { headers }),
+        fetch(`${API_BASE}/api/v1/documents/?page_size=10`, { headers }),
       ]);
 
       if (projectsRes.ok) {
@@ -824,7 +824,7 @@ const s = StyleSheet.create({
   navIcon: { fontSize: 16 },
   logoBox: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center' },
   logoText: { color: '#4ECDC4', fontSize: 15, fontWeight: '800' },
-  brandName: { fontWeight: '700', fontSize: 17 },
+  brandName: { fontWeight: '700', fontSize: 15 },
 
   // Greeting card
   greetCard: { borderRadius: T.rLg, padding: 20, marginBottom: 22, overflow: 'hidden' },

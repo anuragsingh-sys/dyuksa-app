@@ -139,7 +139,7 @@ export default function SidebarMenu({ activeScreen }) {
 
                 <SidebarItem icon="check-square"  label="Tasks"      active={activeScreen === 'Tasks'}     onPress={() => goToTab('Tasks')} isDarkMode={isDark} />
 
-                <SidebarItem icon="calendar"      label="Calendar"       active={activeScreen === 'Calendar'}   onPress={() => goToTab('Calendar')} isDarkMode={isDark} />
+                <SidebarItem icon="calendar"      label="Calendar"       active={activeScreen === 'Calendar'}   onPress={() => goToStack('Calendar')} isDarkMode={isDark} />
                 <SidebarItem icon="briefcase"     label="My Work"        active={activeScreen === 'MyWork'}     onPress={() => goToStack('MyWork')} isDarkMode={isDark} />
                 <SidebarItem icon="bar-chart-2"   label="Reports"        active={activeScreen === 'Reports'}    onPress={() => goToStack('Reports')} isDarkMode={isDark} />
                 <SidebarItem svgIcon={NotebookIcon} label="Notes"         active={activeScreen === 'QuickNotes'} onPress={() => goToStack('QuickNotes')} isDarkMode={isDark} />

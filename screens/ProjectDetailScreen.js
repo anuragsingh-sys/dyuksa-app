@@ -124,22 +124,17 @@ export default function ProjectDetailScreen() {
   const projColor = '#4A7FE5';
   const memberList  = getProjectMembers(project);
   const memberCount = project?.member_count ?? memberList.length;
+  const progress    = project?.progress || project?.completion_percentage || 0;
 
   const totalT    = projectTasks.length;
-  const doneT     = projectTasks.filter(t => ['completed', 'deployed', 'done'].includes((t.status||'').toLowerCase())).length;
+  const doneT     = projectTasks.filter(t => (t.status||'').toLowerCase() === 'completed').length;
   const inProgT   = projectTasks.filter(t => (t.status||'').toLowerCase() === 'in_progress').length;
   const pendingT  = projectTasks.filter(t => (t.status||'').toLowerCase() === 'pending').length;
   const overdueT  = projectTasks.filter(t => {
     const s = (t.status||'').toLowerCase();
     const due = t.end_date || t.due_date;
-    if (['backlog', 'deferred', 'review'].includes(s)) return true;
-    return !['completed', 'deployed', 'done', 'in_progress'].includes(s) && due && due < new Date().toISOString().slice(0, 10);
+    return s !== 'completed' && due && due < new Date().toISOString().slice(0, 10);
   }).length;
-
-  // Calculate real progress from tasks; fall back to API field if no tasks loaded yet
-  const progress = totalT > 0
-    ? Math.round(doneT / totalT * 100)
-    : (project?.progress || project?.completion_percentage || 0);
   const dueFmt = project?.end_date || project?.due_date
     ? new Date(project.end_date || project.due_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
     : '—';
@@ -213,7 +208,7 @@ export default function ProjectDetailScreen() {
     if (!projectId || route?.params?.project) return;
     try {
       const headers = await authHeaders();
-      const res = await fetch(`${BASE_URL}/projects/${projectId}/`, { headers });
+      const res = await fetch(`${API_BASE}/api/v1/projects/${projectId}/`, { headers });
       if (res.ok) setProject(await res.json());
     } catch (e) { console.warn('fetchProject:', e.message); }
   }, [projectId]);
@@ -232,7 +227,7 @@ export default function ProjectDetailScreen() {
     setProject(p => p ? { ...p, [key]: next } : p);
     try {
       const headers = await authHeaders();
-      await fetch(`${BASE_URL}/projects/${projectId}/`, {
+      await fetch(`${API_BASE}/api/v1/projects/${projectId}/`, {
         method: 'PATCH', headers,
         body: JSON.stringify({ [key]: next }),
       });

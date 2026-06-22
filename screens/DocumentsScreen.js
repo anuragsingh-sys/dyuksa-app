@@ -266,7 +266,7 @@ export default function DocumentsScreen() {
   const txt  = isDark ? '#FFFFFF' : '#1A1A2E';
   const sub  = isDark ? '#9898A6' : '#888899';
   const bdr  = isDark ? '#252530' : '#EBEBF0';
-  const fs   = s => s * (fontScale || 1);
+  const fs   = s => s * fontScale;
 
   const [docs,         setDocs]         = useState([]);
   const [projectMap,   setProjectMap]   = useState({}); // { [id]: name }
@@ -276,6 +276,8 @@ export default function DocumentsScreen() {
   const [search,       setSearch]       = useState('');
   const [typeFilter,   setTypeFilter]   = useState('all');
   const [projectFilter,setProjectFilter]= useState('all');
+  const [pickerOpen,   setPickerOpen]   = useState(null);
+
   // ── Selection state ──
   const [selectedIds,    setSelectedIds]    = useState(new Set());
   const [shareModalDoc,  setShareModalDoc]  = useState(null);
@@ -299,10 +301,6 @@ export default function DocumentsScreen() {
   const [tagSearch,      setTagSearch]      = useState('');
   const [addingTags,     setAddingTags]     = useState(false);
   const [loadingTags,    setLoadingTags]    = useState(false);
-
-  const [fileFilter,       setFileFilter]       = useState('recent');
-  const [gridView,         setGridView]         = useState(false);
-  const [showSortDropdown, setShowSortDropdown] = useState(false);
 
   const isSelecting    = selectedIds.size > 0;
   const toggleSelect   = (id) => setSelectedIds(prev => {
@@ -1066,8 +1064,15 @@ export default function DocumentsScreen() {
   const folders = Object.entries(folderMap).map(([name, files]) => ({ name, count: files.length }));
   folders.sort((a, b) => b.count - a.count);
 
-  // Storage count (real)
+  const [fileFilter,       setFileFilter]       = useState('recent');
+  const [gridView,         setGridView]         = useState(false);
+  const [showSortDropdown, setShowSortDropdown] = useState(false);
+
+  // Storage mock (replace with real API when available)
   const totalFiles = docs.length;
+  const storageUsed = 12.4;
+  const storageTotal = 50;
+  const storagePercent = (storageUsed / storageTotal) * 100;
 
   // Filter + sort docs
   const FILE_FILTERS = [
@@ -1188,10 +1193,9 @@ export default function DocumentsScreen() {
                 <TouchableOpacity
                   key={folder.name}
                   style={[styles.folderCard, { backgroundColor: card, borderColor: bdr }]}
-                  onPress={() => {
-                    const entry = Object.entries(projectMap).find(([id, name]) => name === folder.name);
-                    setProjectFilter(entry ? entry[0] : 'all');
-                  }}
+                  onPress={() => setProjectFilter(
+                    Object.keys(folderMap).find(k => projectMap[k] === folder.name) || 'all'
+                  )}
                   activeOpacity={0.75}
                 >
                   <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>

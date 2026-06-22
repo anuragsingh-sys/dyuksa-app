@@ -54,40 +54,40 @@ const Stack = createNativeStackNavigator();
 const Tab   = createBottomTabNavigator();
 
 // ── Bottom Nav Icons ──────────────────────────────────────────────────────────
-const HomeIcon = ({ filled }) => filled ? (
+const HomeIcon = ({ filled, inactiveColor = '#9AA3B2' }) => filled ? (
   <Svg width={24} height={24} viewBox="0 0 24 24" fill="#3B72EE"><Path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></Svg>
 ) : (
   <Svg width={24} height={24} viewBox="0 0 24 24" fill="none">
-    <Path d="M3 12L12 3l9 9M5 10v9a1 1 0 001 1h4v-5h4v5h4a1 1 0 001-1v-9" stroke="#9AA3B2" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"/>
+    <Path d="M3 12L12 3l9 9M5 10v9a1 1 0 001 1h4v-5h4v5h4a1 1 0 001-1v-9" stroke={inactiveColor} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"/>
   </Svg>
 );
-const ProjectsIcon = ({ filled }) => filled ? (
+const ProjectsIcon = ({ filled, inactiveColor = '#9AA3B2' }) => filled ? (
   <Svg width={24} height={24} viewBox="0 0 24 24" fill="#3B72EE"><Path d="M20 6h-8l-2-2H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2z"/></Svg>
 ) : (
   <Svg width={24} height={24} viewBox="0 0 24 24" fill="none">
-    <Path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" stroke="#9AA3B2" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"/>
+    <Path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" stroke={inactiveColor} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"/>
   </Svg>
 );
-const TasksIcon = ({ filled }) => filled ? (
+const TasksIcon = ({ filled, inactiveColor = '#9AA3B2' }) => filled ? (
   <Svg width={24} height={24} viewBox="0 0 24 24" fill="#3B72EE">
     <Path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/>
     <Path d="M9 11l3 3L22 4" stroke="#fff" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" fill="none"/>
   </Svg>
 ) : (
   <Svg width={24} height={24} viewBox="0 0 24 24" fill="none">
-    <Path d="M9 11l3 3L22 4" stroke="#9AA3B2" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"/>
-    <Path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" stroke="#9AA3B2" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"/>
+    <Path d="M9 11l3 3L22 4" stroke={inactiveColor} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"/>
+    <Path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" stroke={inactiveColor} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"/>
   </Svg>
 );
-const ProfileIcon = ({ filled }) => filled ? (
+const ProfileIcon = ({ filled, inactiveColor = '#9AA3B2' }) => filled ? (
   <Svg width={24} height={24} viewBox="0 0 24 24" fill="#3B72EE">
     <Path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/>
     <Circle cx={12} cy={7} r={4}/>
   </Svg>
 ) : (
   <Svg width={24} height={24} viewBox="0 0 24 24" fill="none">
-    <Path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" stroke="#9AA3B2" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"/>
-    <Circle cx={12} cy={7} r={4} stroke="#9AA3B2" strokeWidth={1.8}/>
+    <Path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" stroke={inactiveColor} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"/>
+    <Circle cx={12} cy={7} r={4} stroke={inactiveColor} strokeWidth={1.8}/>
   </Svg>
 );
 
@@ -98,73 +98,6 @@ const NAV_TABS = [
   { key: 'Tasks',     Icon: TasksIcon },
   { key: 'Profile',   Icon: ProfileIcon },
 ];
-
-function BottomNavBar({ state, navigation }) {
-  const insets   = useSafeAreaInsets();
-  const scales   = useRef(NAV_TABS.map(() => new Animated.Value(1))).current;
-  const fabPulse = useRef(new Animated.Value(1)).current;
-
-  useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(fabPulse, { toValue: 1.07, duration: 1800, useNativeDriver: true }),
-        Animated.timing(fabPulse, { toValue: 1,    duration: 1800, useNativeDriver: true }),
-      ])
-    ).start();
-  }, []);
-
-  const handlePress = (key, i) => {
-    Animated.sequence([
-      Animated.spring(scales[i], { toValue: 0.82, useNativeDriver: true, speed: 40 }),
-      Animated.spring(scales[i], { toValue: 1,    useNativeDriver: true, speed: 20, bounciness: 10 }),
-    ]).start();
-    if (key === 'CREATE') { navigation.navigate('QuickCreate'); return; }
-    const isFocused = state.routes[state.index].name === key;
-    if (!isFocused) navigation.navigate(key);
-  };
-
-  const activeKey = state.routes[state.index].name;
-
-  const PillContent = () => (
-    <View style={navStyles.pillRow}>
-      {NAV_TABS.map((tab, i) => {
-        const isActive = tab.key === activeKey;
-        if (tab.key === 'CREATE') {
-          return (
-            <View key="CREATE" style={{ flex: 1, alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-              <Animated.View style={{ transform: [{ scale: Animated.multiply(scales[i], fabPulse) }] }}>
-                <TouchableOpacity onPress={() => handlePress('CREATE', i)} activeOpacity={0.85}>
-                  <LinearGradient colors={['#3B72EE', '#3B72EE']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={navStyles.fab}>
-                    <Svg width={24} height={24} viewBox="0 0 24 24" fill="none">
-                      <Path d="M12 5v14M5 12h14" stroke="#fff" strokeWidth={2.5} strokeLinecap="round"/>
-                    </Svg>
-                  </LinearGradient>
-                </TouchableOpacity>
-              </Animated.View>
-            </View>
-          );
-        }
-        const { Icon } = tab;
-        return (
-          <Animated.View key={tab.key} style={[navStyles.tabItem, { transform: [{ scale: scales[i] }] }]}>
-            <TouchableOpacity onPress={() => handlePress(tab.key, i)} activeOpacity={0.7} style={navStyles.tabTouch}>
-              <Icon filled={isActive} />
-              <Text style={[navStyles.tabLabel, isActive && navStyles.tabLabelActive]}>{tab.key}</Text>
-            </TouchableOpacity>
-          </Animated.View>
-        );
-      })}
-    </View>
-  );
-
-  return (
-    <View style={[navStyles.wrapper, { paddingBottom: insets.bottom }]}>
-      <View style={navStyles.pill}>
-        <PillContent />
-      </View>
-    </View>
-  );
-}
 
 const navStyles = StyleSheet.create({
   wrapper:     { position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 999, backgroundColor: '#FFFFFF', borderTopWidth: 1, borderTopColor: '#EEF0F4' },
@@ -558,6 +491,10 @@ const NAV_HIDDEN_SCREENS = [
 
 function GlobalNavBar() {
   const { isAuthenticated } = useContext(AuthContext);
+  const { theme } = useContext(ThemeContext);
+  const isDark = theme === 'Dark';
+  const navBg  = isDark ? '#0D0D0F' : '#FFFFFF';
+  const navBdr = isDark ? '#252530' : '#EEF0F4';
   const insets   = useSafeAreaInsets();
   const scales   = useRef(NAV_TABS.map(() => new Animated.Value(1))).current;
   const fabPulse = useRef(new Animated.Value(1)).current;
@@ -659,6 +596,8 @@ function GlobalNavBar() {
     }
   };
 
+  const inactiveColor = isDark ? '#6B7588' : '#9AA3B2';
+
   const PillContent = () => (
     <View style={navStyles.pillRow}>
       {NAV_TABS.map((tab, i) => {
@@ -682,8 +621,8 @@ function GlobalNavBar() {
         return (
           <Animated.View key={tab.key} style={[navStyles.tabItem, { transform: [{ scale: scales[i] }] }]}>
             <TouchableOpacity onPress={() => handlePress(tab.key, i)} activeOpacity={0.7} style={navStyles.tabTouch}>
-              <Icon filled={isActive} />
-              <Text style={[navStyles.tabLabel, isActive && navStyles.tabLabelActive]}>{tab.key}</Text>
+              <Icon filled={isActive} inactiveColor={inactiveColor} />
+              <Text style={[navStyles.tabLabel, { color: inactiveColor }, isActive && navStyles.tabLabelActive]}>{tab.key}</Text>
             </TouchableOpacity>
           </Animated.View>
         );
@@ -692,7 +631,7 @@ function GlobalNavBar() {
   );
 
   return (
-    <View style={[navStyles.wrapper, { paddingBottom: insets.bottom }]}>
+    <View style={[navStyles.wrapper, { paddingBottom: insets.bottom, backgroundColor: navBg, borderTopColor: navBdr }]}>
       <View style={navStyles.pill}>
         <PillContent />
       </View>
@@ -739,8 +678,13 @@ function RootNavigator() {
     );
   }
 
-  if (showOnboarding) {
-    return <OnboardingScreen onDone={() => setShowOnboarding(false)} />;
+  if (showOnboarding && !isAuthenticated) {
+    return (
+      <OnboardingScreen onDone={() => {
+        AsyncStorage.setItem(ONBOARDING_KEY, 'true').catch(() => {});
+        setShowOnboarding(false);
+      }} />
+    );
   }
 
   return (
@@ -754,6 +698,7 @@ function RootNavigator() {
       ) : (
         <>
           <Stack.Screen name="Main"            component={MainTabsWithWorkspaceKey} />
+          <Stack.Screen name="Calendar"          component={CalendarScreen} />
           <Stack.Screen name="Chat"            component={ChatScreen} />
           <Stack.Screen name="Settings"        component={SettingsScreen} />
           <Stack.Screen name="Docs"            component={DocumentsScreen} />

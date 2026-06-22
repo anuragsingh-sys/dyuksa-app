@@ -4,7 +4,7 @@ import {
   KeyboardAvoidingView, Keyboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import Svg, { Circle, Line } from 'react-native-svg';
+import Svg, { Circle, Line, Path } from 'react-native-svg';
 import React, { useState, useCallback, useContext, useRef, useEffect } from 'react';
 import { useNavigation, useFocusEffect, useRoute } from '@react-navigation/native';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -39,6 +39,13 @@ const EVENT_TYPES = [
   { id: 'Webinar',   label: 'Webinar',   color: '#E5484D', soft: '#FBE3E3' },
   { id: 'Other',     label: 'Other',     color: '#6B7588', soft: '#F0F2F6' },
 ];
+
+const getEventColor = (ev) => {
+  if (!ev) return '#3B72EE';
+  const rawType = (ev.event_type || ev.eventType || '').toLowerCase();
+  const found = EVENT_TYPES.find(t => t.id.toLowerCase() === rawType);
+  return found ? found.color : (ev.type === 'task' ? '#3B72EE' : '#2D6AE3');
+};
 
 // ── Custom 3-column wheel time picker ──────────────────────────────────────
 // Identical look on iOS + Android. Each column is a snap-scrolling ScrollView
@@ -242,6 +249,7 @@ export default function CalendarScreen() {
   // ── Events ──
   const [events, setEvents] = useState([]);
   const [selectedMonthDate, setSelectedMonthDate] = useState(new Date()); // tapped date in month view
+  const [selectedWeekDate,  setSelectedWeekDate]  = useState(new Date()); // tapped date in week/day view
   const [eventsLoading, setEventsLoading] = useState(false);
   const [eventsError,   setEventsError]   = useState(null);
 
@@ -611,6 +619,8 @@ export default function CalendarScreen() {
   // wiring will follow once the share endpoints are captured.
   const [shareModalOpen,  setShareModalOpen]  = useState(false);
   const [calendarShared,  setCalendarShared]  = useState(false);
+  const [showSettingsDrop, setShowSettingsDrop] = useState(false);
+  const [showSharedEvents, setShowSharedEvents] = useState(false);
   // Local-only state for the share modal — replaced with API data later.
   // Each entry shape: { id, name, sharedAt: 'DD/MM/YYYY', permission: 'view'|'edit'|'full' }
   const [sharedWith,      setSharedWith]      = useState([]);
@@ -798,7 +808,7 @@ export default function CalendarScreen() {
             text: 'Got it',
             onPress: () => {
               if (returnToTab && returnToTab !== 'Calendar') {
-                try { navigation.jumpTo(returnToTab); } catch {}
+                try { navigation.navigate('Main', { screen: returnToTab }); } catch {}
               }
             },
           }]
@@ -854,11 +864,9 @@ export default function CalendarScreen() {
   // ── Header label ──
   const getHeaderLabel = () => {
     if (viewMode === 'day') {
-      // Compact: 'Wed, April 29' — year is implied for the current view
       return currentDate.toLocaleDateString('en-US', { weekday: 'short', month: 'long', day: 'numeric' });
     }
     if (viewMode === 'twoDay') {
-      // Today + Tomorrow — short labels because there's only ever 2 days
       const a = weekDays[0];
       const b = weekDays[1];
       return `${MONTHS_SHORT[a.getMonth()]} ${a.getDate()} – ${MONTHS_SHORT[b.getMonth()]} ${b.getDate()}`;
@@ -870,6 +878,10 @@ export default function CalendarScreen() {
     const last  = weekDays[weekDays.length - 1];
     return `${MONTHS_SHORT[first.getMonth()]} ${first.getDate()} – ${first.getMonth() !== last.getMonth() ? MONTHS_SHORT[last.getMonth()] + ' ' : ''}${last.getDate()}, ${last.getFullYear()}`;
   };
+
+  // Navbar subtitle — always shows current month + year
+  const getMonthYearLabel = () =>
+    `${MONTHS[currentDate.getMonth()]} ${currentDate.getFullYear()}`;
 
   // ── Event helpers ──
   const dateKey = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
@@ -1084,7 +1096,42 @@ export default function CalendarScreen() {
         );
         return;
       }
-      // Success — refresh from backend to pick up the new entry + any team updates
+      // Also save to QuickNotes — find or create "Daily Updates" folder
+      try {
+        const foldersRes = await fetch(`${API_BASE}/api/v1/quicknotes/folders/`, {
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        });
+        let dailyFolderId = null;
+        if (foldersRes.ok) {
+          const folders = await foldersRes.json();
+          const existing = (Array.isArray(folders) ? folders : (folders.results || [])).find(f => f.name === 'Daily Updates');
+          if (existing) {
+            dailyFolderId = existing.id;
+          } else {
+            const createRes = await fetch(`${API_BASE}/api/v1/quicknotes/folders/`, {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: 'Daily Updates' }),
+            });
+            if (createRes.ok) {
+              const created = await createRes.json();
+              dailyFolderId = created.id;
+            }
+          }
+        }
+        await fetch(`${API_BASE}/api/v1/quicknotes/notes/`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: `Daily Update – ${formatBackendDate(dailyPanelDate)}`,
+            content,
+            folder: dailyFolderId,
+          }),
+        });
+      } catch (noteErr) {
+        console.warn('Could not save to QuickNotes:', noteErr.message);
+      }
+      // Success — refresh from backend
       fetchDailyUpdates();
     } catch (err) {
       Alert.alert(
@@ -1146,7 +1193,7 @@ export default function CalendarScreen() {
         const returnTo = route.params?.returnTo;
         if (returnTo && returnTo !== 'Calendar') {
           navigation.setParams({ returnTo: null });
-          try { navigation.jumpTo(returnTo); } catch {}
+          try { navigation.navigate('Main', { screen: returnTo }); } catch {}
         }
       });
   };
@@ -1654,7 +1701,7 @@ export default function CalendarScreen() {
                       {dayEvs.slice(0, 3).map((ev, i) => (
                         <View key={i} style={{
                           width: 5, height: 5, borderRadius: 3,
-                          backgroundColor: ev.color || (ev.type === 'task' ? '#3B72EE' : '#2D6AE3'),
+                          backgroundColor: getEventColor(ev),
                         }} />
                       ))}
                     </View>
@@ -1688,7 +1735,7 @@ export default function CalendarScreen() {
               ) : selEvs.map((ev, i) => {
                 const startTime = ev.eventTimestamp ? new Date(ev.eventTimestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) : '';
                 const endTime   = ev.eventEndTimestamp ? new Date(ev.eventEndTimestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) : '';
-                const color     = ev.color || (ev.type === 'task' ? '#3B72EE' : '#2D6AE3');
+                const color     = getEventColor(ev);
                 return (
                   <TouchableOpacity
                     key={ev.id || i}
@@ -1729,74 +1776,11 @@ export default function CalendarScreen() {
   // ── Week / Day grid view ──
   const renderTimeGrid = () => (
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 110 }} showsVerticalScrollIndicator={false}>
-      {/* All Day / Tasks row — collapsible per day */}
-      <View style={[styles.allDayRow, { borderColor: bdr, backgroundColor: card }]}>
-        <View style={styles.timeLabel}><Text style={[styles.timeLabelText, { color: sub }]}>All Day / Tasks</Text></View>
-        {weekDays.map((d, i) => {
-          const key       = dateKey(d);
-          const expanded  = !!expandedDays[key];
-          const dayTasks  = tasksForDay(d);
-          const allDayEvs = eventsForDay(d).filter(e => {
-            try { const ed = new Date(e.eventTimestamp || e.eventDate); return isNaN(ed.getHours()); } catch { return true; }
-          });
-          const totalCount = dayTasks.length + allDayEvs.length;
-
-          return (
-            <View key={i} style={[styles.dayCol, { borderColor: bdr }]}>
-              {/* Chevron toggle + count heading. Tappable across the whole header. */}
-              <TouchableOpacity
-                onPress={() => toggleDayExpanded(d)}
-                activeOpacity={0.6}
-                style={styles.allDayHeader}
-                disabled={totalCount === 0}
-              >
-                <Text style={[
-                  styles.allDayChevron,
-                  { color: totalCount === 0 ? (isDark ? '#3A3A48' : '#CFCFD8') : sub },
-                  expanded && { transform: [{ rotate: '90deg' }] },
-                ]}>›</Text>
-                <Text style={[styles.allDayCountText, { color: sub }]} numberOfLines={1}>
-                  {totalCount === 0 ? 'No tasks' : `${totalCount} task${totalCount > 1 ? 's' : ''}`}
-                </Text>
-              </TouchableOpacity>
-
-              {/* Expanded list — tasks + any all-day events for completeness */}
-              {expanded && (
-                <View style={{ marginTop: 4 }}>
-                  {allDayEvs.map((ev, j) => (
-                    <TouchableOpacity
-                      key={`ev-${j}`}
-                      style={styles.allDayEvent}
-                      onPress={() => openEventDetail(ev)}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={styles.allDayEventText} numberOfLines={1}>{ev.name}</Text>
-                    </TouchableOpacity>
-                  ))}
-                  {dayTasks.map((t, j) => (
-                    <TouchableOpacity
-                      key={`t-${t.id || j}`}
-                      style={styles.allDayTask}
-                      onPress={() => setDetailTask(t)}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={[styles.allDayTaskText, { color: txt }]} numberOfLines={1}>
-                        {t.heading || t.title || t.name || 'Untitled task'}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              )}
-            </View>
-          );
-        })}
-      </View>
-
       {/* Hourly rows */}
       {HOURS.map(hour => (
-        <View key={hour} style={[styles.hourRow, { borderColor: bdr }]}>
+        <View key={hour} style={[styles.hourRow, { borderColor: '#C0C0C0', backgroundColor: isDark ? '#0D0D0F' : '#FFFFFF' }]}>
           <View style={styles.timeLabel}>
-            <Text style={[styles.timeLabelText, { color: sub }]}>{String(hour).padStart(2,'0')}:00</Text>
+            <Text style={[styles.timeLabelText, { color: sub }]}>{hour === 12 ? '12 pm' : hour > 12 ? `${hour - 12} pm` : `${hour} am`}</Text>
           </View>
           {weekDays.map((d, di) => {
             const hourEvs = eventsForHour(d, hour);
@@ -1810,9 +1794,8 @@ export default function CalendarScreen() {
                 key={di}
                 style={[
                   styles.dayCol,
-                  { borderColor: bdr },
-                  isNow && styles.currentHourCol,
-                  isPast && { backgroundColor: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)' },
+                  { borderColor: '#C0C0C0', backgroundColor: isDark ? '#0D0D0F' : '#FFFFFF' },
+                  isPast && { backgroundColor: isDark ? 'rgba(255,255,255,0.02)' : '#F8F9FB' },
                 ]}
                 onPress={() => {
                   // Silently ignore taps on past cells (no popup)
@@ -1826,7 +1809,7 @@ export default function CalendarScreen() {
                 {hourEvs.map((ev, ei) => (
                   <TouchableOpacity
                     key={ei}
-                    style={styles.eventBlock}
+                    style={[styles.eventBlock, { backgroundColor: getEventColor(ev) }]}
                     onPress={() => openEventDetail(ev)}
                     onLongPress={() => deleteEvent(ev.id)}
                     activeOpacity={0.7}
@@ -1841,6 +1824,55 @@ export default function CalendarScreen() {
           })}
         </View>
       ))}
+
+      {/* ── Selected day events panel — same style as month view ── */}
+      {selectedWeekDate && (() => {
+        const selEvs = eventsForDay(selectedWeekDate);
+        const isToday = selectedWeekDate.toDateString() === today.toDateString();
+        const label = isToday ? 'Today' : selectedWeekDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+        return (
+          <View style={{ marginTop: 8, borderTopWidth: 1, borderTopColor: bdr }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10 }}>
+              <View>
+                <Text style={{ fontSize: 11, fontWeight: '600', color: sub, marginBottom: 1 }}>Selected</Text>
+                <Text style={{ fontSize: 15, fontWeight: '700', color: txt }}>{label}</Text>
+              </View>
+              <TouchableOpacity onPress={() => { setCurrentDate(selectedWeekDate); setViewMode('day'); }}>
+                <Text style={{ fontSize: 12, color: '#3B72EE', fontWeight: '600' }}>Open day →</Text>
+              </TouchableOpacity>
+            </View>
+            {selEvs.length === 0 ? (
+              <View style={{ padding: 20, alignItems: 'center' }}>
+                <Text style={{ color: sub, fontSize: 13, fontStyle: 'italic' }}>No events or tasks for this day</Text>
+              </View>
+            ) : selEvs.map((ev, i) => {
+              const startTime = ev.eventTimestamp ? new Date(ev.eventTimestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) : '';
+              const endTime   = ev.eventEndTimestamp ? new Date(ev.eventEndTimestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) : '';
+              const color     = getEventColor(ev);
+              return (
+                <TouchableOpacity
+                  key={ev.id || i}
+                  style={{ flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 14, paddingVertical: 12,
+                    borderTopWidth: 1, borderTopColor: isDark ? '#252530' : '#E6E9EF',
+                    backgroundColor: card,
+                  }}
+                  onPress={() => ev.type === 'task' ? null : openEventDetail(ev)}
+                  activeOpacity={0.7}
+                >
+                  <View style={{ width: 4, borderRadius: 2, backgroundColor: color, marginRight: 12, alignSelf: 'stretch', minHeight: 36 }} />
+                  <View style={{ flex: 1 }}>
+                    {startTime ? <Text style={{ fontSize: 11, color: sub, marginBottom: 2 }}>{startTime}{endTime ? ` – ${endTime}` : ''}</Text> : null}
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: txt }}>{ev.name}</Text>
+                  </View>
+                  <View style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, backgroundColor: color + '20' }}>
+                    <Text style={{ fontSize: 11, fontWeight: '600', color }}>{ev.type === 'task' ? 'Task' : (ev.event_type || ev.eventType || 'Meeting')}</Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        );
+      })()}
     </ScrollView>
   );
 
@@ -1852,43 +1884,58 @@ export default function CalendarScreen() {
       <View style={[styles.navbar, { backgroundColor: card, borderBottomColor: bdr }]}>
         <View style={styles.navLeft}>
           <SidebarMenu activeScreen="Calendar" />
-          <Text style={[styles.brandName, { color: txt }]}>Calendar</Text>
+          <View>
+            <Text style={[styles.brandName, { color: txt }]}>Calendar</Text>
+            <Text style={{ fontSize: 11, color: sub, marginTop: 1 }}>{getMonthYearLabel()}</Text>
+          </View>
         </View>
         <View style={styles.navRight}>
-          <TouchableOpacity
-            style={[styles.navIconBtn, { backgroundColor: isDark ? '#252530' : '#FAFAFA', borderColor: bdr }]}
-            onPress={() => navigation.navigate('Chat')}
-          >
-            <Text style={styles.navIcon}>💬</Text>
+          <TouchableOpacity style={{ padding: 6 }} onPress={() => navigation.navigate('Search')}>
+            <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
+              <Path d="M11 19C15.4183 19 19 15.4183 19 11C19 6.58172 15.4183 3 11 3C6.58172 3 3 6.58172 3 11C3 15.4183 6.58172 19 11 19Z" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+              <Path d="M21 21L16.65 16.65" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+            </Svg>
           </TouchableOpacity>
           <NotificationBell />
         </View>
       </View>
 
-      {/* Stats bar */}
-      <View style={[styles.statsBar, { backgroundColor: card, borderBottomColor: bdr }]}>
-        {[
-          { label: 'TOTAL',   value: totalEvents,  color: txt,        filter: 'All' },
-          { label: 'DONE',    value: doneEvents,   color: '#4ADE80',  filter: 'completed' },
-          { label: 'ACTIVE',  value: activeEvents, color: '#3B72EE',  filter: 'in_progress' },
-          { label: 'PENDING', value: pendingEvents, color: '#FBBF24', filter: 'pending' },
-        ].map((s, i, arr) => (
+      {/* ── Ask Dyuksa AI input bar + Share button — just below navbar ── */}
+      <View style={[ad.wrap, { backgroundColor: isDark ? '#1A1A20' : '#FFFFFF', borderColor: bdr }]}>
+        <View style={[ad.inputBox, { backgroundColor: isDark ? '#252530' : '#FAFAFA', borderColor: bdr }]}>
+          <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
+            <Path d="M12 2L13.5 8.5L20 10L13.5 11.5L12 18L10.5 11.5L4 10L10.5 8.5L12 2Z" stroke="#3B72EE" strokeWidth={1.8} strokeLinejoin="round"/>
+            <Path d="M19 2L19.75 4.25L22 5L19.75 5.75L19 8L18.25 5.75L16 5L18.25 4.25L19 2Z" stroke="#3B72EE" strokeWidth={1.5} strokeLinejoin="round"/>
+          </Svg>
+          <TextInput
+            style={[ad.input, { color: txt }]}
+            value={askDyuksaText}
+            onChangeText={setAskDyuksaText}
+            placeholder='Try: "dyuksa find 30 mins with Shifali tomorrow"'
+            placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
+            returnKeyType="send"
+            onSubmitEditing={handleAskDyuksa}
+            editable={!askDyuksaLoading}
+          />
           <TouchableOpacity
-            key={s.label}
-            style={[styles.statItem, i < arr.length - 1 && { borderRightWidth: 1, borderRightColor: bdr }]}
-            onPress={() => {
-              try { navigation.jumpTo('Tasks', { presetFilter: s.filter }); }
-              catch { navigation.navigate('Main', { screen: 'Tasks', params: { presetFilter: s.filter } }); }
-            }}
-            activeOpacity={0.7}
+            style={[ad.sendBtn, (!askDyuksaText.trim() || askDyuksaLoading) && { opacity: 0.5 }]}
+            onPress={handleAskDyuksa}
+            disabled={!askDyuksaText.trim() || askDyuksaLoading}
+            activeOpacity={0.8}
           >
-            <Text style={[styles.statNum, { color: s.color }]}>{s.value}</Text>
-            <Text style={[styles.statLabel, { color: sub }]}>{s.label}</Text>
+            {askDyuksaLoading ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <>
+                <Text style={ad.sendIcon}>➤</Text>
+                <Text style={ad.sendText}>Ask Dyuksa</Text>
+              </>
+            )}
           </TouchableOpacity>
-        ))}
+        </View>
       </View>
 
-      {/* Web-style Month/Week/Day segmented control + nav */}
+      {/* Month/Week/Day segmented control + nav */}
       <View style={{ position: 'relative', zIndex: 50 }}>
         {/* Segmented control row */}
         <View style={[styles.segRow, { backgroundColor: isDark ? '#0D0D0F' : '#F5F5F7', borderBottomColor: bdr }]}>
@@ -1930,57 +1977,36 @@ export default function CalendarScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Nav row: prev · date label · next */}
-        <View style={[styles.toolbar, { backgroundColor: card, borderBottomColor: bdr }]}>
-          <TouchableOpacity style={styles.arrowBtn} onPress={goPrev}>
-            <Text style={[styles.arrowText, { color: txt }]}>‹</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => setShowMiniCal(s => !s)} style={styles.dateRangeBtn}>
-            <Text style={[styles.dateRange, { color: txt }]} numberOfLines={1}>{getHeaderLabel()}</Text>
-            <Text style={{ fontSize: 10, color: sub, marginLeft: 4 }}>{showMiniCal ? '▲' : '▾'}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.arrowBtn} onPress={goNext}>
-            <Text style={[styles.arrowText, { color: txt }]}>›</Text>
-          </TouchableOpacity>
-        </View>
+        {/* Nav row: prev arrow · date label center · next arrow · New event · Settings */}
+        <View style={[styles.toolbar, { backgroundColor: card, borderBottomColor: bdr, flexWrap: 'wrap', gap: 6 }]}>
+          {/* Date navigation */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+            <TouchableOpacity style={styles.arrowBtn} onPress={goPrev}>
+              <Text style={[styles.arrowText, { color: txt }]}>‹</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setShowMiniCal(s => !s)} style={[styles.dateRangeBtn, { flex: 1, justifyContent: 'center' }]}>
+              <Text style={[styles.dateRange, { color: txt, textAlign: 'center' }]} numberOfLines={1}>{getHeaderLabel()}</Text>
+              <Text style={{ fontSize: 10, color: sub, marginLeft: 4 }}>{showMiniCal ? '▲' : '▾'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.arrowBtn} onPress={goNext}>
+              <Text style={[styles.arrowText, { color: txt }]}>›</Text>
+            </TouchableOpacity>
+          </View>
 
-
-      </View>
-
-      {/* ── Ask Dyuksa AI input bar ── */}
-      <View style={[ad.wrap, { backgroundColor: isDark ? '#1A1A20' : '#FFFFFF', borderColor: bdr }]}>
-        <View style={[ad.inputBox, { backgroundColor: isDark ? '#252530' : '#FAFAFA', borderColor: bdr }]}>
-          <Text style={ad.icon}>✨</Text>
-          <TextInput
-            style={[ad.input, { color: txt }]}
-            value={askDyuksaText}
-            onChangeText={setAskDyuksaText}
-            placeholder='Try: "dyuksa find 30 mins with Shifali tomorrow"'
-            placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
-            returnKeyType="send"
-            onSubmitEditing={handleAskDyuksa}
-            editable={!askDyuksaLoading}
-          />
-          <TouchableOpacity
-            style={[ad.sendBtn, (!askDyuksaText.trim() || askDyuksaLoading) && { opacity: 0.5 }]}
-            onPress={handleAskDyuksa}
-            disabled={!askDyuksaText.trim() || askDyuksaLoading}
-            activeOpacity={0.8}
-          >
-            {askDyuksaLoading ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <>
-                <Text style={ad.sendIcon}>➤</Text>
-                <Text style={ad.sendText}>Ask Dyuksa</Text>
-              </>
-            )}
-          </TouchableOpacity>
         </View>
       </View>
 
       {/* Main content — full width now, no sidebar */}
       <View style={{ flex: 1 }}>
+
+        {/* Tap outside settings dropdown to close */}
+        {showSettingsDrop && (
+          <TouchableOpacity
+            style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 199 }}
+            activeOpacity={1}
+            onPress={() => setShowSettingsDrop(false)}
+          />
+        )}
 
         {/* Mini calendar dropdown overlay */}
         {showMiniCal && (
@@ -2021,59 +2047,107 @@ export default function CalendarScreen() {
         )}
           {/* Day column headers */}
           {viewMode !== 'month' && (
-            <View style={[styles.dayHeaders, { borderBottomColor: bdr, backgroundColor: card }]}>
-              {/* Top-left corner cell — share icon + Shared On/Off toggle.
-                  This is the website's calendar-share controls, mobile-style. */}
-              <View style={[styles.timeLabel, styles.shareCornerCell]}>
+            <View style={[styles.dayHeaders, { borderBottomColor: '#C0C0C0', backgroundColor: card }]}>
+              {/* Top-left corner cell — settings icon + dropdown */}
+              <View style={[styles.timeLabel, { alignItems: 'center', justifyContent: 'center', position: 'relative', zIndex: 300 }]}>
                 <TouchableOpacity
-                  style={styles.shareIconBtn}
-                  onPress={() => setShareModalOpen(true)}
+                  onPress={() => setShowSettingsDrop(s => !s)}
                   activeOpacity={0.7}
-                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 >
-                  {/* lucide share-2 icon */}
-                  <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
-                    <Circle cx={18} cy={5}  r={3} stroke="#10B981" strokeWidth={2} />
-                    <Circle cx={6}  cy={12} r={3} stroke="#10B981" strokeWidth={2} />
-                    <Circle cx={18} cy={19} r={3} stroke="#10B981" strokeWidth={2} />
-                    <Line x1={8.59}  y1={13.51} x2={15.42} y2={17.49} stroke="#10B981" strokeWidth={2} strokeLinecap="round" />
-                    <Line x1={15.41} y1={6.51}  x2={8.59}  y2={10.49} stroke="#10B981" strokeWidth={2} strokeLinecap="round" />
+                  <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
+                    <Path d="M14 17H5" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+                    <Path d="M19 7h-9" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+                    <Circle cx={17} cy={17} r={3} stroke="#3B72EE" strokeWidth={2}/>
+                    <Circle cx={7} cy={7} r={3} stroke="#3B72EE" strokeWidth={2}/>
                   </Svg>
                 </TouchableOpacity>
-                <TouchableOpacity
-                  style={[
-                    styles.sharedPill,
-                    calendarShared
-                      ? { backgroundColor: '#3B72EE', borderColor: '#3B72EE' }
-                      : { backgroundColor: 'transparent', borderColor: isDark ? '#3A3A48' : '#DEDEE8' },
-                  ]}
-                  onPress={() => setCalendarShared(s => !s)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[
-                    styles.sharedPillText,
-                    { color: calendarShared ? '#fff' : sub },
-                  ]} numberOfLines={1}>
-                    {calendarShared ? 'On' : 'Off'}
-                  </Text>
-                </TouchableOpacity>
+
+                {/* Dropdown — renders below the icon */}
+                {showSettingsDrop && (
+                  <View style={{
+                    position: 'absolute', top: 52, left: 0, zIndex: 400,
+                    backgroundColor: card, borderRadius: 10, borderWidth: 1, borderColor: bdr,
+                    minWidth: 210, shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
+                    shadowOpacity: 0.14, shadowRadius: 10, elevation: 14,
+                  }}>
+                    {/* Header */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: bdr }}>
+                      <Svg width={14} height={14} viewBox="0 0 24 24" fill="none">
+                        <Path d="M14 17H5" stroke={txt} strokeWidth={1.8} strokeLinecap="round"/>
+                        <Path d="M19 7h-9" stroke={txt} strokeWidth={1.8} strokeLinecap="round"/>
+                        <Circle cx={17} cy={17} r={3} stroke={txt} strokeWidth={1.8}/>
+                        <Circle cx={7} cy={7} r={3} stroke={txt} strokeWidth={1.8}/>
+                      </Svg>
+                      <Text style={{ fontSize: 13, fontWeight: '700', color: txt }}>Calendar Settings</Text>
+                    </View>
+
+                    {/* New Event */}
+                    <TouchableOpacity
+                      style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: bdr }}
+                      onPress={() => { setShowSettingsDrop(false); openModal(); }}
+                      activeOpacity={0.7}
+                    >
+                      <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
+                        <Path d="M8 2v3M16 2v3M3 8h18M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round"/>
+                        <Path d="M12 12v4M10 14h4" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round"/>
+                      </Svg>
+                      <Text style={{ fontSize: 13, color: '#3B72EE', fontWeight: '600' }}>New Event</Text>
+                    </TouchableOpacity>
+
+                    {/* Show Shared Events toggle */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: bdr }}>
+                      <Text style={{ fontSize: 13, color: txt }}>Show Shared Events</Text>
+                      <TouchableOpacity
+                        onPress={() => setShowSharedEvents(s => !s)}
+                        style={{ width: 42, height: 24, borderRadius: 12, backgroundColor: showSharedEvents ? '#3B72EE' : (isDark ? '#3A3A48' : '#D1D1DB'), justifyContent: 'center', paddingHorizontal: 2 }}
+                      >
+                        <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: '#fff', marginLeft: showSharedEvents ? 18 : 0 }} />
+                      </TouchableOpacity>
+                    </View>
+
+                    {/* Share My Calendar */}
+                    <TouchableOpacity
+                      style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 13 }}
+                      onPress={() => { setShowSettingsDrop(false); setShareModalOpen(true); }}
+                      activeOpacity={0.7}
+                    >
+                      <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
+                        <Circle cx={18} cy={5}  r={3} stroke="#3B72EE" strokeWidth={2}/>
+                        <Circle cx={6}  cy={12} r={3} stroke="#3B72EE" strokeWidth={2}/>
+                        <Circle cx={18} cy={19} r={3} stroke="#3B72EE" strokeWidth={2}/>
+                        <Line x1={8.59} y1={13.51} x2={15.42} y2={17.49} stroke="#3B72EE" strokeWidth={2} strokeLinecap="round"/>
+                        <Line x1={15.41} y1={6.51} x2={8.59}  y2={10.49} stroke="#3B72EE" strokeWidth={2} strokeLinecap="round"/>
+                      </Svg>
+                      <Text style={{ fontSize: 13, color: '#3B72EE', fontWeight: '600' }}>Share My Calendar</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
               </View>
               {weekDays.map((d, i) => {
                 const isToday = d.toDateString() === today.toDateString();
+                const dayEvents = eventsForDay(d);
+                const dotColors = [...new Set(dayEvents.slice(0, 3).map(e => getEventColor(e)))];
                 return (
-                  <View key={i} style={[styles.dayHeaderCell, { borderColor: bdr }]}>
-                    <Text style={[styles.dayHeaderDay, { color: isToday ? '#000000' : sub }]}>
-                      {DAY_LABELS[d.getDay()]}
+                  <View key={i} style={[styles.dayHeaderCell, { borderColor: '#C0C0C0' }]}>
+                    <Text style={[styles.dayHeaderDay, { color: isToday ? '#3B72EE' : sub }]}>
+                      {['S','M','T','W','T','F','S'][d.getDay()]}
                     </Text>
                     <TouchableOpacity
                       style={[styles.dayHeaderNum, isToday && styles.dayHeaderNumToday]}
-                      onPress={() => openDailyPanel(d)}
+                      onPress={() => { openDailyPanel(d); setSelectedWeekDate(d); }}
                       activeOpacity={0.7}
                     >
                       <Text style={[styles.dayHeaderNumText, { color: isToday ? '#fff' : txt }]}>
                         {d.getDate()}
                       </Text>
                     </TouchableOpacity>
+                    {/* Event dots */}
+                    <View style={{ flexDirection: 'row', gap: 2, marginTop: 3, justifyContent: 'center' }}>
+                      {dotColors.map((c, di) => (
+                        <View key={di} style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: c }} />
+                      ))}
+                    </View>
                   </View>
                 );
               })}
@@ -2123,36 +2197,41 @@ export default function CalendarScreen() {
 
               <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 14, paddingBottom: 40 }}>
 
-                {/* Empty state (no tasks/events scheduled) */}
+                {/* Empty state */}
                 <View style={[du.emptyCard, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}>
                   <Text style={du.emptyIcon}>📅</Text>
                   <Text style={[du.emptyText, { color: sub }]}>No tasks or events scheduled for this day</Text>
                 </View>
 
-                {/* Create Task CTA (moved to top, matching web) */}
-                <View style={{ alignItems: 'center', marginBottom: 16 }}>
-                  <TouchableOpacity
-                    style={[du.createTaskTopBtn, { backgroundColor: isDark ? 'rgba(59,114,238,0.12)' : '#EEF2FF', borderColor: isDark ? 'rgba(59,114,238,0.3)' : '#C7D2FE' }]}
-                    onPress={() => {
-                      closeDailyPanel();
-                      setTimeout(() => navigation.jumpTo('Tasks', { openCreateModal: true, returnTo: 'Calendar' }), 250);
-                    }}
-                  >
-                    <Text style={[du.createTaskTopText, { color: isDark ? '#3B72EE' : '#4F46E5' }]}>✓  Create Task</Text>
-                  </TouchableOpacity>
-                </View>
+                {/* Create Task button */}
+                <TouchableOpacity
+                  style={[du.createTaskTopBtn, { backgroundColor: '#3B72EE', borderColor: '#3B72EE', marginBottom: 12 }]}
+                  onPress={() => {
+                    closeDailyPanel();
+                    setTimeout(() => navigation.navigate('Main', { screen: 'Tasks', params: { openCreateModal: true, returnTo: 'Calendar' } }), 250);
+                  }}
+                >
+                  <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
+                    <Path d="M9 11l3 3L22 4" stroke="#fff" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+                    <Path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" stroke="#fff" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+                  </Svg>
+                  <Text style={[du.createTaskTopText, { color: '#fff', marginLeft: 8 }]}>Create Task</Text>
+                </TouchableOpacity>
 
                 {/* Divider */}
-                <View style={{ height: 1, backgroundColor: bdr, marginBottom: 14 }} />
+                <View style={{ height: 1, backgroundColor: bdr, marginBottom: 12 }} />
 
                 {/* ── Daily Update Section ── */}
                 {dailyPanelDateClass === 'today' && !editingUpdate && !dailyUpdates[dateKey(dailyPanelDate)] && (
-                  // Today, no update yet → show "+ Add Daily Update" button (image 3)
                   <TouchableOpacity
-                    style={[du.addUpdateBtn, { backgroundColor: isDark ? 'rgba(59,114,238,0.12)' : '#EEF2FF', borderColor: isDark ? 'rgba(59,114,238,0.3)' : '#C7D2FE' }]}
+                    style={[du.addUpdateBtn, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr, flexDirection: 'row', alignItems: 'center', gap: 8 }]}
                     onPress={() => setEditingUpdate(true)}
                   >
-                    <Text style={[du.addUpdateText, { color: isDark ? '#3B72EE' : '#4F46E5' }]}>📝  Add Daily Update</Text>
+                    <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
+                      <Path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+                      <Path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+                    </Svg>
+                    <Text style={[du.addUpdateText, { color: '#3B72EE' }]}>Add Daily Update</Text>
                   </TouchableOpacity>
                 )}
 
@@ -2285,259 +2364,207 @@ export default function CalendarScreen() {
                 keyboardShouldPersistTaps="handled"
                 showsVerticalScrollIndicator={false}
               >
-
-                <View style={styles.panelHeader}>
-                  <Text style={[styles.modalTitle, { color: txt }]}>Create event</Text>
-                  <TouchableOpacity
-                    style={[styles.closeCircle, { backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
-                    onPress={closeModal}
-                  >
-                    <Text style={[styles.closeCircleText, { color: sub }]}>✕</Text>
+                {/* ── Header — matches CreateTask ── */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: bdr, backgroundColor: card }}>
+                  <TouchableOpacity onPress={closeModal} style={{ padding: 4 }}>
+                    <Text style={{ fontSize: 26, color: txt, fontWeight: '300' }}>‹</Text>
+                  </TouchableOpacity>
+                  <Text style={{ fontSize: 17, fontWeight: '700', color: txt }}>New Event</Text>
+                  <TouchableOpacity onPress={saveEvent} style={{ padding: 4 }}>
+                    <Text style={{ fontSize: 15, fontWeight: '700', color: '#3B72EE' }}>Save</Text>
                   </TouchableOpacity>
                 </View>
 
-                {/* ── Row: Date + Start — End Time ── */}
-                <View style={styles.dateTimeRow}>
+                {/* ── Event Name ── */}
+                <View style={{ paddingHorizontal: 16, paddingTop: 20, paddingBottom: 8 }}>
+                  <Text style={{ fontSize: 13, fontWeight: '600', color: sub, marginBottom: 6 }}>Event Name *</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: card, borderRadius: 12, borderWidth: 1, borderColor: bdr, paddingHorizontal: 12, paddingVertical: 10 }}>
+                    <TextInput
+                      style={{ flex: 1, fontSize: 15, color: txt }}
+                      placeholder="Enter event name"
+                      placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
+                      value={eventName}
+                      onChangeText={setEventName}
+                    />
+                  </View>
+                </View>
+
+                {/* ── Description ── */}
+                <View style={{ paddingHorizontal: 16, paddingBottom: 8 }}>
+                  <Text style={{ fontSize: 13, fontWeight: '600', color: sub, marginBottom: 6 }}>Description</Text>
+                  <View style={{ backgroundColor: card, borderRadius: 12, borderWidth: 1, borderColor: bdr, paddingHorizontal: 12, paddingTop: 10, paddingBottom: 10 }}>
+                    <TextInput
+                      style={{ fontSize: 14, color: txt, minHeight: 80, textAlignVertical: 'top', lineHeight: 20 }}
+                      placeholder="Add event details..."
+                      placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
+                      value={eventDesc}
+                      onChangeText={setEventDesc}
+                      multiline
+                    />
+                  </View>
+                </View>
+
+                {/* ── Meta card — Date/Time + Location ── */}
+                <View style={{ marginHorizontal: 16, marginBottom: 14, borderRadius: 16, borderWidth: 1, borderColor: bdr, backgroundColor: card, overflow: 'hidden' }}>
+
+                  {/* Date row */}
                   <TouchableOpacity
-                    style={[styles.miniPickerBtn, { flex: 1.4, backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}
+                    style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: bdr }}
                     onPress={() => { setShowDatePicker(s => !s); setShowTimePicker(false); setShowEndTimePicker(false); }}
+                    activeOpacity={0.7}
                   >
-                    <Text style={[styles.miniPickerText, { color: txt }]} numberOfLines={1}>
-                      📅  {pickerDate.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}
+                    <Text style={{ fontSize: 14, color: sub }}>Date</Text>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: txt }}>
+                      {pickerDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                     </Text>
-                    <Text style={[styles.miniPickerChevron, { color: sub }]}>▾</Text>
                   </TouchableOpacity>
+
+                  {/* Date picker inline */}
+                  {showDatePicker && (
+                    <View style={[styles.pickerCard, { backgroundColor: card, borderColor: bdr }]}>
+                      <DateTimePicker value={tempPickerDate} mode="date" display="inline" themeVariant={isDark ? 'dark' : 'light'} minimumDate={new Date(new Date().setHours(0,0,0,0))} onChange={(_, date) => { if (date) setTempPickerDate(date); }} style={{ width: '100%' }} />
+                      <View style={[styles.pickerActions, { borderTopColor: bdr }]}>
+                        <TouchableOpacity style={styles.pickerCancelBtn} onPress={() => setShowDatePicker(false)}><Text style={[styles.pickerCancelText, { color: sub }]}>Cancel</Text></TouchableOpacity>
+                        <TouchableOpacity style={styles.pickerDoneBtn} onPress={() => { const nd = new Date(tempPickerDate); nd.setHours(pickerDate.getHours(), pickerDate.getMinutes()); const nde = new Date(nd); nde.setHours(endPickerDate.getHours(), endPickerDate.getMinutes()); setPickerDate(nd); setEndPickerDate(nde); setShowDatePicker(false); }}><Text style={styles.pickerDoneText}>Done</Text></TouchableOpacity>
+                      </View>
+                    </View>
+                  )}
+
+                  {/* Start time row */}
                   <TouchableOpacity
-                    style={[styles.miniPickerBtn, { flex: 1, backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}
+                    style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: bdr }}
                     onPress={() => { setShowTimePicker(s => !s); setShowDatePicker(false); setShowEndTimePicker(false); }}
+                    activeOpacity={0.7}
                   >
-                    <Text style={[styles.miniPickerText, { color: txt }]}>
+                    <Text style={{ fontSize: 14, color: sub }}>Start time</Text>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: txt }}>
                       {pickerDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}
                     </Text>
-                    <Text style={[styles.miniPickerChevron, { color: sub }]}>▾</Text>
                   </TouchableOpacity>
-                  <Text style={[styles.dash, { color: sub }]}>—</Text>
+                  {showTimePicker && (
+                    <View style={[styles.pickerCard, { backgroundColor: card, borderColor: bdr }]}>
+                      <DateTimePicker value={tempPickerDate} mode="time" display="spinner" themeVariant={isDark ? 'dark' : 'light'} onChange={(_, date) => { if (date) setTempPickerDate(date); }} style={{ width: '100%' }} />
+                      <View style={[styles.pickerActions, { borderTopColor: bdr }]}>
+                        <TouchableOpacity style={styles.pickerCancelBtn} onPress={() => setShowTimePicker(false)}><Text style={[styles.pickerCancelText, { color: sub }]}>Cancel</Text></TouchableOpacity>
+                        <TouchableOpacity style={styles.pickerDoneBtn} onPress={() => { const nd = new Date(pickerDate); nd.setHours(tempPickerDate.getHours(), tempPickerDate.getMinutes()); setPickerDate(nd); if (endPickerDate.getTime() <= nd.getTime()) { const ne = new Date(nd); ne.setMinutes(ne.getMinutes() + 30); setEndPickerDate(ne); setTempEndPickerDate(ne); } setShowTimePicker(false); }}><Text style={styles.pickerDoneText}>Done</Text></TouchableOpacity>
+                      </View>
+                    </View>
+                  )}
+
+                  {/* End time row */}
                   <TouchableOpacity
-                    style={[styles.miniPickerBtn, { flex: 1, backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}
+                    style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: bdr }}
                     onPress={() => { setShowEndTimePicker(s => !s); setShowDatePicker(false); setShowTimePicker(false); }}
+                    activeOpacity={0.7}
                   >
-                    <Text style={[styles.miniPickerText, { color: txt }]}>
+                    <Text style={{ fontSize: 14, color: sub }}>End time</Text>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: txt }}>
                       {endPickerDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}
                     </Text>
-                    <Text style={[styles.miniPickerChevron, { color: sub }]}>▾</Text>
+                  </TouchableOpacity>
+                  {showEndTimePicker && (
+                    <View style={[styles.pickerCard, { backgroundColor: card, borderColor: bdr }]}>
+                      <DateTimePicker value={tempEndPickerDate} mode="time" display="spinner" themeVariant={isDark ? 'dark' : 'light'} onChange={(_, date) => { if (date) setTempEndPickerDate(date); }} style={{ width: '100%' }} />
+                      <View style={[styles.pickerActions, { borderTopColor: bdr }]}>
+                        <TouchableOpacity style={styles.pickerCancelBtn} onPress={() => setShowEndTimePicker(false)}><Text style={[styles.pickerCancelText, { color: sub }]}>Cancel</Text></TouchableOpacity>
+                        <TouchableOpacity style={styles.pickerDoneBtn} onPress={() => { const ne = new Date(pickerDate); ne.setHours(tempEndPickerDate.getHours(), tempEndPickerDate.getMinutes()); if (ne.getTime() <= pickerDate.getTime()) { Alert.alert('Invalid end time', 'End time must be after start time.', [{ text: 'OK' }]); return; } setEndPickerDate(ne); setShowEndTimePicker(false); }}><Text style={styles.pickerDoneText}>Done</Text></TouchableOpacity>
+                      </View>
+                    </View>
+                  )}
+
+                  {/* Location row */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12 }}>
+                    <Text style={{ fontSize: 14, color: sub, flex: 1 }}>Location</Text>
+                    <TextInput
+                      style={{ fontSize: 14, color: txt, textAlign: 'right', flex: 2 }}
+                      placeholder="Add location"
+                      placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
+                      value={location}
+                      onChangeText={setLocation}
+                    />
+                  </View>
+                </View>
+
+                {/* ── Event Type ── */}
+                <View style={{ marginHorizontal: 16, marginBottom: 12, borderRadius: 16, borderWidth: 1, borderColor: bdr, backgroundColor: card, overflow: 'hidden' }}>
+                  <View style={{ paddingHorizontal: 14, paddingTop: 14, paddingBottom: 10 }}>
+                    <Text style={{ fontSize: 13, fontWeight: '600', color: sub, marginBottom: 10 }}>Event Type</Text>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                      {EVENT_TYPES.map(t => {
+                        const active = eventType === t.id;
+                        return (
+                          <TouchableOpacity
+                            key={t.id}
+                            onPress={() => { setEventType(t.id); if (t.id !== 'Other') setCustomType(''); }}
+                            activeOpacity={0.7}
+                            style={{ paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, backgroundColor: active ? t.color : (isDark ? '#252530' : t.soft), borderWidth: active ? 0 : 1, borderColor: isDark ? '#3A3A48' : t.color + '40' }}
+                          >
+                            <Text style={{ fontSize: 13, fontWeight: active ? '700' : '500', color: active ? '#fff' : (isDark ? '#fff' : t.color) }}>{t.label}</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                    {eventType === 'Other' && (
+                      <TextInput
+                        style={{ marginTop: 10, backgroundColor: isDark ? '#1A1A20' : '#F5F5F7', borderRadius: 10, borderWidth: 1, borderColor: bdr, color: txt, paddingHorizontal: 12, paddingVertical: 9, fontSize: 14 }}
+                        placeholder="Type custom event name"
+                        placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
+                        value={customType}
+                        onChangeText={setCustomType}
+                      />
+                    )}
+                  </View>
+
+                  {/* Teams meeting row */}
+                  <TouchableOpacity
+                    style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12, borderTopWidth: 1, borderTopColor: bdr, backgroundColor: teamsMeeting ? (isDark ? 'rgba(59,114,238,0.1)' : '#EEF3FF') : 'transparent' }}
+                    onPress={() => setTeamsMeeting(v => !v)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={{ fontSize: 16, marginRight: 10 }}>📹</Text>
+                    <Text style={{ flex: 1, fontSize: 14, color: teamsMeeting ? '#3B72EE' : txt, fontWeight: teamsMeeting ? '600' : '400' }}>Teams meeting</Text>
+                    {teamsMeeting && (
+                      <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: '#3B72EE', alignItems: 'center', justifyContent: 'center' }}>
+                        <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>✓</Text>
+                      </View>
+                    )}
                   </TouchableOpacity>
                 </View>
 
-                {/* Date Picker expanded */}
-                {showDatePicker && (
-                  <View style={[styles.pickerCard, { backgroundColor: card, borderColor: bdr }]}>
-                    <DateTimePicker
-                      value={tempPickerDate}
-                      mode="date"
-                      display="inline"
-                      themeVariant={isDark ? 'dark' : 'light'}
-                      minimumDate={new Date(new Date().setHours(0, 0, 0, 0))}
-                      onChange={(_, date) => { if (date) setTempPickerDate(date); }}
-                      style={{ width: '100%' }}
+                {/* ── Description + Location ── */}
+                <View style={{ marginHorizontal: 16, marginBottom: 12, borderRadius: 16, borderWidth: 1, borderColor: bdr, backgroundColor: card, overflow: 'hidden' }}>
+                  <View style={{ paddingHorizontal: 14, paddingTop: 14, paddingBottom: 4 }}>
+                    <Text style={{ fontSize: 13, fontWeight: '600', color: sub, marginBottom: 6 }}>Description</Text>
+                    <TextInput
+                      style={{ fontSize: 14, color: txt, minHeight: 70, textAlignVertical: 'top', lineHeight: 20 }}
+                      placeholder="Add a description..."
+                      placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
+                      value={eventDesc}
+                      onChangeText={setEventDesc}
+                      multiline
                     />
-                    <View style={[styles.pickerActions, { borderTopColor: bdr }]}>
-                      <TouchableOpacity style={styles.pickerCancelBtn} onPress={() => setShowDatePicker(false)}>
-                        <Text style={[styles.pickerCancelText, { color: sub }]}>Cancel</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity style={styles.pickerDoneBtn} onPress={() => {
-                        const nd  = new Date(tempPickerDate);
-                        nd.setHours(pickerDate.getHours(), pickerDate.getMinutes());
-                        const nde = new Date(nd);
-                        nde.setHours(endPickerDate.getHours(), endPickerDate.getMinutes());
-                        setPickerDate(nd);
-                        setEndPickerDate(nde);
-                        setShowDatePicker(false);
-                      }}>
-                        <Text style={styles.pickerDoneText}>Done</Text>
-                      </TouchableOpacity>
-                    </View>
                   </View>
-                )}
-
-                {/* Start Time Picker expanded */}
-                {showTimePicker && (
-                  <View style={[styles.pickerCard, { backgroundColor: card, borderColor: bdr }]}>
-                    <DateTimePicker
-                      value={tempPickerDate}
-                      mode="time"
-                      display="spinner"
-                      themeVariant={isDark ? 'dark' : 'light'}
-                      onChange={(_, date) => { if (date) setTempPickerDate(date); }}
-                      style={{ width: '100%' }}
+                  <View style={{ height: 1, backgroundColor: bdr }} />
+                  <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12 }}>
+                    <Text style={{ fontSize: 16, marginRight: 10 }}>📍</Text>
+                    <TextInput
+                      style={{ flex: 1, fontSize: 14, color: txt }}
+                      placeholder="Add location (optional)"
+                      placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
+                      value={location}
+                      onChangeText={setLocation}
                     />
-                    <View style={[styles.pickerActions, { borderTopColor: bdr }]}>
-                      <TouchableOpacity style={styles.pickerCancelBtn} onPress={() => setShowTimePicker(false)}>
-                        <Text style={[styles.pickerCancelText, { color: sub }]}>Cancel</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity style={styles.pickerDoneBtn} onPress={() => {
-                        const nd = new Date(pickerDate);
-                        nd.setHours(tempPickerDate.getHours(), tempPickerDate.getMinutes());
-                        setPickerDate(nd);
-                        // Auto-adjust end time to be 30 min after new start if end is now before start
-                        if (endPickerDate.getTime() <= nd.getTime()) {
-                          const ne = new Date(nd);
-                          ne.setMinutes(ne.getMinutes() + 30);
-                          setEndPickerDate(ne);
-                          setTempEndPickerDate(ne);
-                        }
-                        setShowTimePicker(false);
-                      }}>
-                        <Text style={styles.pickerDoneText}>Done</Text>
-                      </TouchableOpacity>
-                    </View>
                   </View>
-                )}
-
-                {/* End Time Picker expanded */}
-                {showEndTimePicker && (
-                  <View style={[styles.pickerCard, { backgroundColor: card, borderColor: bdr }]}>
-                    <DateTimePicker
-                      value={tempEndPickerDate}
-                      mode="time"
-                      display="spinner"
-                      themeVariant={isDark ? 'dark' : 'light'}
-                      onChange={(_, date) => { if (date) setTempEndPickerDate(date); }}
-                      style={{ width: '100%' }}
-                    />
-                    <View style={[styles.pickerActions, { borderTopColor: bdr }]}>
-                      <TouchableOpacity style={styles.pickerCancelBtn} onPress={() => setShowEndTimePicker(false)}>
-                        <Text style={[styles.pickerCancelText, { color: sub }]}>Cancel</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity style={styles.pickerDoneBtn} onPress={() => {
-                        const ne = new Date(pickerDate);
-                        ne.setHours(tempEndPickerDate.getHours(), tempEndPickerDate.getMinutes());
-                        // Block end time before or equal to start time
-                        if (ne.getTime() <= pickerDate.getTime()) {
-                          Alert.alert(
-                            'Invalid end time',
-                            'End time must be after the start time. Please pick a time later than ' +
-                            pickerDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }) + '.',
-                            [{ text: 'OK' }]
-                          );
-                          return;
-                        }
-                        setEndPickerDate(ne);
-                        setShowEndTimePicker(false);
-                      }}>
-                        <Text style={styles.pickerDoneText}>Done</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                )}
-
-                {/* Event Name */}
-                <Text style={[styles.fieldLabel, { color: sub }]}>EVENT NAME</Text>
-                <TextInput
-                  style={[
-                    styles.input,
-                    { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr, color: txt },
-                  ]}
-                  placeholder="Enter event name"
-                  placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
-                  value={eventName}
-                  onChangeText={setEventName}
-                />
-
-                {/* Event Type — color pill chips */}
-                <Text style={[styles.fieldLabel, { color: sub }]}>EVENT TYPE</Text>
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-                  {EVENT_TYPES.map(t => {
-                    const active = eventType === t.id;
-                    return (
-                      <TouchableOpacity
-                        key={t.id}
-                        onPress={() => { setEventType(t.id); if (t.id !== 'Other') setCustomType(''); }}
-                        activeOpacity={0.7}
-                        style={{
-                          paddingHorizontal: 14, paddingVertical: 8,
-                          borderRadius: 999,
-                          backgroundColor: active ? t.color : (isDark ? '#252530' : t.soft),
-                          borderWidth: active ? 0 : 1,
-                          borderColor: isDark ? '#3A3A48' : t.color + '40',
-                        }}
-                      >
-                        <Text style={{
-                          fontSize: 13, fontWeight: active ? '700' : '500',
-                          color: active ? '#fff' : (isDark ? '#fff' : t.color),
-                        }}>
-                          {t.label}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-                {/* Custom name input if Other selected */}
-                {eventType === 'Other' && (
-                  <TextInput
-                    style={[styles.input, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr, color: txt, marginBottom: 8 }]}
-                    placeholder="Type custom event name"
-                    placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
-                    value={customType}
-                    onChangeText={setCustomType}
-                  />
-                )}
-
-                {/* Teams meeting toggle */}
-                <TouchableOpacity
-                  style={[
-                    styles.teamsBtn,
-                    { backgroundColor: isDark ? '#252530' : '#FAFAFA', borderColor: bdr },
-                    teamsMeeting && styles.teamsBtnOn,
-                  ]}
-                  onPress={() => setTeamsMeeting(v => !v)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={{ fontSize: 14, marginRight: 8 }}>📹</Text>
-                  <Text style={[styles.teamsBtnText, { color: sub }, teamsMeeting && styles.teamsBtnTextOn]}>
-                    Teams meeting
-                  </Text>
-                  {teamsMeeting && <Text style={{ marginLeft: 8, color: '#3B72EE', fontWeight: '700' }}>✓</Text>}
-                </TouchableOpacity>
-
-                {/* Description */}
-                <Text style={[styles.fieldLabel, { color: sub }]}>DESCRIPTION</Text>
-                <TextInput
-                  style={[
-                    styles.input,
-                    { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr, color: txt, height: 80, paddingTop: 12 },
-                  ]}
-                  placeholder="Let's discuss"
-                  placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
-                  value={eventDesc}
-                  onChangeText={setEventDesc}
-                  multiline
-                  textAlignVertical="top"
-                />
-
-                {/* Location */}
-                <View style={[
-                  styles.locationWrap,
-                  { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr },
-                ]}>
-                  <Text style={styles.locationIcon}>📍</Text>
-                  <TextInput
-                    style={[styles.locationInput, { color: txt }]}
-                    placeholder="Add location (optional)"
-                    placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
-                    value={location}
-                    onChangeText={setLocation}
-                  />
                 </View>
 
-                {/* Participants */}
-                <View style={styles.participantsHeaderRow}>
-                  <Text style={[styles.fieldLabel, { color: sub }]}>PARTICIPANTS</Text>
-                  <TouchableOpacity onPress={() => setShowParticipants(s => !s)}>
-                    <Text style={styles.participantsToggle}>
-                      {showParticipants ? 'Hide' : '+ Add'}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
+                {/* ── Participants ── */}
+                <View style={{ marginHorizontal: 16, marginBottom: 12, borderRadius: 16, borderWidth: 1, borderColor: bdr, backgroundColor: card, overflow: 'hidden' }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 12 }}>
+                    <Text style={{ fontSize: 13, fontWeight: '600', color: sub }}>Participants</Text>
+                    <TouchableOpacity onPress={() => setShowParticipants(s => !s)}>
+                      <Text style={{ fontSize: 13, fontWeight: '700', color: '#3B72EE' }}>+ Add</Text>
+                    </TouchableOpacity>
+                  </View>
 
                 {/* Selected participant chips */}
                 {participants.length > 0 ? (
@@ -2614,26 +2641,31 @@ export default function CalendarScreen() {
                     </ScrollView>
                   </View>
                 )}
+                </View>
 
                 {/* Alert info */}
-                <View style={styles.alertInfoBox}>
-                  <Text style={styles.alertInfoText}>
-                    🔔  {participants.length > 0
+                <View style={{ marginHorizontal: 16, marginBottom: 16, backgroundColor: isDark ? 'rgba(59,114,238,0.1)' : '#EEF3FF', borderRadius: 12, borderWidth: 1, borderColor: isDark ? 'rgba(59,114,238,0.2)' : '#C7D7FE', paddingHorizontal: 14, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Text style={{ fontSize: 15 }}>🔔</Text>
+                  <Text style={{ flex: 1, fontSize: 13, color: '#3B72EE', fontWeight: '500' }}>
+                    {participants.length > 0
                       ? `${participants.length} participant${participants.length > 1 ? 's' : ''} will be notified 1 hour before`
                       : "You'll receive an alert 1 hour before this event"}
                   </Text>
                 </View>
 
                 {/* Buttons */}
-                <View style={[styles.modalBtns, { marginBottom: 28 }]}>
+                <View style={{ flexDirection: 'row', gap: 10, marginHorizontal: 16, marginBottom: 28 }}>
                   <TouchableOpacity
-                    style={[styles.cancelBtn, { borderColor: bdr, backgroundColor: card }]}
+                    style={{ flex: 1, paddingVertical: 14, borderRadius: 12, borderWidth: 1, borderColor: bdr, backgroundColor: card, alignItems: 'center' }}
                     onPress={closeModal}
                   >
-                    <Text style={[styles.cancelBtnText, { color: sub }]}>Cancel</Text>
+                    <Text style={{ fontSize: 15, fontWeight: '600', color: sub }}>Cancel</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={styles.saveBtn} onPress={saveEvent}>
-                    <Text style={styles.saveBtnText}>Create event</Text>
+                  <TouchableOpacity
+                    style={{ flex: 2, paddingVertical: 14, borderRadius: 12, backgroundColor: '#0E1726', alignItems: 'center' }}
+                    onPress={saveEvent}
+                  >
+                    <Text style={{ fontSize: 15, fontWeight: '700', color: '#fff' }}>Create event</Text>
                   </TouchableOpacity>
                 </View>
 
@@ -3465,11 +3497,11 @@ export default function CalendarScreen() {
           <View style={shareStyles.header}>
             <View style={shareStyles.headerIcon}>
               <Svg width={18} height={18} viewBox="0 0 24 24" fill="none">
-                <Circle cx={18} cy={5}  r={3} stroke="#10B981" strokeWidth={2} />
-                <Circle cx={6}  cy={12} r={3} stroke="#10B981" strokeWidth={2} />
-                <Circle cx={18} cy={19} r={3} stroke="#10B981" strokeWidth={2} />
-                <Line x1={8.59}  y1={13.51} x2={15.42} y2={17.49} stroke="#10B981" strokeWidth={2} strokeLinecap="round" />
-                <Line x1={15.41} y1={6.51}  x2={8.59}  y2={10.49} stroke="#10B981" strokeWidth={2} strokeLinecap="round" />
+                <Circle cx={18} cy={5}  r={3} stroke="#3B72EE" strokeWidth={2} />
+                <Circle cx={6}  cy={12} r={3} stroke="#3B72EE" strokeWidth={2} />
+                <Circle cx={18} cy={19} r={3} stroke="#3B72EE" strokeWidth={2} />
+                <Line x1={8.59}  y1={13.51} x2={15.42} y2={17.49} stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" />
+                <Line x1={15.41} y1={6.51}  x2={8.59}  y2={10.49} stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" />
               </Svg>
             </View>
             <View style={{ flex: 1 }}>
@@ -3801,8 +3833,9 @@ const du = StyleSheet.create({
 
   // "Add Daily Update" button (shows when today and no update yet)
   addUpdateBtn: {
-    paddingVertical: 14, borderRadius: 10, borderWidth: 1,
-    alignItems: 'center', marginBottom: 14,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    paddingVertical: 13, borderRadius: 12, borderWidth: 1,
+    width: '100%', marginBottom: 14,
   },
   addUpdateText: { fontSize: 14, fontWeight: '700' },
 
@@ -3833,7 +3866,8 @@ const du = StyleSheet.create({
 
   // Create Task button at top
   createTaskTopBtn: {
-    paddingHorizontal: 20, paddingVertical: 10, borderRadius: 8, borderWidth: 1,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: 20, paddingVertical: 13, borderRadius: 12, borderWidth: 1, width: '100%',
   },
   createTaskTopText: { fontSize: 14, fontWeight: '700' },
 });
@@ -3888,7 +3922,7 @@ const styles = StyleSheet.create({
   todayBtnChevron: { color: '#fff', fontSize: 9, marginTop: 1 },
   arrowBtn: { width: 28, height: 28, justifyContent: 'center', alignItems: 'center' },
   arrowText: { fontSize: 22, fontWeight: '300' },
-  dateRange: { fontSize: 13, fontWeight: '600' },
+  dateRange: { fontSize: 16, fontWeight: '700' },
   newEventBtn: { backgroundColor: '#3B72EE', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5 },
   newEventBtnText: { color: '#fff', fontSize: 12, fontWeight: '600' },
 
@@ -3941,11 +3975,11 @@ const styles = StyleSheet.create({
   sharedPill: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 10, borderWidth: 1, minWidth: 30, alignItems: 'center' },
   sharedPillText: { fontSize: 9, fontWeight: '700' },
   timeLabelText: { fontSize: 10, fontWeight: '500' },
-  dayHeaderCell: { flex: 1, alignItems: 'center', paddingVertical: 7, borderLeftWidth: 1 },
-  dayHeaderDay: { fontSize: 10, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase' },
+  dayHeaderCell: { flex: 1, alignItems: 'center', paddingVertical: 6, borderLeftWidth: 1 },
+  dayHeaderDay: { fontSize: 11, fontWeight: '600', letterSpacing: 0.3 },
   dayHeaderNum: { width: 28, height: 28, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginTop: 2 },
-  dayHeaderNumToday: { backgroundColor: '#000000' },
-  dayHeaderNumText: { fontSize: 14, fontWeight: '700' },
+  dayHeaderNumToday: { backgroundColor: '#2952C4' },
+  dayHeaderNumText: { fontSize: 13, fontWeight: '700' },
 
   // All day row
   allDayRow: { flexDirection: 'row', minHeight: 36, borderBottomWidth: 1 },
