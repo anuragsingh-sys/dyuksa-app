@@ -1,15 +1,54 @@
 import React, { useState, useRef, useEffect, useCallback, useContext } from 'react';
 import {
   View, Text, ScrollView, TextInput, TouchableOpacity,
-  StyleSheet, ActivityIndicator, StatusBar,
+  StyleSheet, ActivityIndicator, StatusBar, Animated, Alert,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { ThemeContext } from '../context/ThemeContext';
 import { getAccessToken, getWorkspaceId } from '../services/ApiService';
 import { BASE_URL } from '../config';
-import Svg, { Path } from 'react-native-svg';
+import Svg, { Path, Rect } from 'react-native-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { NativeModules, Platform, DeviceEventEmitter } from 'react-native';
+
+const startVoiceInput = (onResult, onError) => {
+  if (Platform.OS !== 'android') {
+    onError?.('Voice search is only available on Android devices.');
+    return;
+  }
+  try {
+    const IntentLauncher = require('expo-intent-launcher');
+    IntentLauncher.startActivityAsync('android.speech.action.RECOGNIZE_SPEECH', {
+      extra: {
+        'android.speech.extra.LANGUAGE_MODEL': 'free_form',
+        'android.speech.extra.LANGUAGE': 'en-US',
+        'android.speech.extra.PROMPT': 'Speak to search...',
+        'android.speech.extra.MAX_RESULTS': 1,
+        // Keep listening for 6 seconds of silence before closing
+        'android.speech.extra.SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS': 6000,
+        'android.speech.extra.SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS': 4000,
+        'android.speech.extra.SPEECH_INPUT_MINIMUM_LENGTH_MILLIS': 2000,
+      },
+    }).then((result) => {
+      console.log('Voice result:', JSON.stringify(result));
+      const extras = result?.data?.extras || result?.extra || {};
+      const results = extras['android.speech.extra.RESULTS']
+        || extras['results']
+        || [];
+      const text = Array.isArray(results) ? results[0] : (typeof results === 'string' ? results : '');
+      if (text) {
+        onResult?.(text);
+      } else if (result?.resultCode === 0) {
+        onError?.('Voice input cancelled');
+      } else {
+        onError?.('Could not understand. Please try again.');
+      }
+    }).catch(() => onError?.('Voice input cancelled'));
+  } catch (e) {
+    onError?.('Voice search not available');
+  }
+};
 
 const ACCENT = '#3B72EE';
 const RECENT_KEY = 'dyuksa_recent_searches';
@@ -51,6 +90,7 @@ const SearchIcon = ({ size = 18, color }) => (
 
 export default function SearchScreen() {
   const navigation = useNavigation();
+  const route      = useRoute();
   const insets     = useSafeAreaInsets();
   const { theme }  = useContext(ThemeContext);
   const isDark = theme === 'Dark';
@@ -65,8 +105,50 @@ export default function SearchScreen() {
   const inputRef = useRef(null);
   const [query,   setQuery]   = useState('');
   const [loading, setLoading] = useState(false);
-  const [results, setResults] = useState(null);
+  const [results,    setResults]    = useState(null);
+  const [aiResult,   setAiResult]   = useState(null);  // AI agent response
+  const [aiLoading,  setAiLoading]  = useState(false);  // AI thinking indicator
+  const aiAbortRef = useRef(null);  // cancel in-flight AI call on new query
   const [recent,  setRecent]  = useState([]);
+  const [isListening, setIsListening] = useState(false);
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (isListening) {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, { toValue: 1.2, duration: 600, useNativeDriver: true }),
+          Animated.timing(pulseAnim, { toValue: 1,   duration: 600, useNativeDriver: true }),
+        ])
+      ).start();
+    } else {
+      pulseAnim.stopAnimation();
+      pulseAnim.setValue(1);
+    }
+  }, [isListening]);
+
+  const handleVoicePress = () => {
+    setIsListening(true);
+    startVoiceInput(
+      (text) => {
+        setIsListening(false);
+        if (text) {
+          setQuery(text);
+          search(text); // immediately trigger search, no debounce wait
+        }
+      },
+      (err) => {
+        setIsListening(false);
+        if (err && err !== 'Voice input cancelled') Alert.alert('Voice Search', err);
+      }
+    );
+  };
+
+  useEffect(() => {
+    if (route.params?.voiceTrigger) {
+      handleVoicePress();
+    }
+  }, [route.params?.voiceTrigger]);
 
   useEffect(() => {
     AsyncStorage.getItem(RECENT_KEY).then(val => {
@@ -89,27 +171,67 @@ export default function SearchScreen() {
   };
 
   const search = useCallback(async (q) => {
-    if (!q.trim()) { setResults(null); return; }
+    if (!q.trim()) { setResults(null); setAiResult(null); return; }
     setLoading(true);
-    try {
-      const headers = await authHeaders();
-      const [tasksRes, projectsRes, docsRes, usersRes] = await Promise.all([
-        fetch(`${BASE_URL}/tasksite/?search=${encodeURIComponent(q)}`, { headers }),
-        fetch(`${BASE_URL}/projects/?search=${encodeURIComponent(q)}`, { headers }),
-        fetch(`${BASE_URL}/documents/?search=${encodeURIComponent(q)}`, { headers }),
-        fetch(`${BASE_URL}/auth/users/?search=${encodeURIComponent(q)}`, { headers }),
-      ]);
-      const parse = async (res) => {
-        if (!res.ok) return [];
-        const data = await res.json().catch(() => ({}));
-        return Array.isArray(data) ? data : (data.results || []);
-      };
-      const [tasks, projects, docs, users] = await Promise.all([
-        parse(tasksRes), parse(projectsRes), parse(docsRes), parse(usersRes),
-      ]);
-      setResults({ tasks, projects, docs, users });
-    } catch { setResults({ tasks: [], projects: [], docs: [], users: [] }); }
-    finally { setLoading(false); }
+
+    // ── Cancel any previous AI call ──────────────────────────────────
+    if (aiAbortRef.current) aiAbortRef.current.abort();
+    const aiAbort = new AbortController();
+    aiAbortRef.current = aiAbort;
+    setAiResult(null);
+    setAiLoading(true);
+
+    // ── PATH A: Search APIs (fast, immediate results) ─────────────────
+    const searchPromise = (async () => {
+      try {
+        const headers = await authHeaders();
+        const [tasksRes, projectsRes, docsRes, usersRes] = await Promise.all([
+          fetch(`${BASE_URL}/tasksite/?search=${encodeURIComponent(q)}`, { headers }),
+          fetch(`${BASE_URL}/projects/?search=${encodeURIComponent(q)}`, { headers }),
+          fetch(`${BASE_URL}/documents/?search=${encodeURIComponent(q)}`, { headers }),
+          fetch(`${BASE_URL}/auth/users/?search=${encodeURIComponent(q)}`, { headers }),
+        ]);
+        const parse = async (res) => {
+          if (!res.ok) return [];
+          const data = await res.json().catch(() => ({}));
+          return Array.isArray(data) ? data : (data.results || []);
+        };
+        const [tasks, projects, docs, users] = await Promise.all([
+          parse(tasksRes), parse(projectsRes), parse(docsRes), parse(usersRes),
+        ]);
+        setResults({ tasks, projects, docs, users });
+      } catch { setResults({ tasks: [], projects: [], docs: [], users: [] }); }
+      finally { setLoading(false); }
+    })();
+
+    // ── PATH B: AI Agent (slower, auto-updates when ready) ───────────
+    // Endpoint will be set once backend is ready — placeholder for now
+    const AI_ENDPOINT = null; // TODO: replace with actual endpoint e.g. `${BASE_URL}/task-ai/chat/agent/`
+    if (AI_ENDPOINT) {
+      (async () => {
+        try {
+          const headers = await authHeaders();
+          const res = await fetch(AI_ENDPOINT, {
+            method: 'POST',
+            headers: { ...headers, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: q }),
+            signal: aiAbort.signal,
+          });
+          if (!res.ok || aiAbort.signal.aborted) return;
+          const data = await res.json();
+          // Auto-update results list with AI response
+          if (!aiAbort.signal.aborted) setAiResult(data);
+        } catch (e) {
+          if (e.name !== 'AbortError') console.warn('[AI Agent]', e.message);
+        } finally {
+          if (!aiAbort.signal.aborted) setAiLoading(false);
+        }
+      })();
+    } else {
+      setAiLoading(false);
+    }
+
+    await searchPromise;
   }, []);
 
   useEffect(() => {
@@ -154,12 +276,27 @@ export default function SearchScreen() {
             onSubmitEditing={handleSubmit}
           />
           {query.length > 0 && (
-            <TouchableOpacity onPress={() => { setQuery(''); setResults(null); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <TouchableOpacity onPress={() => { setQuery(''); setResults(null); setAiResult(null); setAiLoading(false); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
               <Text style={{ color: sub, fontSize: 14 }}>✕</Text>
             </TouchableOpacity>
           )}
           {loading && <ActivityIndicator size="small" color={ACCENT} style={{ marginLeft: 6 }} />}
+          {aiLoading && !loading && (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginLeft: 6 }}>
+              <ActivityIndicator size="small" color={ACCENT} />
+              <Text style={{ fontSize: 10, color: ACCENT, fontWeight: '600' }}>AI</Text>
+            </View>
+          )}
         </View>
+        <TouchableOpacity onPress={handleVoicePress} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} style={{ paddingRight: 6 }}>
+          <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+            <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
+              <Path d="M12 19v3" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+              <Path d="M19 10v2a7 7 0 01-14 0v-2" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+              <Rect x={9} y={2} width={6} height={13} rx={3} stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+            </Svg>
+          </Animated.View>
+        </TouchableOpacity>
       </View>
 
       <ScrollView
@@ -189,6 +326,13 @@ export default function SearchScreen() {
               </View>
             )}
 
+            {isListening && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10 }}>
+                <Animated.View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: ACCENT, transform: [{ scale: pulseAnim }] }} />
+                <Text style={{ fontSize: 13, color: ACCENT, fontWeight: '600' }}>Listening… speak now</Text>
+              </View>
+            )}
+
             {/* Quick filters */}
             <Text style={[s.sectionTitle, { color: txt, marginBottom: 10 }]}>Quick filters</Text>
             <View style={s.quickRow}>
@@ -209,6 +353,66 @@ export default function SearchScreen() {
         {/* ── Results ── */}
         {hasResults && (
           <View style={{ paddingHorizontal: 16 }}>
+
+            {/* ── AI Agent result — fires in parallel, auto-appears when ready ── */}
+            {(aiLoading || aiResult) && (
+              <View style={{
+                marginBottom: 16,
+                borderRadius: 12,
+                borderWidth: 1.5,
+                borderColor: aiResult ? ACCENT : (isDark ? '#252530' : '#DBEAFE'),
+                backgroundColor: isDark ? '#0D1229' : '#EEF4FF',
+                overflow: 'hidden',
+              }}>
+                {/* Header */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: aiResult ? 1 : 0, borderBottomColor: isDark ? '#252530' : '#DBEAFE' }}>
+                  {aiLoading && !aiResult ? (
+                    <>
+                      <ActivityIndicator size="small" color={ACCENT} />
+                      <Text style={{ fontSize: 13, fontWeight: '600', color: ACCENT }}>AI Agent thinking…</Text>
+                      <Text style={{ fontSize: 11, color: isDark ? '#6B7588' : '#9AA3B2', marginLeft: 'auto' }}>results shown below</Text>
+                    </>
+                  ) : (
+                    <>
+                      <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: ACCENT, alignItems: 'center', justifyContent: 'center' }}>
+                        <Text style={{ fontSize: 10, color: '#fff', fontWeight: '700' }}>AI</Text>
+                      </View>
+                      <Text style={{ fontSize: 13, fontWeight: '700', color: ACCENT }}>AI Suggestion</Text>
+                      {aiResult.intent && (
+                        <View style={{ marginLeft: 'auto', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, backgroundColor: ACCENT + '22' }}>
+                          <Text style={{ fontSize: 10, fontWeight: '700', color: ACCENT }}>{(aiResult.intent || '').toUpperCase()}</Text>
+                        </View>
+                      )}
+                    </>
+                  )}
+                </View>
+
+                {/* AI content — auto-renders when agent responds */}
+                {aiResult && (
+                  <View style={{ padding: 14 }}>
+                    {(aiResult.message || aiResult.response || aiResult.summary) && (
+                      <Text style={{ fontSize: 13, color: isDark ? '#E0E0FF' : '#1A1A2E', lineHeight: 20, marginBottom: aiResult.action ? 12 : 0 }}>
+                        {aiResult.message || aiResult.response || aiResult.summary}
+                      </Text>
+                    )}
+                    {aiResult.action && (
+                      <TouchableOpacity
+                        style={{ height: 40, borderRadius: 10, backgroundColor: ACCENT, alignItems: 'center', justifyContent: 'center' }}
+                        onPress={() => {
+                          if (aiResult.action === 'create_task')    navigation.navigate('QuickCreate',    { aiData: aiResult });
+                          else if (aiResult.action === 'create_event')   navigation.navigate('Calendar',       { aiData: aiResult, openCreateModal: true });
+                          else if (aiResult.action === 'create_project') navigation.navigate('CreateProject',  { aiData: aiResult });
+                        }}
+                      >
+                        <Text style={{ color: '#fff', fontSize: 13, fontWeight: '700' }}>
+                          {aiResult.action_label || 'Create Now'}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                )}
+              </View>
+            )}
 
             {/* Tasks */}
             {results.tasks.length > 0 && (

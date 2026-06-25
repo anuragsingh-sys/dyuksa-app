@@ -121,7 +121,7 @@ export default function TeamScreen() {
           <ActivityIndicator size="large" color="#4ECDC4" />
         </View>
       ) : (
-        <ScrollView contentContainerStyle={{ padding: 12, paddingBottom: insets.bottom + 90 }} showsVerticalScrollIndicator={false}>
+        <ScrollView contentContainerStyle={{ padding: 12, paddingBottom: insets.bottom + 24 }} showsVerticalScrollIndicator={false}>
 
           {/* Me card */}
           {user && (

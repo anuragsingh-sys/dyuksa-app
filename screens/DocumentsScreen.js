@@ -14,14 +14,15 @@ import Svg, { Path, Rect } from 'react-native-svg';
 import { ThemeContext } from '../context/ThemeContext';
 import { getAccessToken, getWorkspaceId } from '../services/ApiService';
 
-import { API_BASE, BASE_URL } from '../config';
+import { BASE_URL } from '../config';
 // DocumentPicker — loaded lazily so screen still works if package isn't installed
 let DocumentPicker = null;
 try { DocumentPicker = require('expo-document-picker'); } catch {}
 
-// API_BASE → imported from config
-const DOCS_API     = `${API_BASE}/api/v1/documents/`;
-const PROJECTS_API = `${API_BASE}/api/v1/projects/`;
+// BASE_URL from config.js = http://IP:PORT/api/v1  (already includes /api/v1)
+// All endpoints are built from BASE_URL — change the IP only in config.js.
+const DOCS_API     = `${BASE_URL}/documents/`;
+const PROJECTS_API = `${BASE_URL}/projects/`;
 
 // Always includes X-Workspace-ID so every request is workspace-aware
 const buildAuthHeaders = async (isMultipart = false) => {
@@ -268,6 +269,12 @@ export default function DocumentsScreen() {
   const bdr  = isDark ? '#252530' : '#EBEBF0';
   const fs   = s => s * fontScale;
 
+  // Passed from ProjectsScreen: navigation.navigate('Documents', { projectId, projectName })
+  // When present → fetches only that project's docs via /documents/project/{id}/all/
+  // When absent  → fetches all docs via paginated GET /documents/
+  const routeProjectId   = route.params?.projectId   ?? null;
+  const routeProjectName = route.params?.projectName ?? null;
+
   const [docs,         setDocs]         = useState([]);
   const [projectMap,   setProjectMap]   = useState({}); // { [id]: name }
   const [loading,      setLoading]      = useState(true);
@@ -326,24 +333,53 @@ export default function DocumentsScreen() {
   const [createDocCustomFormat,setCreateDocCustomFormat]= useState('');
   const [creatingDoc,          setCreatingDoc]          = useState(false);
 
-  // ── Fetch all documents (follow `next` pagination) ──
-  const fetchDocs = useCallback(async () => {
-    const all = [];
-    let url = DOCS_API;
-    let safety = 20; // cap: 20 pages max
+  // ── Fetch documents ─────────────────────────────────────────────────────────
+  // Two modes:
+  //   Global (no projectId): GET /documents/  →  paginated {count, next, results:[]}
+  //     Fields: id, project, project_name, name, source_file, status, created_by,
+  //             labels, shared_with, shared_by, file_type, created_at, updated_at
+  //   Project (with projectId): GET /documents/project/{id}/all/
+  //     Fields: id, file_name, file_url, preview_url, preview_status, source, task_id,
+  //             task_heading, uploaded_at, updated_at
+  const fetchDocs = useCallback(async (projectId) => {
+    const headers = await buildAuthHeaders();
 
-    while (url && safety-- > 0) {
-      const res = await fetch(url, {
-        method: 'GET',
-        headers: await buildAuthHeaders(),
-      });
+    if (projectId) {
+      // ── Per-project endpoint ─────────────────────────────────────────────
+      const url = `${BASE_URL}/documents/project/${projectId}/all/`;
+      const res = await fetch(url, { method: 'GET', headers });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.detail || errData.message || `Error ${res.status}`);
       }
       const data = await res.json();
+      const docs = Array.isArray(data) ? data
+        : (Array.isArray(data.documents) ? data.documents
+        : (Array.isArray(data.results)   ? data.results : []));
+      // Normalise per-project docs to global shape so rest of screen works unchanged
+      return docs.map(d => ({
+        ...d,
+        // per-project uses file_name/file_url; global uses name/source_file
+        name:        d.name        || d.file_name  || 'Untitled',
+        source_file: d.source_file || d.file_url   || '',
+        project:     d.project     ?? projectId,
+        project_name:d.project_name|| routeProjectName || `Project ${projectId}`,
+        // keep all original fields intact
+      }));
+    }
 
-      // Tolerate three response shapes: array | {results:[]} | {documents:[]}
+    // ── Global paginated endpoint ────────────────────────────────────────────
+    // GET /documents/  →  { count, next, results: [...] }
+    const all = [];
+    let url = DOCS_API;
+    let safety = 20;
+    while (url && safety-- > 0) {
+      const res = await fetch(url, { method: 'GET', headers });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || errData.message || `Error ${res.status}`);
+      }
+      const data = await res.json();
       let pageDocs = [];
       let nextUrl  = null;
       if (Array.isArray(data)) {
@@ -355,12 +391,11 @@ export default function DocumentsScreen() {
         pageDocs = data.documents;
         nextUrl  = data.next || null;
       }
-
       all.push(...pageDocs);
       url = nextUrl;
     }
     return all;
-  }, []);
+  }, [routeProjectName]);
 
   // ── Fetch projects → build id→name map ──
   const fetchProjectMap = useCallback(async () => {
@@ -390,13 +425,24 @@ export default function DocumentsScreen() {
   const loadAll = useCallback(async () => {
     try {
       setError(null);
+      // Global docs response already has project_name on each doc, so we run
+      // fetchProjectMap in parallel only to support the project-filter dropdown.
       const [docsList, projMap] = await Promise.all([
-        fetchDocs(),
+        fetchDocs(routeProjectId),
         fetchProjectMap(),
       ]);
+      // Seed projMap from project_name on each doc (avoids a missing project)
+      docsList.forEach(d => {
+        if (d.project != null && d.project_name && !projMap[d.project]) {
+          projMap[d.project] = d.project_name;
+        }
+      });
+      if (routeProjectId && routeProjectName) {
+        projMap[routeProjectId] = projMap[routeProjectId] || routeProjectName;
+      }
       setDocs(docsList);
       setProjectMap(projMap);
-      // Populate sharedWithMap from shared_with field in each doc
+      // Populate sharedWithMap from shared_with field on each doc
       const swMap = {};
       docsList.forEach(d => {
         if (d.shared_with?.length > 0) {
@@ -410,7 +456,7 @@ export default function DocumentsScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [fetchDocs, fetchProjectMap]);
+  }, [fetchDocs, fetchProjectMap, routeProjectId, routeProjectName]);
 
   // ── Upload helpers ──────────────────────────────────────────────────────
   const openUploadModal = async () => {
@@ -423,7 +469,7 @@ export default function DocumentsScreen() {
         const data = await res.json();
         const list = Array.isArray(data) ? data : (data.results || data.projects || []);
         setUploadProjects(list);
-        if (list.length > 0 && !uploadProjectId) setUploadProjectId(list[0].id);
+        if (list.length > 0) setUploadProjectId(prev => prev || list[0].id);
       }
     } catch {}
     setUploadFile(null);
@@ -458,31 +504,121 @@ export default function DocumentsScreen() {
 
   const submitUpload = async () => {
     if (!uploadFile) { Alert.alert('No file', 'Please pick a file first.'); return; }
+    if (!uploadProjectId) { Alert.alert('Project required', 'Please select a project to upload to.'); return; }
     setUploading(true);
     try {
-      const formData = new FormData();
-      formData.append('source_file', {
+      const headers = await buildAuthHeaders();
+
+      // ── Step 1: Get presigned S3 upload URL ─────────────────────────────
+      // POST /api/v1/projects/{id}/get-upload-url/
+      // Body: { file_name, file_type }
+      // IMPORTANT: file_type must be a valid MIME type — backend bakes it into
+      // the S3 policy. If it doesn't match what we send to S3, upload will fail.
+      const getMimeType = (filename, fallback) => {
+        const ext = (filename || '').split('.').pop().toLowerCase();
+        const map = {
+          pdf: 'application/pdf',
+          doc: 'application/msword',
+          docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          xls: 'application/vnd.ms-excel',
+          xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          ppt: 'application/vnd.ms-powerpoint',
+          pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+          png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+          gif: 'image/gif', webp: 'image/webp',
+          mp4: 'video/mp4', mov: 'video/quicktime',
+          txt: 'text/plain', md: 'text/markdown',
+          zip: 'application/zip', csv: 'text/csv',
+          ts: 'video/mp2t', tsx: 'application/octet-stream',
+        };
+        return map[ext] || fallback || 'application/octet-stream';
+      };
+      const fileMime = getMimeType(uploadFile.name, uploadFile.mimeType);
+
+      const presignRes = await fetch(
+        `${BASE_URL}/projects/${uploadProjectId}/get-upload-url/`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            file_name: uploadFile.name,
+            file_type: fileMime,
+          }),
+        }
+      );
+      if (!presignRes.ok) {
+        const e = await presignRes.json().catch(() => ({}));
+        throw new Error(e.detail || e.message || `Failed to get upload URL (${presignRes.status})`);
+      }
+      const { url: s3Url, fields, file_key: fileKey } = await presignRes.json();
+
+      // ── Step 2: Upload file directly to S3 using presigned fields ────────
+      // AWS S3 presigned POST rules:
+      //   1. All fields from the presigned response must come BEFORE the file
+      //   2. The file field must be named "file" and come LAST
+      //   3. NO Authorization header — S3 rejects Bearer tokens
+      //   4. Do NOT set Content-Type manually — let fetch set multipart boundary
+      const s3Form = new FormData();
+      // Use Content-Type from presigned fields — must EXACTLY match what backend signed
+      const fileContentType = fields['Content-Type'] || fileMime;
+
+      // Append all presigned fields first (excluding Content-Type — appended with file)
+      Object.entries(fields).forEach(([k, v]) => {
+        s3Form.append(k, v);
+      });
+
+      // Append file last — field name must be "file" for S3 presigned POST
+      s3Form.append('file', {
         uri:  uploadFile.uri,
         name: uploadFile.name,
-        type: uploadFile.mimeType,
+        type: fileContentType,
       });
-      // Project is optional — only append if selected
-      if (uploadProjectId) formData.append('project', String(uploadProjectId));
-      formData.append('name', uploadFile.name);
 
-      const res = await fetch(DOCS_API, {
+      const s3Res = await fetch(s3Url, {
         method: 'POST',
-        headers: await buildAuthHeaders(true),
-        body: formData,
+        body:   s3Form,
+        // ⚠️ No headers object at all — React Native fetch auto-sets
+        // multipart/form-data + boundary when body is FormData.
+        // Passing any headers (even empty Authorization) causes S3 InvalidArgument.
       });
-      if (!res.ok) {
-        let detail = `${res.status}`;
-        try { const e = await res.json(); detail = e.detail || JSON.stringify(e); } catch {}
-        throw new Error(detail);
+
+      // S3 returns 204 No Content on success (some configs return 200/201)
+      if (s3Res.status !== 204 && s3Res.status !== 200 && s3Res.status !== 201) {
+        // Try to read S3 XML error for better debugging
+        const xmlText = await s3Res.text().catch(() => '');
+        const codeMatch = xmlText.match(/<Code>(.*?)<\/Code>/);
+        const msgMatch  = xmlText.match(/<Message>(.*?)<\/Message>/);
+        const s3Error = msgMatch?.[1] || codeMatch?.[1] || `Status ${s3Res.status}`;
+        throw new Error(`S3 upload failed: ${s3Error}`);
       }
+
+      // ── Step 3: Register the document with the backend ───────────────────
+      // POST /api/v1/documents/  with the file_key from step 1
+      // ── Step 3: Confirm upload with backend ─────────────────────────────────
+      // POST /api/v1/projects/{id}/confirm-upload/
+      // Body: { file_key, file_name, file_type }
+      // Response: { id, status: "saved" }
+      const confirmRes = await fetch(
+        `${BASE_URL}/projects/${uploadProjectId}/confirm-upload/`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            file_key:  fileKey,
+            file_name: uploadFile.name,
+            file_type: fileMime,
+          }),
+        }
+      );
+      if (!confirmRes.ok) {
+        const e = await confirmRes.json().catch(() => ({}));
+        throw new Error(e.detail || e.message || `Failed to confirm upload (${confirmRes.status})`);
+      }
+
+      // ── Done ─────────────────────────────────────────────────────────────
       setUploadModalVisible(false);
       setUploadFile(null);
-      // Refresh list
+      setUploadProjectId(null);
       setLoading(true);
       loadAll();
     } catch (e) {
@@ -563,7 +699,7 @@ export default function DocumentsScreen() {
     (async () => {
       try {
         const headers = await buildAuthHeaders();
-        const res = await fetch(`${API_BASE}/api/v1/tasksite/all-users/`, { headers });
+        const res = await fetch(`${BASE_URL}/tasksite/all-users/`, { headers });
         if (res.ok) {
           const data = await res.json();
           setUsers(data.users || data.results || (Array.isArray(data) ? data : []));
@@ -580,7 +716,7 @@ export default function DocumentsScreen() {
       const headers = await buildAuthHeaders();
 
       // Try POST with user_id
-      const res = await fetch(`${API_BASE}/api/v1/documents/${doc.id}/share/`, {
+      const res = await fetch(`${BASE_URL}/documents/${doc.id}/share/`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ user_id: userId }),
@@ -628,7 +764,7 @@ export default function DocumentsScreen() {
             try {
               const headers = await buildAuthHeaders();
               await Promise.all([...selectedIds].map(id =>
-                fetch(`${API_BASE}/api/v1/documents/${id}/`, { method: 'DELETE', headers })
+                fetch(`${BASE_URL}/documents/${id}/`, { method: 'DELETE', headers })
               ));
               setDocs(prev => prev.filter(d => !selectedIds.has(d.id)));
               clearSelection();
@@ -654,7 +790,7 @@ export default function DocumentsScreen() {
             try {
               const headers = await buildAuthHeaders();
               await Promise.all([...selectedIds].map(id =>
-                fetch(`${API_BASE}/api/v1/documents/${id}/`, {
+                fetch(`${BASE_URL}/documents/${id}/`, {
                   method: 'PATCH',
                   headers,
                   body: JSON.stringify({ status: newStatus }),
@@ -679,7 +815,7 @@ export default function DocumentsScreen() {
     setMovePickerOpen(false);
     try {
       const headers = await buildAuthHeaders();
-      const res = await fetch(`${API_BASE}/api/v1/projects/`, { headers });
+      const res = await fetch(`${BASE_URL}/projects/`, { headers });
       if (res.ok) {
         const data = await res.json();
         setMoveProjects(Array.isArray(data) ? data : (data.results || []));
@@ -695,7 +831,7 @@ export default function DocumentsScreen() {
     try {
       const headers = await buildAuthHeaders();
       await Promise.all([...selectedIds].map(id =>
-        fetch(`${API_BASE}/api/v1/documents/${id}/`, {
+        fetch(`${BASE_URL}/documents/${id}/`, {
           method: 'PATCH',
           headers,
           body: JSON.stringify({ project: moveProjectId }),
@@ -719,12 +855,12 @@ export default function DocumentsScreen() {
     const doc = docs.find(d => selectedIds.has(d.id));
     if (!doc) return;
     setTagSearch('');
-    setSelectedTags(doc.tags?.map(t => t.id || t) || []);
+    setSelectedTags((doc.labels || doc.tags || []).map(t => t.id || t));
     setLoadingTags(true);
     setTagsModalDoc(doc);
     try {
       const headers = await buildAuthHeaders();
-      const res = await fetch(`${API_BASE}/api/v1/documents/tags/`, { headers });
+      const res = await fetch(`${BASE_URL}/documents/tags/`, { headers });
       if (res.ok) {
         const data = await res.json();
         setAvailableTags(Array.isArray(data) ? data : (data.results || []));
@@ -742,14 +878,15 @@ export default function DocumentsScreen() {
     try {
       const headers = await buildAuthHeaders();
       await Promise.all([...selectedIds].map(id =>
-        fetch(`${API_BASE}/api/v1/documents/${id}/`, {
+        fetch(`${BASE_URL}/documents/${id}/`, {
           method: 'PATCH',
           headers,
-          body: JSON.stringify({ tags: selectedTags }),
+          body: JSON.stringify({ labels: selectedTags, tags: selectedTags }),
         })
       ));
+      const updatedLabels = availableTags.filter(t => selectedTags.includes(t.id));
       setDocs(prev => prev.map(d => selectedIds.has(d.id)
-        ? { ...d, tags: availableTags.filter(t => selectedTags.includes(t.id)) }
+        ? { ...d, labels: updatedLabels, tags: updatedLabels }
         : d
       ));
       setTagsModalDoc(null);
@@ -771,7 +908,7 @@ export default function DocumentsScreen() {
     // Also try the dedicated endpoint
     try {
       const headers = await buildAuthHeaders();
-      const res = await fetch(`${API_BASE}/api/v1/documents/${docId}/`, { headers });
+      const res = await fetch(`${BASE_URL}/documents/${docId}/`, { headers });
       if (res.ok) {
         const data = await res.json();
         const sharedWith = data.shared_with || [];
@@ -799,7 +936,7 @@ export default function DocumentsScreen() {
           try {
             const headers = await buildAuthHeaders();
             // Try revoke endpoint with user_id
-            const res = await fetch(`${API_BASE}/api/v1/documents/${docId}/share/`, {
+            const res = await fetch(`${BASE_URL}/documents/${docId}/share/`, {
               method: 'DELETE',
               headers,
               body: JSON.stringify({ user_id: userId }),
@@ -856,9 +993,8 @@ export default function DocumentsScreen() {
       }
 
       if (projectFilter !== 'all') {
-        const docProjectId = d.project != null
-          ? d.project
-          : extractProjectIdFromUrl(d.source_file || d.file_url);
+        // project field is present on global endpoint docs directly
+        const docProjectId = d.project ?? extractProjectIdFromUrl(d.source_file || d.file_url);
         if (String(docProjectId) !== String(projectFilter)) return false;
       }
 
@@ -878,7 +1014,7 @@ export default function DocumentsScreen() {
         seen.add(pid);
         out.push({
           id: String(pid),
-          label: projectMap[pid] || `Project ${pid}`,
+          label: projectMap[pid] || d.project_name || `Project ${pid}`,
         });
       }
     });
@@ -900,15 +1036,17 @@ export default function DocumentsScreen() {
     const meta    = TYPE_META[ext] || FALLBACK_META;
     const displayExt = ext ? ext.toUpperCase() : 'FILE';
 
-    const taskId    = extractTaskId(fileUrl);
-    const projectId = item.project != null ? item.project : extractProjectIdFromUrl(fileUrl);
-    const projectName = (projectId != null && projectMap[projectId])
-      ? projectMap[projectId]
-      : (projectId != null ? `Project ${projectId}` : 'Project');
+    const taskId    = item.task_id || extractTaskId(fileUrl);
+    // project_name is on the doc directly (global endpoint) — no map lookup needed
+    const projectId   = item.project ?? extractProjectIdFromUrl(fileUrl) ?? routeProjectId;
+    const projectName = item.project_name
+      || (projectId != null ? (projectMap[projectId] || routeProjectName || `Project ${projectId}`) : 'Project');
 
     const creator     = item.created_by || {};
-    const creatorName = creator.full_name || creator.username || 'Unknown';
+    const creatorName = creator.full_name || creator.username || null;
     const status      = item.status || null;
+    // Global endpoint uses "labels"; per-project may use "tags" — normalise
+    const itemLabels  = item.labels || item.tags || [];
 
     const isSelected = selectedIds.has(item.id);
 
@@ -958,14 +1096,14 @@ export default function DocumentsScreen() {
                 {projectName}
               </Text>
             </View>
-            {/* Tags */}
-            {(item.tags || []).slice(0, 2).map((tag, ti) => (
+            {/* Labels (global endpoint) / Tags (per-project) */}
+            {itemLabels.slice(0, 2).map((tag, ti) => (
               <View
                 key={ti}
                 style={[styles.tagPill, { backgroundColor: (tag.color || '#6B7280') + '22', borderColor: (tag.color || '#6B7280') + '44' }]}
               >
                 <Text style={[styles.tagPillTxt, { color: tag.color || '#6B7280', fontSize: fs(9) }]}>
-                  {tag.name || tag}
+                  {tag.name || (typeof tag === 'string' ? tag : '')}
                 </Text>
               </View>
             ))}
@@ -995,15 +1133,19 @@ export default function DocumentsScreen() {
           {/* Row 3 — Date · Owner avatar · Owner name · Shared badge */}
           <View style={styles.bottomRow}>
             <Text style={[styles.dateText, { color: sub, fontSize: fs(10) }]}>
-              {formatRelative(item.updated_at || item.created_at || item.uploaded_at)}
+              {formatRelative(item.updated_at || item.uploaded_at || item.created_at)}
             </Text>
-            <Text style={[styles.dotSep, { color: sub }]}>·</Text>
-            <View style={[styles.avatar, { backgroundColor: getAvatarColor(creatorName) }]}>
-              <Text style={styles.avatarText}>{getInitials(creatorName)}</Text>
-            </View>
-            <Text style={[styles.sharedByText, { color: sub, fontSize: fs(10) }]} numberOfLines={1}>
-              {creatorName}
-            </Text>
+            {creatorName ? (
+              <>
+                <Text style={[styles.dotSep, { color: sub }]}>·</Text>
+                <View style={[styles.avatar, { backgroundColor: getAvatarColor(creatorName) }]}>
+                  <Text style={styles.avatarText}>{getInitials(creatorName)}</Text>
+                </View>
+                <Text style={[styles.sharedByText, { color: sub, fontSize: fs(10) }]} numberOfLines={1}>
+                  {creatorName}
+                </Text>
+              </>
+            ) : null}
             {/* Shared indicator */}
             {((item.shared_with?.length > 0) || (sharedWithMap[item.id]?.length > 0)) && (
               <TouchableOpacity
@@ -1056,8 +1198,9 @@ export default function DocumentsScreen() {
   // ── Folder grouping ──
   const folderMap = {};
   filtered.forEach(doc => {
-    const pid = doc.project != null ? doc.project : extractProjectIdFromUrl(doc.source_file || doc.file_url);
-    const pName = (pid != null && projectMap[pid]) ? projectMap[pid] : 'Uncategorized';
+    const pid = doc.project ?? extractProjectIdFromUrl(doc.source_file || doc.file_url);
+    // project_name is on the doc from the global endpoint — use it first
+    const pName = doc.project_name || (pid != null ? (projectMap[pid] || routeProjectName || `Project ${pid}`) : 'Uncategorized');
     if (!folderMap[pName]) folderMap[pName] = [];
     folderMap[pName].push(doc);
   });
@@ -1116,9 +1259,17 @@ export default function DocumentsScreen() {
       {/* ── Navbar ── */}
       <View style={[styles.navbar, { backgroundColor: card, borderBottomColor: bdr }]}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-          <SidebarMenu activeScreen="Docs" />
+          {routeProjectId ? (
+            <TouchableOpacity onPress={() => navigation.goBack()} style={{ padding: 4 }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Text style={{ fontSize: 24, color: txt, lineHeight: 26 }}>‹</Text>
+            </TouchableOpacity>
+          ) : (
+            <SidebarMenu activeScreen="Docs" />
+          )}
           <View>
-            <Text style={[styles.navTitle, { color: txt }]}>Documents</Text>
+            <Text style={[styles.navTitle, { color: txt }]} numberOfLines={1}>
+              {routeProjectName ? `${routeProjectName} Docs` : 'Documents'}
+            </Text>
             <Text style={{ fontSize: 11, color: sub, marginTop: 1 }}>{totalFiles} files</Text>
           </View>
         </View>
@@ -1193,9 +1344,12 @@ export default function DocumentsScreen() {
                 <TouchableOpacity
                   key={folder.name}
                   style={[styles.folderCard, { backgroundColor: card, borderColor: bdr }]}
-                  onPress={() => setProjectFilter(
-                    Object.keys(folderMap).find(k => projectMap[k] === folder.name) || 'all'
-                  )}
+                  onPress={() => {
+                    // Find a doc whose project_name matches this folder, get its project ID
+                    const matchDoc = filtered.find(d => (d.project_name || projectMap[d.project]) === folder.name);
+                    const pid = matchDoc?.project;
+                    setProjectFilter(pid != null ? String(pid) : 'all');
+                  }}
                   activeOpacity={0.75}
                 >
                   <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
@@ -1317,7 +1471,7 @@ export default function DocumentsScreen() {
                       </Text>
                     </View>
                     <Text style={{ fontSize: 12, fontWeight: '600', color: txt, marginBottom: 3 }} numberOfLines={2}>{name}</Text>
-                    <Text style={{ fontSize: 10, color: sub }}>{formatRelative(item.updated_at || item.created_at)}</Text>
+                    <Text style={{ fontSize: 10, color: sub }}>{formatRelative(item.updated_at || item.uploaded_at || item.created_at)}</Text>
                   </TouchableOpacity>
                 );
               })}
@@ -1329,8 +1483,8 @@ export default function DocumentsScreen() {
               const fileUrl = item.source_file || item.source_file_url || item.file_url;
               const ext     = getExt(name);
               const meta    = TYPE_META[ext] || FALLBACK_META;
-              const projectId   = item.project != null ? item.project : extractProjectIdFromUrl(fileUrl);
-              const projectName = (projectId != null && projectMap[projectId]) ? projectMap[projectId] : null;
+              const projectId   = item.project ?? extractProjectIdFromUrl(fileUrl);
+              const projectName = item.project_name || (projectId != null ? projectMap[projectId] : null);
               const isSelected  = selectedIds.has(item.id);
 
               return (
@@ -1349,7 +1503,7 @@ export default function DocumentsScreen() {
                   <View style={{ flex: 1 }}>
                     <Text style={{ fontSize: 14, fontWeight: '600', color: txt, marginBottom: 3 }} numberOfLines={1}>{name}</Text>
                     <Text style={{ fontSize: 12, color: sub }} numberOfLines={1}>
-                      {[projectName, item.tags?.[0]?.name].filter(Boolean).join(' / ') || 'No project'}
+                      {[projectName || item.project_name, (item.labels || item.tags)?.[0]?.name].filter(Boolean).join(' / ') || 'No project'}
                     </Text>
                   </View>
                   <View style={{ alignItems: 'flex-end', gap: 3 }}>
@@ -1854,15 +2008,15 @@ export default function DocumentsScreen() {
               </TouchableOpacity>
 
               {/* Project selector */}
-              <Text style={[styles.uploadLabel, { color: sub, marginTop: 14 }]}>Project <Text style={{ fontWeight: '400' }}>(optional)</Text></Text>
+              <Text style={[styles.uploadLabel, { color: sub, marginTop: 14 }]}>Project <Text style={{ color: '#EF4444', fontWeight: '700' }}>*</Text></Text>
               <TouchableOpacity
                 style={[styles.projectSelector, { borderColor: uploadPickerOpen ? '#3B72EE' : bdr, backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
                 onPress={() => setUploadPickerOpen(o => !o)}
                 activeOpacity={0.7}
                 disabled={uploading}
               >
-                <Text style={[{ flex: 1, fontSize: fs(13), fontWeight: '600', color: uploadProjectId ? txt : sub }]} numberOfLines={1}>
-                  {uploadProjects.find(p => p.id === uploadProjectId)?.name || 'No project'}
+                <Text style={[{ flex: 1, fontSize: fs(13), fontWeight: '600', color: uploadProjectId ? txt : '#EF4444' }]} numberOfLines={1}>
+                  {uploadProjects.find(p => p.id === uploadProjectId)?.name || 'Select a project…'}
                 </Text>
                 <Text style={{ color: sub, fontSize: 12 }}>{uploadPickerOpen ? '▲' : '▾'}</Text>
               </TouchableOpacity>
@@ -1886,16 +2040,6 @@ export default function DocumentsScreen() {
                     />
                   </View>
                   <ScrollView style={{ maxHeight: 180 }} nestedScrollEnabled keyboardShouldPersistTaps="handled">
-                    {/* No project option */}
-                    <TouchableOpacity
-                      style={[styles.uploadDropdownItem, { borderBottomColor: bdr }, !uploadProjectId && { backgroundColor: isDark ? '#252530' : '#F5F6FA' }]}
-                      onPress={() => { setUploadProjectId(null); setUploadPickerOpen(false); setUploadProjectSearch(''); }}
-                    >
-                      <Text style={[{ flex: 1, fontSize: fs(13), color: !uploadProjectId ? '#3B72EE' : sub, fontWeight: !uploadProjectId ? '700' : '400', fontStyle: 'italic' }]} numberOfLines={1}>
-                        No project
-                      </Text>
-                      {!uploadProjectId && <Text style={{ color: '#3B72EE', fontSize: 14 }}>✓</Text>}
-                    </TouchableOpacity>
                     {filteredUploadProjects.length === 0 ? (
                       <Text style={[{ fontSize: fs(12), color: sub, padding: 14, textAlign: 'center', fontStyle: 'italic' }]}>No projects found</Text>
                     ) : (
@@ -1919,15 +2063,7 @@ export default function DocumentsScreen() {
                 </View>
               )}
 
-              {/* Info box */}
-              <View style={[styles.uploadInfo, { borderColor: '#3B72EE30', backgroundColor: '#3B72EE08' }]}>
-                <Svg width={14} height={14} viewBox="0 0 24 24" fill="none" style={{ marginTop: 2, flexShrink: 0 }}>
-                  <Path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
-                </Svg>
-                <Text style={{ flex: 1, fontSize: fs(12), color: '#3B72EE', lineHeight: 18 }}>
-                  File will be uploaded to your workspace. If a project is selected, it will be linked to that project immediately.
-                </Text>
-              </View>
+
 
               {/* Buttons */}
               <View style={{ flexDirection: 'row', gap: 10, marginTop: 4, marginBottom: 24 }}>
@@ -1982,7 +2118,7 @@ export default function DocumentsScreen() {
                 {detailDoc?.name || detailDoc?.file_name || 'Document'}
               </Text>
               <TouchableOpacity
-                onPress={() => { const url = detailDoc?.source_file || detailDoc?.source_file_url || detailDoc?.file_url; if (url) Linking.openURL(url).catch(() => {}); }}
+                onPress={() => { const url = detailDoc?.source_file || detailDoc?.file_url || detailDoc?.source_file_url; if (url) Linking.openURL(url).catch(() => {}); }}
                 style={{ padding: 4 }}
               >
                 <Text style={{ color: '#3B72EE', fontSize: 13, fontWeight: '600' }}>Open ↗</Text>
@@ -1992,8 +2128,9 @@ export default function DocumentsScreen() {
             {showWebView ? (
               /* ── Preview ── */
               (() => {
-                const url = detailDoc?.source_file || detailDoc?.source_file_url || detailDoc?.file_url;
-                const ext = getExt(detailDoc?.name || '');
+                // source_file is the primary field (global endpoint); file_url for per-project
+                const url = detailDoc?.source_file || detailDoc?.file_url || detailDoc?.source_file_url;
+                const ext = getExt(detailDoc?.name || detailDoc?.file_name || '');
                 const isImage  = ['png','jpg','jpeg','gif','webp','heic','bmp'].includes(ext);
                 const isPdf    = ext === 'pdf';
                 const isOffice = ['doc','docx','ppt','pptx','xls','xlsx'].includes(ext);
@@ -2037,7 +2174,7 @@ export default function DocumentsScreen() {
                   {/* Top — icon + name */}
                   <View style={{ flexDirection: 'row', alignItems: 'center', padding: 16, gap: 14 }}>
                     {(() => {
-                      const ext = getExt(detailDoc?.name || '');
+                      const ext = getExt(detailDoc?.name || detailDoc?.file_name || '');
                       const meta = TYPE_META[ext] || FALLBACK_META;
                       return (
                         <View style={{ width: 52, height: 52, borderRadius: 12, backgroundColor: meta.bg, justifyContent: 'center', alignItems: 'center' }}>
@@ -2052,35 +2189,44 @@ export default function DocumentsScreen() {
                         {detailDoc?.name || detailDoc?.file_name}
                       </Text>
                       <Text style={{ fontSize: 12, color: sub }}>
-                        {getExt(detailDoc?.name || '').toUpperCase()} file
+                        {getExt(detailDoc?.name || detailDoc?.file_name || '').toUpperCase() || 'FILE'} file
                       </Text>
                     </View>
                   </View>
 
                   {/* Meta rows */}
-                  {[
-                    { label: 'Type',     value: getExt(detailDoc?.name || '').toUpperCase() || '—' },
-                    { label: 'Status',   value: detailDoc?.status ? detailDoc.status.replace('_', ' ').toUpperCase() : 'DRAFT' },
-                    { label: 'Project',  value: projectMap[detailDoc?.project] || '—' },
-                    { label: 'Owner',    value: detailDoc?.created_by?.full_name || detailDoc?.created_by?.username || '—' },
-                    { label: 'Created',  value: detailDoc?.created_at ? new Date(detailDoc.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—' },
-                    { label: 'Updated',  value: detailDoc?.updated_at ? new Date(detailDoc.updated_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—' },
-                    { label: 'Location', value: `/ ${projectMap[detailDoc?.project] || 'Documents'}` },
-                  ].map(({ label, value }, i) => (
-                    <View key={label} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 13, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: bdr }}>
-                      <Text style={{ fontSize: 13, color: sub, fontWeight: '500', width: 80 }}>{label}</Text>
-                      <Text style={{ fontSize: 13, fontWeight: '600', color: txt, flex: 1, textAlign: 'right' }} numberOfLines={1}>{value}</Text>
-                    </View>
-                  ))}
+                  {(() => {
+                    const docProj   = detailDoc?.project_name || projectMap[detailDoc?.project] || routeProjectName || '—';
+                    const docOwner  = detailDoc?.created_by?.full_name || detailDoc?.created_by?.username;
+                    const docStatus = detailDoc?.status;
+                    const docExt    = getExt(detailDoc?.name || detailDoc?.file_name || '').toUpperCase();
+                    const rows = [
+                      { label: 'Type',    value: docExt || '—' },
+                      { label: 'Project', value: docProj },
+                      ...(docOwner  ? [{ label: 'Owner',   value: docOwner }] : []),
+                      ...(docStatus ? [{ label: 'Status',  value: docStatus.replace('_', ' ').toUpperCase() }] : []),
+                      { label: 'Created', value: detailDoc?.created_at
+                          ? new Date(detailDoc.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—' },
+                      { label: 'Updated', value: detailDoc?.updated_at
+                          ? new Date(detailDoc.updated_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—' },
+                      { label: 'Location', value: `/ ${docProj}` },
+                    ];
+                    return rows.map(({ label, value }) => (
+                      <View key={label} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 13, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: bdr }}>
+                        <Text style={{ fontSize: 13, color: sub, fontWeight: '500', width: 80 }}>{label}</Text>
+                        <Text style={{ fontSize: 13, fontWeight: '600', color: txt, flex: 1, textAlign: 'right' }} numberOfLines={1}>{value}</Text>
+                      </View>
+                    ));
+                  })()}
 
-                  {/* Tags */}
-                  {(detailDoc?.tags || []).length > 0 && (
+                  {/* Labels / Tags */}
+                  {((detailDoc?.labels || detailDoc?.tags || []).length > 0) && (
                     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 13, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: bdr }}>
-                      <Text style={{ fontSize: 13, color: sub, fontWeight: '500', width: 80 }}>Tags</Text>
+                      <Text style={{ fontSize: 13, color: sub, fontWeight: '500', width: 80 }}>Labels</Text>
                       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, flex: 1, justifyContent: 'flex-end' }}>
-                        {(detailDoc.tags || []).map((tag, i) => (
+                        {(detailDoc?.labels || detailDoc?.tags || []).map((tag, i) => (
                           <View key={i} style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, backgroundColor: (tag.color || '#6B7280') + '22' }}>
-                            <Text style={{ fontSize: 11, fontWeight: '600', color: tag.color || '#6B7280' }}>{tag.name || tag}</Text>
+                            <Text style={{ fontSize: 11, fontWeight: '600', color: tag.color || '#6B7280' }}>{tag.name || (typeof tag === 'string' ? tag : '')}</Text>
                           </View>
                         ))}
                       </View>
@@ -2214,5 +2360,136 @@ const styles = StyleSheet.create({
   uploadInfo:   { flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderWidth: 1, borderRadius: 10, padding: 12, marginTop: 8, marginBottom: 8 },
   uploadBtn:    { borderRadius: 14, height: 52, justifyContent: 'center', alignItems: 'center', marginTop: 8, marginBottom: 4 },
   uploadBtnTxt: { color: '#fff', fontSize: 15, fontWeight: '700' },
+
+  // ── File row (main list renderItem) ──────────────────────────────────────
+  row: {
+    flexDirection: 'row', alignItems: 'center',
+    padding: 14, gap: 12,
+    borderRadius: 12, borderWidth: 1,
+    marginBottom: 10,
+  },
+  selectionCheck: {
+    width: 20, height: 20, borderRadius: 10,
+    borderWidth: 2, justifyContent: 'center', alignItems: 'center',
+    marginRight: 2,
+  },
+  fileName: { fontWeight: '600', marginBottom: 3 },
+  metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 4 },
+  projectPill: {
+    paddingHorizontal: 6, paddingVertical: 2,
+    borderRadius: 5, borderWidth: 1, maxWidth: 110,
+  },
+  projectPillText: { fontWeight: '600' },
+  tagPill: {
+    paddingHorizontal: 5, paddingVertical: 2,
+    borderRadius: 5, borderWidth: 1,
+  },
+  tagPillTxt: { fontWeight: '600' },
+  statusPill: {
+    paddingHorizontal: 6, paddingVertical: 2,
+    borderRadius: 5,
+  },
+  statusPillTxt: { fontWeight: '700', letterSpacing: 0.2 },
+  bottomRow: { flexDirection: 'row', alignItems: 'center', gap: 5, flexWrap: 'wrap' },
+  dateText: {},
+  dotSep: { fontSize: 12 },
+  avatar: {
+    width: 18, height: 18, borderRadius: 9,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  avatarText: { fontSize: 8, fontWeight: '800', color: '#fff' },
+  sharedByText: { flex: 1 },
+  sharedBadge: {
+    paddingHorizontal: 6, paddingVertical: 2,
+    borderRadius: 5, borderWidth: 1, marginLeft: 4,
+  },
+
+  // ── Chips (type/project filter bar) ──────────────────────────────────────
+  chip: {
+    paddingHorizontal: 12, paddingVertical: 6,
+    borderRadius: 20, borderWidth: 1,
+  },
+  chipText: { fontSize: 12, fontWeight: '500' },
+
+  // ── Share / Move / Tags modals ────────────────────────────────────────────
+  shareOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center', alignItems: 'center', paddingHorizontal: 16,
+  },
+  shareFloating: {
+    width: '100%', borderRadius: 20, borderWidth: 1,
+    shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.12,
+    shadowRadius: 12, elevation: 16, overflow: 'hidden',
+  },
+  shareHeader: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1,
+  },
+  shareTitle: { flex: 1, fontSize: 15, fontWeight: '700' },
+  shareDocName: {
+    flexDirection: 'row', alignItems: 'center',
+    padding: 12, borderRadius: 10, borderWidth: 1, marginBottom: 14,
+  },
+  shareFieldLabel: {
+    fontSize: 11, fontWeight: '700', letterSpacing: 0.5,
+    marginBottom: 6, textTransform: 'uppercase',
+  },
+  sharePickerBtn: {
+    flexDirection: 'row', alignItems: 'center',
+    borderWidth: 1.5, borderRadius: 10,
+    paddingHorizontal: 12, height: 44, marginBottom: 4,
+  },
+  shareDropdown: {
+    borderWidth: 1.5, borderRadius: 10,
+    marginTop: 4, marginBottom: 8, overflow: 'hidden',
+    shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1,
+    shadowRadius: 8, elevation: 8,
+  },
+  shareUserRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 14, paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth, gap: 10,
+  },
+  shareUserAvatar: {
+    width: 32, height: 32, borderRadius: 16,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  shareUserAvatarTxt: { fontSize: 13, fontWeight: '700', color: '#fff' },
+  revokeBtn: {
+    paddingHorizontal: 8, paddingVertical: 4,
+    borderRadius: 6, borderWidth: 1,
+  },
+  shareCancelBtn: {
+    flex: 1, height: 44, justifyContent: 'center', alignItems: 'center',
+    borderRadius: 10, borderWidth: 1.5,
+  },
+  shareConfirmBtn: {
+    flex: 1, height: 44, justifyContent: 'center', alignItems: 'center',
+    borderRadius: 10, backgroundColor: '#3B72EE',
+  },
+
+  // ── Tags modal ────────────────────────────────────────────────────────────
+  createTagBtn: {
+    paddingVertical: 10, borderRadius: 8, borderWidth: 1,
+    alignItems: 'center', marginBottom: 4,
+  },
+  tagRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, gap: 10,
+  },
+  tagCheckbox: {
+    width: 18, height: 18, borderRadius: 4, borderWidth: 2,
+    justifyContent: 'center', alignItems: 'center',
+  },
+
+  // ── Upload / Create modal buttons ─────────────────────────────────────────
+  uploadCancelBtn: {
+    flex: 1, height: 48, justifyContent: 'center', alignItems: 'center',
+    borderRadius: 12, borderWidth: 1.5,
+  },
+  uploadSubmitBtn: {
+    flex: 2, height: 48, justifyContent: 'center', alignItems: 'center',
+    borderRadius: 12, backgroundColor: '#3B72EE',
+  },
 
 });

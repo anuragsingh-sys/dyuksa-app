@@ -79,15 +79,13 @@ const TasksIcon = ({ filled, inactiveColor = '#9AA3B2' }) => filled ? (
     <Path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" stroke={inactiveColor} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"/>
   </Svg>
 );
-const ProfileIcon = ({ filled, inactiveColor = '#9AA3B2' }) => filled ? (
+const ChatIcon = ({ filled, inactiveColor = '#9AA3B2' }) => filled ? (
   <Svg width={24} height={24} viewBox="0 0 24 24" fill="#3B72EE">
-    <Path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/>
-    <Circle cx={12} cy={7} r={4}/>
+    <Path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
   </Svg>
 ) : (
   <Svg width={24} height={24} viewBox="0 0 24 24" fill="none">
-    <Path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" stroke={inactiveColor} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"/>
-    <Circle cx={12} cy={7} r={4} stroke={inactiveColor} strokeWidth={1.8}/>
+    <Path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" stroke={inactiveColor} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"/>
   </Svg>
 );
 
@@ -96,7 +94,7 @@ const NAV_TABS = [
   { key: 'Projects',  Icon: ProjectsIcon },
   { key: 'CREATE',    Icon: null },
   { key: 'Tasks',     Icon: TasksIcon },
-  { key: 'Profile',   Icon: ProfileIcon },
+  { key: 'Chat',      Icon: ChatIcon },
 ];
 
 const navStyles = StyleSheet.create({
@@ -301,25 +299,25 @@ function QuickAddModal({ visible, onClose, navigation }) {
                 WORKSPACE <Text style={{ fontWeight: '400', fontSize: 10 }}>(optional)</Text>
               </Text>
               <TouchableOpacity
-                style={{ borderRadius: 10, borderWidth: 1.5, borderColor: wsDropOpen ? '#4ECDC4' : modalBdr, backgroundColor: inputBg, paddingHorizontal: 14, height: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+                style={{ borderRadius: 10, borderWidth: 1.5, borderColor: wsDropOpen ? '#3B72EE' : modalBdr, backgroundColor: inputBg, paddingHorizontal: 14, height: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
                 onPress={() => setWsDropOpen(o => !o)}
               >
                 <Text style={{ color: inviteWorkspace ? modalTxt : modalSub, fontSize: 14 }}>{inviteWorkspace?.name || 'Default Workspace'}</Text>
                 <Text style={{ color: modalSub, fontSize: 11 }}>{wsDropOpen ? '▲' : '▾'}</Text>
               </TouchableOpacity>
               {wsDropOpen && (
-                <View style={{ borderRadius: 10, borderWidth: 1.5, borderColor: '#4ECDC4', backgroundColor: modalBg, marginTop: 4, maxHeight: 160, overflow: 'hidden' }}>
+                <View style={{ borderRadius: 10, borderWidth: 1.5, borderColor: '#3B72EE', backgroundColor: modalBg, marginTop: 4, maxHeight: 160, overflow: 'hidden' }}>
                   <ScrollView nestedScrollEnabled showsVerticalScrollIndicator={false}>
                     <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: modalBdr }}
                       onPress={() => { setInviteWorkspace(null); setWsDropOpen(false); }}>
-                      <Text style={{ flex: 1, fontSize: 13, fontWeight: !inviteWorkspace ? '700' : '500', color: !inviteWorkspace ? '#4ECDC4' : modalTxt }}>Default Workspace</Text>
-                      {!inviteWorkspace && <Text style={{ color: '#4ECDC4' }}>✓</Text>}
+                      <Text style={{ flex: 1, fontSize: 13, fontWeight: !inviteWorkspace ? '700' : '500', color: !inviteWorkspace ? '#3B72EE' : modalTxt }}>Default Workspace</Text>
+                      {!inviteWorkspace && <Text style={{ color: '#3B72EE' }}>✓</Text>}
                     </TouchableOpacity>
                     {inviteWorkspaces.map(ws => (
                       <TouchableOpacity key={ws.id} style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: modalBdr }}
                         onPress={() => { setInviteWorkspace(ws); setWsDropOpen(false); }}>
-                        <Text style={{ flex: 1, fontSize: 13, fontWeight: inviteWorkspace?.id === ws.id ? '700' : '500', color: inviteWorkspace?.id === ws.id ? '#4ECDC4' : modalTxt }} numberOfLines={1}>{ws.name}</Text>
-                        {inviteWorkspace?.id === ws.id && <Text style={{ color: '#4ECDC4' }}>✓</Text>}
+                        <Text style={{ flex: 1, fontSize: 13, fontWeight: inviteWorkspace?.id === ws.id ? '700' : '500', color: inviteWorkspace?.id === ws.id ? '#3B72EE' : modalTxt }} numberOfLines={1}>{ws.name}</Text>
+                        {inviteWorkspace?.id === ws.id && <Text style={{ color: '#3B72EE' }}>✓</Text>}
                       </TouchableOpacity>
                     ))}
                   </ScrollView>
@@ -383,68 +381,25 @@ function QuickAddModal({ visible, onClose, navigation }) {
 function MainTabs() {
   const navigation = useNavigation();
   const [qaVisible, setQaVisible] = useState(false);
-  const { theme } = useContext(ThemeContext);
-  const isDark = theme === 'Dark';
-  const insets = useSafeAreaInsets();
-
-  // Theme-aware tab bar colors (matches Calendar screen's dark palette)
-  const tabBg       = isDark ? '#1A1A20' : '#FFFFFF';
-  const tabBorder   = isDark ? '#252530' : '#EBEBF0';
-  const tabActive   = isDark ? '#FFFFFF' : '#1A1A2E';
-  const tabInactive = isDark ? '#6C6C80' : '#AAAABC';
-
-  // Compact bar that respects the device's bottom safe area (gesture bar / nav buttons)
-  const TAB_BAR_BASE = 60;
-  const tabBarHeight = TAB_BAR_BASE + insets.bottom;
-
-  // Remember which tab the user was on before tapping "+"
-  const tabState = useNavigationState(state => state);
-  const currentTabName = (() => {
-    try {
-      const mainRoute = tabState?.routes?.find(r => r.name === 'Main');
-      const tabRoutes = mainRoute?.state?.routes;
-      const idx       = mainRoute?.state?.index ?? 0;
-      const name      = tabRoutes?.[idx]?.name;
-      return name && name !== 'Quick' ? name : 'Dashboard';
-    } catch {
-      return 'Dashboard';
-    }
-  })();
-
-  const openQuickAdd = () => setQaVisible(true);
-
-  // FAB → navigate to the full QuickCreate screen
-  const openAIModalDirect = () => {
-    navigation.navigate('QuickCreate');
-  };
 
   const handlePickTask = () => {
     navigation.navigate('Main', {
       screen: 'Tasks',
-      params: { openCreateModal: true, returnTo: currentTabName },
+      params: { openCreateModal: true },
     });
   };
 
   const handlePickEvent = () => {
-    navigation.navigate('Main', {
-      screen: 'Calendar',
-      params: { openCreateModal: true, returnTo: currentTabName },
-    });
+    navigation.navigate('Calendar', { openCreateModal: true });
   };
 
-  // Nova AI → opens the "Generate by AI" modal on the matching screen
   const handlePickAI = (tab) => {
     if (tab === 'event') {
-      // Calendar AI isn't built yet — go to Calendar with a flag for when we add it
-      navigation.navigate('Main', {
-        screen: 'Calendar',
-        params: { openCreateModalAI: true, returnTo: currentTabName },
-      });
+      navigation.navigate('Calendar', { openCreateModalAI: true });
     } else {
-      // Task AI uses the existing "Generate Task by AI" modal in TasksScreen
       navigation.navigate('Main', {
         screen: 'Tasks',
-        params: { openCreateModalAI: true, returnTo: currentTabName },
+        params: { openCreateModalAI: true },
       });
     }
   };
@@ -459,7 +414,7 @@ function MainTabs() {
         <Tab.Screen name="Dashboard" component={DashboardScreen} />
         <Tab.Screen name="Projects"  component={ProjectsScreen} />
         <Tab.Screen name="Tasks"     component={TasksScreen} />
-        <Tab.Screen name="Profile"   component={EditProfileScreen} />
+        <Tab.Screen name="Chat"      component={ChatScreen} />
       </Tab.Navigator>
 
       <QuickAddModal
@@ -487,6 +442,7 @@ const NAV_HIDDEN_SCREENS = [
   'QuickCreate', 'CreateProject', 'CreateTask',
   'DocumentViewer', 'ProjectDetail', 'TaskDetail',
   'ChangePassword', 'InviteUser',
+  'Settings',
 ];
 
 function GlobalNavBar() {
@@ -495,10 +451,16 @@ function GlobalNavBar() {
   const isDark = theme === 'Dark';
   const navBg  = isDark ? '#0D0D0F' : '#FFFFFF';
   const navBdr = isDark ? '#252530' : '#EEF0F4';
-  const insets   = useSafeAreaInsets();
-  const scales   = useRef(NAV_TABS.map(() => new Animated.Value(1))).current;
-  const fabPulse = useRef(new Animated.Value(1)).current;
-  const [navReady, setNavReady] = useState(false);
+  const insets         = useSafeAreaInsets();
+  const scales         = useRef(NAV_TABS.map(() => new Animated.Value(1))).current;
+  const fabPulse       = useRef(new Animated.Value(1)).current;
+  const holdAnim       = useRef(new Animated.Value(1)).current;
+  const longPressedRef = useRef(false);
+  const [navReady,   setNavReady]   = useState(false);
+  const [fabHolding, setFabHolding] = useState(false);
+  const [activeKey,  setActiveKey]  = useState('Dashboard');
+  const [routeName,  setRouteName]  = useState(null);
+  const [inChatRoom, setInChatRoom] = useState(false);
 
   useEffect(() => {
     // Poll until navigationRef is ready before rendering
@@ -521,11 +483,6 @@ function GlobalNavBar() {
   }, []);
 
   // Track active tab + current route by subscribing to nav state directly.
-  // This fires on EVERY navigation change — including tab switches inside Main
-  // that don't change the top-level route (the root cause of the stale icon bug).
-  const [activeKey, setActiveKey] = useState('Dashboard');
-  const [routeName, setRouteName] = useState(null);
-
   useEffect(() => {
     if (!navReady) return;
 
@@ -534,18 +491,20 @@ function GlobalNavBar() {
         const route = navigationRef.getCurrentRoute();
         const name  = route?.name || '';
         setRouteName(name);
+        // Detect if inside a chat room (individual chat open)
+        setInChatRoom(name === 'Chat' && !!route?.params?.roomId);
 
         // Direct tab screen names
         if (name === 'Dashboard') return setActiveKey('Dashboard');
         if (name === 'Projects')  return setActiveKey('Projects');
         if (name === 'Tasks')     return setActiveKey('Tasks');
-        if (name === 'Profile')   return setActiveKey('Profile');
+        if (name === 'Chat')      return setActiveKey('Chat');
 
         // Stack screens mapped to their closest tab
         if (['Docs', 'DocumentViewer'].includes(name))                       return setActiveKey('Projects');
         if (['ProjectDetail', 'CreateProject'].includes(name))               return setActiveKey('Projects');
         if (['MyWork', 'Reports', 'CreateTask', 'TaskDetail'].includes(name)) return setActiveKey('Tasks');
-        if (['Settings', 'EditProfile', 'ChangePassword', 'InviteUser'].includes(name)) return setActiveKey('Profile');
+        if (['Settings', 'EditProfile', 'ChangePassword', 'InviteUser'].includes(name)) return setActiveKey('Dashboard');
 
         setActiveKey('Dashboard');
       } catch { /* keep last known */ }
@@ -556,7 +515,7 @@ function GlobalNavBar() {
     return unsub;
   }, [navReady]);
 
-  if (!isAuthenticated || !navReady || NAV_HIDDEN_SCREENS.includes(routeName)) return null;
+  if (!isAuthenticated || !navReady || NAV_HIDDEN_SCREENS.includes(routeName) || inChatRoom) return null;
 
   const handlePress = (key, i) => {
     Animated.sequence([
@@ -571,7 +530,7 @@ function GlobalNavBar() {
       return;
     }
 
-    const TAB_ORDER = ['Dashboard', 'Projects', 'Tasks', 'Profile'];
+    const TAB_ORDER = ['Dashboard', 'Projects', 'Tasks', 'Chat'];
     const tabIndex  = TAB_ORDER.indexOf(key);
     if (tabIndex === -1) return;
 
@@ -596,6 +555,27 @@ function GlobalNavBar() {
     }
   };
 
+  const handleFabPressIn = () => {
+    longPressedRef.current = false;
+    Animated.timing(holdAnim, { toValue: 1.12, duration: 150, useNativeDriver: true }).start();
+  };
+
+  const handleFabPressOut = () => {
+    Animated.timing(holdAnim, { toValue: 1, duration: 150, useNativeDriver: true }).start();
+    if (longPressedRef.current && navigationRef.isReady()) {
+      longPressedRef.current = false;
+      setFabHolding(false);
+      navigationRef.navigate('Search', { voiceTrigger: Date.now() });
+    } else {
+      setFabHolding(false);
+    }
+  };
+
+  const handleFabLongPress = () => {
+    longPressedRef.current = true;
+    setFabHolding(true);
+  };
+
   const inactiveColor = isDark ? '#6B7588' : '#9AA3B2';
 
   const PillContent = () => (
@@ -605,13 +585,37 @@ function GlobalNavBar() {
         if (tab.key === 'CREATE') {
           return (
             <View key="CREATE" style={{ flex: 1, alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+              {fabHolding && (
+                <View style={{
+                  position: 'absolute', bottom: 70, backgroundColor: '#1A1A2E',
+                  paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8,
+                  shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 4, elevation: 6,
+                }}>
+                  <Text style={{ color: '#fff', fontSize: 11, fontWeight: '600' }}>🎙 Release when ready to speak</Text>
+                </View>
+              )}
               <Animated.View style={{ transform: [{ scale: Animated.multiply(scales[i], fabPulse) }] }}>
-                <TouchableOpacity onPress={() => handlePress('CREATE', i)} activeOpacity={0.85}>
-                  <LinearGradient colors={['#3B72EE', '#3B72EE']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={navStyles.fab}>
-                    <Svg width={24} height={24} viewBox="0 0 24 24" fill="none">
-                      <Path d="M12 5v14M5 12h14" stroke="#fff" strokeWidth={2.5} strokeLinecap="round"/>
-                    </Svg>
-                  </LinearGradient>
+                <TouchableOpacity
+                  onPress={() => handlePress('CREATE', i)}
+                  onLongPress={handleFabLongPress}
+                  onPressIn={handleFabPressIn}
+                  onPressOut={handleFabPressOut}
+                  delayLongPress={400}
+                  activeOpacity={0.85}
+                >
+                  <Animated.View style={{ transform: [{ scale: holdAnim }] }}>
+                    <LinearGradient
+                      colors={fabHolding ? ['#2952C4', '#2952C4'] : ['#3B72EE', '#3B72EE']}
+                      start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+                      style={[navStyles.fab, fabHolding && { shadowColor: '#2952C4', shadowOpacity: 0.6, shadowRadius: 12, elevation: 10 }]}
+                    >
+                      <Svg width={24} height={24} viewBox="0 0 24 24" fill="none">
+                        <Path d="M12 19v3" stroke="#fff" strokeWidth={fabHolding ? 2.5 : 2} strokeLinecap="round" strokeLinejoin="round"/>
+                        <Path d="M19 10v2a7 7 0 01-14 0v-2" stroke="#fff" strokeWidth={fabHolding ? 2.5 : 2} strokeLinecap="round" strokeLinejoin="round"/>
+                        <Rect x={9} y={2} width={6} height={13} rx={3} stroke="#fff" strokeWidth={fabHolding ? 2.5 : 2} strokeLinecap="round" strokeLinejoin="round"/>
+                      </Svg>
+                    </LinearGradient>
+                  </Animated.View>
                 </TouchableOpacity>
               </Animated.View>
             </View>
@@ -668,12 +672,12 @@ function RootNavigator() {
 
   if (isLoading || showOnboarding === null) {
     return (
-      <View style={{ flex: 1, backgroundColor: '#1A1A2E', justifyContent: 'center', alignItems: 'center' }}>
-        <View style={{ width: 64, height: 64, borderRadius: 14, backgroundColor: '#4ECDC4', justifyContent: 'center', alignItems: 'center', marginBottom: 20 }}>
-          <Text style={{ color: '#1A1A2E', fontSize: 28, fontWeight: '800' }}>D</Text>
+      <View style={{ flex: 1, backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center' }}>
+        <View style={{ width: 72, height: 72, borderRadius: 18, backgroundColor: '#3B72EE', justifyContent: 'center', alignItems: 'center', marginBottom: 20 }}>
+          <Text style={{ color: '#fff', fontSize: 32, fontWeight: '800' }}>D</Text>
         </View>
-        <Text style={{ color: '#fff', fontSize: 22, fontWeight: '700', letterSpacing: 2, marginBottom: 8 }}>DYUKSA</Text>
-        <Text style={{ color: '#4ECDC4', fontSize: 13 }}>Loading your workspace...</Text>
+        <Text style={{ color: '#0E1726', fontSize: 22, fontWeight: '700', letterSpacing: 2, marginBottom: 8 }}>DYUKSA</Text>
+        <Text style={{ color: '#9AA3B2', fontSize: 13 }}>Loading your workspace...</Text>
       </View>
     );
   }
@@ -726,17 +730,6 @@ function RootNavigator() {
 }
 
 export default function App() {
-  const [currentRoute, setCurrentRoute] = useState(null);
-
-  const handleStateChange = () => {
-    if (!navigationRef.isReady()) return;
-    const route = navigationRef.getCurrentRoute();
-    // Top-level stack route name (Main, Docs, QuickNotes, etc.)
-    const rootState = navigationRef.getRootState();
-    const topName = rootState?.routes?.[rootState.index ?? rootState.routes.length - 1]?.name;
-    setCurrentRoute(topName || route?.name || null);
-  };
-
   return (
     <ErrorBoundary>
     <SafeAreaProvider>
@@ -744,11 +737,7 @@ export default function App() {
       <NotificationsProvider>
         <ThemeProvider>
           <WorkspaceProvider>
-            <NavigationContainer
-              ref={navigationRef}
-              onReady={handleStateChange}
-              onStateChange={handleStateChange}
-            >
+            <NavigationContainer ref={navigationRef}>
               <RootNavigator />
               <NotificationToast />
             </NavigationContainer>
@@ -836,7 +825,7 @@ const styles = StyleSheet.create({
     borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5,
   },
   qaFeatureChipText: {
-    fontSize: 11, fontWeight: '600', color: '#4ECDC4',
+    fontSize: 11, fontWeight: '600', color: '#3B72EE',
   },
   // Tappable "Nova AI" chip — purple, with slight shadow to signal it's interactive
   qaFeatureChipAI: {
@@ -854,7 +843,7 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(78,205,196,0.25)',
     borderRadius: 10, padding: 12, marginBottom: 16,
   },
-  qaInfoText: { fontSize: 12, color: '#4ECDC4', lineHeight: 18 },
+  qaInfoText: { fontSize: 12, color: '#3B72EE', lineHeight: 18 },
 
   qaActionRow: { flexDirection: 'row', gap: 12, marginBottom: 24 },
   qaCancelBtn: {

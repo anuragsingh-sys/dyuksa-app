@@ -10,15 +10,18 @@
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#1A1A2E"
+      "backgroundColor": "#FFFFFF"
     },
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
         "NSCameraUsageDescription": "DYUKSA needs camera access to attach photos to tasks and notes.",
         "NSPhotoLibraryUsageDescription": "DYUKSA needs photo library access to attach images to tasks and notes.",
-        "NSPhotoLibraryAddUsageDescription": "DYUKSA needs permission to save photos."
-      }
+        "NSPhotoLibraryAddUsageDescription": "DYUKSA needs permission to save photos.",
+        "NSSpeechRecognitionUsageDescription": "Allow DYUKSA to use speech recognition for voice search.",
+        "NSMicrophoneUsageDescription": "Allow DYUKSA to use the microphone for voice search."
+      },
+      "bundleIdentifier": "com.anonymous.dyuksaapp"
     },
     "android": {
       "edgeToEdgeEnabled": true,
@@ -28,12 +31,14 @@
         "WRITE_EXTERNAL_STORAGE",
         "RECEIVE_BOOT_COMPLETED",
         "VIBRATE",
-        "android.permission.POST_NOTIFICATIONS"
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.RECORD_AUDIO"
       ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#1A1A2E"
-      }
+        "backgroundColor": "#FFFFFF"
+      },
+      "package": "com.anonymous.dyuksaapp"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -44,13 +49,20 @@
         "expo-notifications",
         {
           "icon": "./assets/icon.png",
-          "color": "#4ECDC4",
+          "color": "#3B72EE",
           "sounds": [],
           "androidMode": "default",
           "androidCollapsedTitle": "DYUKSA"
         }
       ],
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow DYUKSA to use the microphone for voice search.",
+          "speechRecognitionPermission": "Allow DYUKSA to use speech recognition for voice search."
+        }
+      ]
     ]
   }
 }

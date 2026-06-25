@@ -246,7 +246,7 @@ export default function MyWorkScreen() {
 
   // ── Focus block (first in_progress task) ─────────────────────────
   const focusTask = myTasks.find(t => t.status === 'in_progress') || filteredTasks[0] || null;
-  const focusProgress = focusTask ? Math.floor(Math.random() * 60 + 20) : 38; // TODO: real progress
+  const focusProgress = focusTask ? (focusTask.progress ?? 0) : 0; // real progress from task data
 
   const todayFormatted = new Date().toLocaleDateString('en-IN', { weekday: 'long', month: 'long', day: 'numeric' });
 

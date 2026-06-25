@@ -208,7 +208,7 @@ export default function ProjectDetailScreen() {
     if (!projectId || route?.params?.project) return;
     try {
       const headers = await authHeaders();
-      const res = await fetch(`${API_BASE}/api/v1/projects/${projectId}/`, { headers });
+      const res = await fetch(`${BASE_URL}/projects/${projectId}/`, { headers });
       if (res.ok) setProject(await res.json());
     } catch (e) { console.warn('fetchProject:', e.message); }
   }, [projectId]);
@@ -227,7 +227,7 @@ export default function ProjectDetailScreen() {
     setProject(p => p ? { ...p, [key]: next } : p);
     try {
       const headers = await authHeaders();
-      await fetch(`${API_BASE}/api/v1/projects/${projectId}/`, {
+      await fetch(`${BASE_URL}/projects/${projectId}/`, {
         method: 'PATCH', headers,
         body: JSON.stringify({ [key]: next }),
       });

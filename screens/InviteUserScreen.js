@@ -13,6 +13,13 @@ import { BASE_URL } from '../config';
 
 const ROLES = ['admin', 'manager', 'developer', 'annotator', 'viewer'];
 
+// ── Design tokens (matches Projects / Roles screens) ──────────────────
+const T = {
+  brand: '#2D6AE3', ink: '#0E1726', ink3: '#6B7588', ink4: '#9AA3B2',
+  hairline: '#E6E9EF', surface: '#FFFFFF', surfaceAlt: '#F7F8FB',
+  brandSoft: '#E6EEFC',
+};
+
 const ROLE_COLORS = {
   admin:     { bg: '#FEE2E2', txt: '#991B1B', label: 'Admin' },
   manager:   { bg: '#DBEAFE', txt: '#1E40AF', label: 'Manager' },
@@ -38,13 +45,13 @@ export default function InviteUserScreen() {
   const { addNotification } = useContext(NotificationsContext);
   const isDark = theme === 'Dark';
 
-  const bgColor  = isDark ? '#0D0D14' : '#F5F5FA';
-  const cardBg   = isDark ? '#1A1A28' : '#FFFFFF';
-  const inputBg  = isDark ? '#252538' : '#F5F5F7';
-  const bdr      = isDark ? '#303048' : '#E0E0EC';
-  const txt      = isDark ? '#F0F0F8' : '#18182E';
-  const sub      = isDark ? '#8080A0' : '#7070A0';
-  const accent   = '#4ECDC4';
+  const bgColor  = isDark ? '#0D0D0F' : T.surfaceAlt;
+  const cardBg   = isDark ? '#1A1A20' : T.surface;
+  const inputBg  = isDark ? '#252530' : '#F2F3F7';
+  const bdr      = isDark ? '#252530' : T.hairline;
+  const txt      = isDark ? '#FFFFFF' : T.ink;
+  const sub      = isDark ? '#9898A6' : T.ink3;
+  const accent   = T.brand;
 
   const [email,          setEmail]          = useState('');
   const [role,           setRole]           = useState('viewer');
@@ -125,7 +132,7 @@ export default function InviteUserScreen() {
         <TouchableOpacity
           onPress={handleInvite}
           disabled={saving}
-          style={[styles.sendBtn, { backgroundColor: saving ? '#9090B0' : '#1A1A2E' }]}
+          style={[styles.sendBtn, { backgroundColor: saving ? T.ink4 : accent }]}
           activeOpacity={0.8}
         >
           {saving
@@ -242,7 +249,7 @@ export default function InviteUserScreen() {
           </View>
 
           {/* Info box */}
-          <View style={[styles.infoBox, { backgroundColor: isDark ? 'rgba(78,205,196,0.08)' : 'rgba(78,205,196,0.06)', borderColor: 'rgba(78,205,196,0.25)' }]}>
+          <View style={[styles.infoBox, { backgroundColor: isDark ? 'rgba(45,106,227,0.08)' : T.brandSoft, borderColor: isDark ? 'rgba(45,106,227,0.25)' : 'rgba(45,106,227,0.18)' }]}>
             <Text style={{ fontSize: 12, color: accent, lineHeight: 18 }}>
               ✦  An email invitation will be sent. The user can join using the link in the email.
             </Text>
@@ -253,7 +260,7 @@ export default function InviteUserScreen() {
             onPress={handleInvite}
             disabled={saving}
             activeOpacity={0.85}
-            style={[styles.sendBtnFull, { backgroundColor: saving ? '#9090B0' : '#1A1A2E' }]}
+            style={[styles.sendBtnFull, { backgroundColor: saving ? T.ink4 : accent }]}
           >
             {saving
               ? <ActivityIndicator color="#fff" />
@@ -287,7 +294,7 @@ const styles = StyleSheet.create({
   scroll: { padding: 16 },
 
   card: {
-    borderRadius: 16, borderWidth: 1,
+    borderRadius: 14, borderWidth: 1,
     padding: 16, marginBottom: 14,
   },
   fieldLabel: {
@@ -339,7 +346,7 @@ const styles = StyleSheet.create({
   sendBtnFull: {
     height: 54, borderRadius: 14,
     justifyContent: 'center', alignItems: 'center',
-    shadowColor: '#1A1A2E', shadowOffset: { width: 0, height: 6 },
+    shadowColor: '#2D6AE3', shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.3, shadowRadius: 10, elevation: 8,
   },
   sendBtnFullText: { color: '#fff', fontSize: 16, fontWeight: '700' },

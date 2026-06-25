@@ -19,7 +19,7 @@ import { API_BASE, BASE_URL, WS_BASE } from '../config';
 const authHeaders = async () => {
   const token       = await getAccessToken();
   const workspaceId = await getWorkspaceId();
-  const h = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` };
+  const h = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, 'X-Static-Token': 'ZanFlow01012000' };
   if (workspaceId) h['X-Workspace-ID'] = workspaceId;
   return h;
 };

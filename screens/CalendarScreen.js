@@ -18,7 +18,7 @@ import { NotificationsContext } from '../context/NotificationsContext';
 import { getUsers, getAccessToken, getWorkspaceId } from '../services/ApiService';
 import * as Notifications from 'expo-notifications';
 
-import { API_BASE, BASE_URL, WS_BASE } from '../config';
+import { BASE_URL, WS_BASE, WEB_BASE } from '../config';
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const DAILY_UPDATE_STORAGE_KEY = 'DYUKSA_DAILY_UPDATES'; // local cache: { 'YYYY-MM-DD': { priorities, progress, blockers, upcoming } }
 const DAILY_UPDATE_API = `${BASE_URL}/daily-updates/`;
@@ -630,8 +630,8 @@ export default function CalendarScreen() {
   // Which row's permission dropdown is open (null = none).
   const [openPermDropdownId, setOpenPermDropdownId] = useState(null);
   // Public link is generated locally for UI demo; replaced by server URL later.
-  const publicLinkUrl = 'http://192.168.1.160:3001/calendar/shared/local-demo';
-  const slideAnim = useRef(new Animated.Value(-600)).current;
+  const publicLinkUrl = `${WEB_BASE}/calendar/shared/local-demo`;
+  const slideAnim = useRef(new Animated.Value(600)).current;
 
   // ── Daily Update panel state ──
   const [dailyPanelDate,   setDailyPanelDate]   = useState(null); // Date object when panel is open, null when closed
@@ -1098,7 +1098,7 @@ export default function CalendarScreen() {
       }
       // Also save to QuickNotes — find or create "Daily Updates" folder
       try {
-        const foldersRes = await fetch(`${API_BASE}/api/v1/quicknotes/folders/`, {
+        const foldersRes = await fetch(`${BASE_URL}/quicknotes/folders/`, {
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         });
         let dailyFolderId = null;
@@ -1108,7 +1108,7 @@ export default function CalendarScreen() {
           if (existing) {
             dailyFolderId = existing.id;
           } else {
-            const createRes = await fetch(`${API_BASE}/api/v1/quicknotes/folders/`, {
+            const createRes = await fetch(`${BASE_URL}/quicknotes/folders/`, {
               method: 'POST',
               headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
               body: JSON.stringify({ name: 'Daily Updates' }),
@@ -1119,7 +1119,7 @@ export default function CalendarScreen() {
             }
           }
         }
-        await fetch(`${API_BASE}/api/v1/quicknotes/notes/`, {
+        await fetch(`${BASE_URL}/quicknotes/notes/`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1179,7 +1179,7 @@ export default function CalendarScreen() {
   };
 
   const closeModal = () => {
-    Animated.timing(slideAnim, { toValue: -600, duration: 250, useNativeDriver: true })
+    Animated.timing(slideAnim, { toValue: 600, duration: 250, useNativeDriver: true })
       .start(() => {
         setModalVisible(false);
         setEventName(''); setEventDesc('');
@@ -1718,50 +1718,68 @@ export default function CalendarScreen() {
 
         {/* Events list for selected date */}
         {selectedMonthDate && (() => {
-          const selEvs = eventsForDay(selectedMonthDate);
-          const label  = selectedMonthDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
+          const selEvs  = eventsForDay(selectedMonthDate);
+          const isToday = selectedMonthDate.toDateString() === today.toDateString();
+          const label   = isToday
+            ? `Today, ${selectedMonthDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}`
+            : selectedMonthDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
           return (
-            <View style={{ marginTop: 8, paddingHorizontal: 0 }}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10 }}>
-                <Text style={{ fontSize: 14, fontWeight: '700', color: txt }}>{label} Events</Text>
-                <TouchableOpacity onPress={() => { setCurrentDate(selectedMonthDate); setViewMode('day'); }}>
-                  <Text style={{ fontSize: 12, color: '#3B72EE', fontWeight: '600' }}>Open day →</Text>
+            <View style={{ marginTop: 8 }}>
+              {/* Header row */}
+              <View style={{ paddingHorizontal: 14, paddingTop: 8, paddingBottom: 4 }}>
+                <Text style={{ fontSize: 11, fontWeight: '600', color: sub, marginBottom: 2 }}>Selected</Text>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={{ fontSize: 20, fontWeight: '700', color: txt }}>{label}</Text>
+                  <TouchableOpacity onPress={() => { setCurrentDate(selectedMonthDate); setViewMode('day'); }}>
+                    <Text style={{ fontSize: 12, color: '#3B72EE', fontWeight: '600' }}>Open day →</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+              {/* Count + Add */}
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 8 }}>
+                <Text style={{ fontSize: 13, fontWeight: '600', color: sub }}>{selEvs.length} event{selEvs.length !== 1 ? 's' : ''}</Text>
+                <TouchableOpacity onPress={() => { const nd = new Date(selectedMonthDate); nd.setHours(9,0,0,0); openModal(nd); }}>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#3B72EE' }}>+ Add</Text>
                 </TouchableOpacity>
               </View>
+              {/* Event cards */}
               {selEvs.length === 0 ? (
-                <View style={{ padding: 20, alignItems: 'center' }}>
-                  <Text style={{ color: sub, fontSize: 13 }}>No events on this day</Text>
+                <View style={{ paddingHorizontal: 14, paddingVertical: 16, alignItems: 'center' }}>
+                  <Text style={{ color: sub, fontSize: 13, fontStyle: 'italic' }}>No events on this day</Text>
                 </View>
               ) : selEvs.map((ev, i) => {
                 const startTime = ev.eventTimestamp ? new Date(ev.eventTimestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) : '';
                 const endTime   = ev.eventEndTimestamp ? new Date(ev.eventEndTimestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) : '';
                 const color     = getEventColor(ev);
+                const typeLabel = ev.type === 'task' ? 'Task' : (ev.event_type || ev.eventType || 'Meeting');
                 return (
                   <TouchableOpacity
                     key={ev.id || i}
-                    style={{ flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 14, paddingVertical: 12,
-                      borderTopWidth: i === 0 ? 1 : 0, borderBottomWidth: 1, borderColor: isDark ? '#252530' : '#E6E9EF',
-                      backgroundColor: card,
-                    }}
-                    onPress={() => ev.type === 'task' ? null : openEditModal(ev)}
+                    style={{ marginHorizontal: 14, marginBottom: 8, backgroundColor: card, borderRadius: 12, borderWidth: 1, borderColor: isDark ? '#252530' : '#EBEBF0', flexDirection: 'row', overflow: 'hidden' }}
+                    onPress={() => ev.type === 'task' ? null : openEventDetail(ev)}
                     activeOpacity={0.7}
                   >
-                    <View style={{ width: 4, borderRadius: 2, backgroundColor: color, marginRight: 12, alignSelf: 'stretch', minHeight: 36 }} />
-                    <View style={{ flex: 1 }}>
-                      {startTime ? <Text style={{ fontSize: 11, color: sub, marginBottom: 2 }}>{startTime}{endTime ? ` - ${endTime}` : ''}</Text> : null}
+                    <View style={{ width: 4, backgroundColor: color }} />
+                    <View style={{ flex: 1, padding: 12 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                        {startTime ? <Text style={{ fontSize: 11, color: sub }}>{startTime}{endTime ? ` — ${endTime}` : ''}</Text> : null}
+                        <View style={{ paddingHorizontal: 7, paddingVertical: 2, borderRadius: 5, backgroundColor: color + '20' }}>
+                          <Text style={{ fontSize: 10, fontWeight: '600', color }}>{typeLabel}</Text>
+                        </View>
+                      </View>
                       <Text style={{ fontSize: 14, fontWeight: '600', color: txt }}>{ev.name}</Text>
                       {ev.assignees?.length > 0 && (
-                        <View style={{ flexDirection: 'row', marginTop: 6, gap: -6 }}>
-                          {ev.assignees.slice(0, 3).map((a, j) => (
-                            <View key={j} style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: color, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: card }}>
-                              <Text style={{ fontSize: 9, fontWeight: '700', color: '#fff' }}>{(a.name || a.username || '?')[0].toUpperCase()}</Text>
-                            </View>
-                          ))}
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, gap: 4 }}>
+                          <View style={{ flexDirection: 'row' }}>
+                            {ev.assignees.slice(0, 3).map((a, j) => (
+                              <View key={j} style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: color, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: card, marginLeft: j > 0 ? -6 : 0 }}>
+                                <Text style={{ fontSize: 9, fontWeight: '700', color: '#fff' }}>{(a.name || a.username || '?')[0].toUpperCase()}</Text>
+                              </View>
+                            ))}
+                          </View>
+                          {ev.assignees.length > 3 && <Text style={{ fontSize: 11, color: sub }}>+ {ev.assignees.length - 3} attendees</Text>}
                         </View>
                       )}
-                    </View>
-                    <View style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, backgroundColor: color + '20' }}>
-                      <Text style={{ fontSize: 11, fontWeight: '600', color }}>{ev.type === 'task' ? 'Task' : (ev.eventType || 'Meeting')}</Text>
                     </View>
                   </TouchableOpacity>
                 );
@@ -1825,47 +1843,70 @@ export default function CalendarScreen() {
         </View>
       ))}
 
-      {/* ── Selected day events panel — same style as month view ── */}
+      {/* ── Selected day events panel ── */}
       {selectedWeekDate && (() => {
-        const selEvs = eventsForDay(selectedWeekDate);
+        const selEvs  = eventsForDay(selectedWeekDate);
         const isToday = selectedWeekDate.toDateString() === today.toDateString();
-        const label = isToday ? 'Today' : selectedWeekDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+        const label   = isToday
+          ? `Today, ${selectedWeekDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}`
+          : selectedWeekDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
         return (
           <View style={{ marginTop: 8, borderTopWidth: 1, borderTopColor: bdr }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10 }}>
-              <View>
-                <Text style={{ fontSize: 11, fontWeight: '600', color: sub, marginBottom: 1 }}>Selected</Text>
-                <Text style={{ fontSize: 15, fontWeight: '700', color: txt }}>{label}</Text>
+            {/* Header row */}
+            <View style={{ paddingHorizontal: 14, paddingTop: 12, paddingBottom: 4 }}>
+              <Text style={{ fontSize: 11, fontWeight: '600', color: sub, marginBottom: 2 }}>Selected</Text>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Text style={{ fontSize: 20, fontWeight: '700', color: txt }}>{label}</Text>
+                <TouchableOpacity onPress={() => { setCurrentDate(selectedWeekDate); setViewMode('day'); }}>
+                  <Text style={{ fontSize: 12, color: '#3B72EE', fontWeight: '600' }}>Open day →</Text>
+                </TouchableOpacity>
               </View>
-              <TouchableOpacity onPress={() => { setCurrentDate(selectedWeekDate); setViewMode('day'); }}>
-                <Text style={{ fontSize: 12, color: '#3B72EE', fontWeight: '600' }}>Open day →</Text>
+            </View>
+            {/* Count + Add */}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 8 }}>
+              <Text style={{ fontSize: 13, fontWeight: '600', color: sub }}>{selEvs.length} event{selEvs.length !== 1 ? 's' : ''}</Text>
+              <TouchableOpacity onPress={() => { const nd = new Date(selectedWeekDate); nd.setHours(9,0,0,0); openModal(nd); }}>
+                <Text style={{ fontSize: 13, fontWeight: '700', color: '#3B72EE' }}>+ Add</Text>
               </TouchableOpacity>
             </View>
+            {/* Event cards */}
             {selEvs.length === 0 ? (
-              <View style={{ padding: 20, alignItems: 'center' }}>
+              <View style={{ paddingHorizontal: 14, paddingVertical: 16, alignItems: 'center' }}>
                 <Text style={{ color: sub, fontSize: 13, fontStyle: 'italic' }}>No events or tasks for this day</Text>
               </View>
             ) : selEvs.map((ev, i) => {
               const startTime = ev.eventTimestamp ? new Date(ev.eventTimestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) : '';
               const endTime   = ev.eventEndTimestamp ? new Date(ev.eventEndTimestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) : '';
               const color     = getEventColor(ev);
+              const typeLabel = ev.type === 'task' ? 'Task' : (ev.event_type || ev.eventType || 'Meeting');
               return (
                 <TouchableOpacity
                   key={ev.id || i}
-                  style={{ flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 14, paddingVertical: 12,
-                    borderTopWidth: 1, borderTopColor: isDark ? '#252530' : '#E6E9EF',
-                    backgroundColor: card,
-                  }}
+                  style={{ marginHorizontal: 14, marginBottom: 8, backgroundColor: card, borderRadius: 12, borderWidth: 1, borderColor: isDark ? '#252530' : '#EBEBF0', flexDirection: 'row', overflow: 'hidden' }}
                   onPress={() => ev.type === 'task' ? null : openEventDetail(ev)}
                   activeOpacity={0.7}
                 >
-                  <View style={{ width: 4, borderRadius: 2, backgroundColor: color, marginRight: 12, alignSelf: 'stretch', minHeight: 36 }} />
-                  <View style={{ flex: 1 }}>
-                    {startTime ? <Text style={{ fontSize: 11, color: sub, marginBottom: 2 }}>{startTime}{endTime ? ` – ${endTime}` : ''}</Text> : null}
+                  <View style={{ width: 4, backgroundColor: color }} />
+                  <View style={{ flex: 1, padding: 12 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                      {startTime ? <Text style={{ fontSize: 11, color: sub }}>{startTime}{endTime ? ` — ${endTime}` : ''}</Text> : null}
+                      <View style={{ paddingHorizontal: 7, paddingVertical: 2, borderRadius: 5, backgroundColor: color + '20' }}>
+                        <Text style={{ fontSize: 10, fontWeight: '600', color }}>{typeLabel}</Text>
+                      </View>
+                    </View>
                     <Text style={{ fontSize: 14, fontWeight: '600', color: txt }}>{ev.name}</Text>
-                  </View>
-                  <View style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, backgroundColor: color + '20' }}>
-                    <Text style={{ fontSize: 11, fontWeight: '600', color }}>{ev.type === 'task' ? 'Task' : (ev.event_type || ev.eventType || 'Meeting')}</Text>
+                    {ev.assignees?.length > 0 && (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, gap: 4 }}>
+                        <View style={{ flexDirection: 'row' }}>
+                          {ev.assignees.slice(0, 3).map((a, j) => (
+                            <View key={j} style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: color, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: card, marginLeft: j > 0 ? -6 : 0 }}>
+                              <Text style={{ fontSize: 9, fontWeight: '700', color: '#fff' }}>{(a.name || a.username || '?')[0].toUpperCase()}</Text>
+                            </View>
+                          ))}
+                        </View>
+                        {ev.assignees.length > 3 && <Text style={{ fontSize: 11, color: sub }}>+ {ev.assignees.length - 3} attendees</Text>}
+                      </View>
+                    )}
                   </View>
                 </TouchableOpacity>
               );
@@ -1900,18 +1941,94 @@ export default function CalendarScreen() {
         </View>
       </View>
 
-      {/* ── Ask Dyuksa AI input bar + Share button — just below navbar ── */}
-      <View style={[ad.wrap, { backgroundColor: isDark ? '#1A1A20' : '#FFFFFF', borderColor: bdr }]}>
-        <View style={[ad.inputBox, { backgroundColor: isDark ? '#252530' : '#FAFAFA', borderColor: bdr }]}>
-          <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
-            <Path d="M12 2L13.5 8.5L20 10L13.5 11.5L12 18L10.5 11.5L4 10L10.5 8.5L12 2Z" stroke="#3B72EE" strokeWidth={1.8} strokeLinejoin="round"/>
-            <Path d="M19 2L19.75 4.25L22 5L19.75 5.75L19 8L18.25 5.75L16 5L18.25 4.25L19 2Z" stroke="#3B72EE" strokeWidth={1.5} strokeLinejoin="round"/>
-          </Svg>
+      {/* ── Ask Dyuksa AI input bar with settings on left ── */}
+      <View style={[ad.wrap, { backgroundColor: isDark ? '#1A1A20' : '#FFFFFF', borderColor: bdr, flexDirection: 'row', alignItems: 'center', gap: 8 }]}>
+
+        {/* Settings icon + dropdown */}
+        <View style={{ position: 'relative' }}>
+          <TouchableOpacity
+            onPress={() => setShowSettingsDrop(s => !s)}
+            activeOpacity={0.7}
+            style={{ padding: 6 }}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Svg width={22} height={22} viewBox="0 0 24 24" fill="none">
+              <Path d="M14 17H5" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+              <Path d="M19 7h-9" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+              <Circle cx={17} cy={17} r={3} stroke="#3B72EE" strokeWidth={2}/>
+              <Circle cx={7} cy={7} r={3} stroke="#3B72EE" strokeWidth={2}/>
+            </Svg>
+          </TouchableOpacity>
+
+          {showSettingsDrop && (
+            <View style={{
+              position: 'absolute', top: 38, left: 0, zIndex: 400,
+              backgroundColor: card, borderRadius: 10, borderWidth: 1, borderColor: bdr,
+              minWidth: 210, shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
+              shadowOpacity: 0.14, shadowRadius: 10, elevation: 14,
+            }}>
+              {/* Header */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: bdr }}>
+                <Svg width={14} height={14} viewBox="0 0 24 24" fill="none">
+                  <Path d="M14 17H5" stroke={txt} strokeWidth={1.8} strokeLinecap="round"/>
+                  <Path d="M19 7h-9" stroke={txt} strokeWidth={1.8} strokeLinecap="round"/>
+                  <Circle cx={17} cy={17} r={3} stroke={txt} strokeWidth={1.8}/>
+                  <Circle cx={7} cy={7} r={3} stroke={txt} strokeWidth={1.8}/>
+                </Svg>
+                <Text style={{ fontSize: 13, fontWeight: '700', color: txt }}>Calendar Settings</Text>
+              </View>
+
+              {/* New Event */}
+              <TouchableOpacity
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: bdr }}
+                onPress={() => { setShowSettingsDrop(false); openModal(); }}
+                activeOpacity={0.7}
+              >
+                <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
+                  <Path d="M8 2v3M16 2v3M3 8h18M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round"/>
+                  <Path d="M12 12v4M10 14h4" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round"/>
+                </Svg>
+                <Text style={{ fontSize: 13, color: '#3B72EE', fontWeight: '600' }}>New Event</Text>
+              </TouchableOpacity>
+
+              {/* Show Shared Events toggle */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: bdr }}>
+                <Text style={{ fontSize: 13, color: txt }}>Show Shared Events</Text>
+                <TouchableOpacity
+                  onPress={() => setShowSharedEvents(s => !s)}
+                  style={{ width: 42, height: 24, borderRadius: 12, backgroundColor: showSharedEvents ? '#3B72EE' : (isDark ? '#3A3A48' : '#D1D1DB'), justifyContent: 'center', paddingHorizontal: 2 }}
+                >
+                  <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: '#fff', marginLeft: showSharedEvents ? 18 : 0 }} />
+                </TouchableOpacity>
+              </View>
+
+              {/* Share My Calendar */}
+              <TouchableOpacity
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 13 }}
+                onPress={() => { setShowSettingsDrop(false); setShareModalOpen(true); }}
+                activeOpacity={0.7}
+              >
+                <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
+                  <Circle cx={18} cy={5}  r={3} stroke="#3B72EE" strokeWidth={2}/>
+                  <Circle cx={6}  cy={12} r={3} stroke="#3B72EE" strokeWidth={2}/>
+                  <Circle cx={18} cy={19} r={3} stroke="#3B72EE" strokeWidth={2}/>
+                  <Line x1={8.59} y1={13.51} x2={15.42} y2={17.49} stroke="#3B72EE" strokeWidth={2} strokeLinecap="round"/>
+                  <Line x1={15.41} y1={6.51} x2={8.59}  y2={10.49} stroke="#3B72EE" strokeWidth={2} strokeLinecap="round"/>
+                </Svg>
+                <Text style={{ fontSize: 13, color: '#3B72EE', fontWeight: '600' }}>Share My Calendar</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+
+        {/* Ask Dyuksa input */}
+        <View style={[ad.inputBox, { flex: 1, backgroundColor: isDark ? '#252530' : '#FAFAFA', borderColor: bdr }]}>
+          <Text style={{ fontSize: 16, color: '#2D6AE3', fontWeight: '700' }}>✦</Text>
           <TextInput
             style={[ad.input, { color: txt }]}
             value={askDyuksaText}
             onChangeText={setAskDyuksaText}
-            placeholder='Try: "dyuksa find 30 mins with Shifali tomorrow"'
+            placeholder='Try: "dyuksa find 30 mins with Vaibhav tomorrow"'
             placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
             returnKeyType="send"
             onSubmitEditing={handleAskDyuksa}
@@ -1977,7 +2094,8 @@ export default function CalendarScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Nav row: prev arrow · date label center · next arrow · New event · Settings */}
+        {/* Nav row: prev arrow · date label center · next arrow — hidden in Day view (has its own header) */}
+        {viewMode !== 'day' && (
         <View style={[styles.toolbar, { backgroundColor: card, borderBottomColor: bdr, flexWrap: 'wrap', gap: 6 }]}>
           {/* Date navigation */}
           <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
@@ -1994,6 +2112,7 @@ export default function CalendarScreen() {
           </View>
 
         </View>
+        )}
       </View>
 
       {/* Main content — full width now, no sidebar */}
@@ -2045,85 +2164,109 @@ export default function CalendarScreen() {
             onPress={() => setShowMiniCal(false)}
           />
         )}
-          {/* Day column headers */}
-          {viewMode !== 'month' && (
-            <View style={[styles.dayHeaders, { borderBottomColor: '#C0C0C0', backgroundColor: card }]}>
-              {/* Top-left corner cell — settings icon + dropdown */}
-              <View style={[styles.timeLabel, { alignItems: 'center', justifyContent: 'center', position: 'relative', zIndex: 300 }]}>
-                <TouchableOpacity
-                  onPress={() => setShowSettingsDrop(s => !s)}
-                  activeOpacity={0.7}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
-                    <Path d="M14 17H5" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
-                    <Path d="M19 7h-9" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
-                    <Circle cx={17} cy={17} r={3} stroke="#3B72EE" strokeWidth={2}/>
-                    <Circle cx={7} cy={7} r={3} stroke="#3B72EE" strokeWidth={2}/>
-                  </Svg>
-                </TouchableOpacity>
+          {/* ── Day view special header ── */}
+          {viewMode === 'day' && (() => {
+            const isToday  = currentDate.toDateString() === today.toDateString();
+            const dayLabel = currentDate.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase();
+            const monLabel = currentDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }).toUpperCase();
+            const dateLabel = isToday
+              ? `Today, ${currentDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}`
+              : currentDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 
-                {/* Dropdown — renders below the icon */}
-                {showSettingsDrop && (
-                  <View style={{
-                    position: 'absolute', top: 52, left: 0, zIndex: 400,
-                    backgroundColor: card, borderRadius: 10, borderWidth: 1, borderColor: bdr,
-                    minWidth: 210, shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
-                    shadowOpacity: 0.14, shadowRadius: 10, elevation: 14,
-                  }}>
-                    {/* Header */}
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: bdr }}>
-                      <Svg width={14} height={14} viewBox="0 0 24 24" fill="none">
-                        <Path d="M14 17H5" stroke={txt} strokeWidth={1.8} strokeLinecap="round"/>
-                        <Path d="M19 7h-9" stroke={txt} strokeWidth={1.8} strokeLinecap="round"/>
-                        <Circle cx={17} cy={17} r={3} stroke={txt} strokeWidth={1.8}/>
-                        <Circle cx={7} cy={7} r={3} stroke={txt} strokeWidth={1.8}/>
-                      </Svg>
-                      <Text style={{ fontSize: 13, fontWeight: '700', color: txt }}>Calendar Settings</Text>
-                    </View>
+            // Build 7-day strip centred on currentDate
+            const strip = Array.from({ length: 7 }, (_, i) => {
+              const d = new Date(currentDate);
+              d.setDate(d.getDate() - 3 + i);
+              return d;
+            });
 
-                    {/* New Event */}
-                    <TouchableOpacity
-                      style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: bdr }}
-                      onPress={() => { setShowSettingsDrop(false); openModal(); }}
-                      activeOpacity={0.7}
-                    >
-                      <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
-                        <Path d="M8 2v3M16 2v3M3 8h18M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round"/>
-                        <Path d="M12 12v4M10 14h4" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round"/>
-                      </Svg>
-                      <Text style={{ fontSize: 13, color: '#3B72EE', fontWeight: '600' }}>New Event</Text>
-                    </TouchableOpacity>
+            // Stats for current day
+            const dayEvs   = eventsForDay(currentDate);
+            const evCount  = dayEvs.filter(e => e.type !== 'task').length;
+            const mtgCount = dayEvs.filter(e => e.type !== 'task' && (e.event_type || '').toLowerCase() === 'meeting').length;
+            const totalMin = dayEvs.filter(e => e.type !== 'task').reduce((acc, e) => {
+              try {
+                const s = new Date(e.eventTimestamp || e.eventDate);
+                const en = e.end_time ? new Date(e.end_time) : new Date(s.getTime() + 30 * 60000);
+                return acc + (en - s) / 60000;
+              } catch { return acc; }
+            }, 0);
+            const hrs = (totalMin / 60).toFixed(1);
 
-                    {/* Show Shared Events toggle */}
-                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: bdr }}>
-                      <Text style={{ fontSize: 13, color: txt }}>Show Shared Events</Text>
-                      <TouchableOpacity
-                        onPress={() => setShowSharedEvents(s => !s)}
-                        style={{ width: 42, height: 24, borderRadius: 12, backgroundColor: showSharedEvents ? '#3B72EE' : (isDark ? '#3A3A48' : '#D1D1DB'), justifyContent: 'center', paddingHorizontal: 2 }}
-                      >
-                        <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: '#fff', marginLeft: showSharedEvents ? 18 : 0 }} />
+            return (
+              <View style={{ backgroundColor: card, borderBottomWidth: 1, borderBottomColor: bdr }}>
+                {/* Subtitle + date + arrows */}
+                <View style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 6 }}>
+                  <Text style={{ fontSize: 11, fontWeight: '600', color: sub, letterSpacing: 0.5 }}>{dayLabel} · {monLabel}</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 2 }}>
+                    <Text style={{ fontSize: 22, fontWeight: '700', color: txt }}>{dateLabel}</Text>
+                    <View style={{ flexDirection: 'row', gap: 4 }}>
+                      <TouchableOpacity style={styles.arrowBtn} onPress={goPrev}>
+                        <Text style={[styles.arrowText, { color: txt }]}>‹</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={styles.arrowBtn} onPress={goNext}>
+                        <Text style={[styles.arrowText, { color: txt }]}>›</Text>
                       </TouchableOpacity>
                     </View>
+                  </View>
+                </View>
 
-                    {/* Share My Calendar */}
-                    <TouchableOpacity
-                      style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 13 }}
-                      onPress={() => { setShowSettingsDrop(false); setShareModalOpen(true); }}
-                      activeOpacity={0.7}
-                    >
-                      <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
-                        <Circle cx={18} cy={5}  r={3} stroke="#3B72EE" strokeWidth={2}/>
-                        <Circle cx={6}  cy={12} r={3} stroke="#3B72EE" strokeWidth={2}/>
-                        <Circle cx={18} cy={19} r={3} stroke="#3B72EE" strokeWidth={2}/>
-                        <Line x1={8.59} y1={13.51} x2={15.42} y2={17.49} stroke="#3B72EE" strokeWidth={2} strokeLinecap="round"/>
-                        <Line x1={15.41} y1={6.51} x2={8.59}  y2={10.49} stroke="#3B72EE" strokeWidth={2} strokeLinecap="round"/>
-                      </Svg>
-                      <Text style={{ fontSize: 13, color: '#3B72EE', fontWeight: '600' }}>Share My Calendar</Text>
-                    </TouchableOpacity>
+                {/* Mini week strip */}
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 10, gap: 4 }} style={{ flexDirection: 'row' }}>
+                  {strip.map((d, i) => {
+                    const isCur  = d.toDateString() === currentDate.toDateString();
+                    const isTod  = d.toDateString() === today.toDateString();
+                    return (
+                      <TouchableOpacity
+                        key={i}
+                        onPress={() => setCurrentDate(new Date(d))}
+                        style={{ alignItems: 'center', paddingHorizontal: 8 }}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={{ fontSize: 11, fontWeight: '600', color: isCur ? '#3B72EE' : sub, marginBottom: 4 }}>
+                          {['S','M','T','W','T','F','S'][d.getDay()]}
+                        </Text>
+                        <View style={{
+                          width: 32, height: 32, borderRadius: 10,
+                          backgroundColor: isCur ? '#2952C4' : 'transparent',
+                          alignItems: 'center', justifyContent: 'center',
+                        }}>
+                          <Text style={{ fontSize: 14, fontWeight: '700', color: isCur ? '#fff' : (isTod ? '#3B72EE' : txt) }}>
+                            {d.getDate()}
+                          </Text>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+
+                {/* Stats pills */}
+                {evCount > 0 && (
+                  <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingBottom: 10 }}>
+                    <View style={{ backgroundColor: isDark ? '#252530' : '#F0F0F5', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 }}>
+                      <Text style={{ fontSize: 12, color: sub, fontWeight: '500' }}>{evCount} event{evCount !== 1 ? 's' : ''}</Text>
+                    </View>
+                    {mtgCount > 0 && (
+                      <View style={{ backgroundColor: isDark ? '#252530' : '#F0F0F5', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 }}>
+                        <Text style={{ fontSize: 12, color: sub, fontWeight: '500' }}>{mtgCount} meeting{mtgCount !== 1 ? 's' : ''}</Text>
+                      </View>
+                    )}
+                    {parseFloat(hrs) > 0 && (
+                      <View style={{ backgroundColor: isDark ? '#252530' : '#F0F0F5', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 }}>
+                        <Text style={{ fontSize: 12, color: sub, fontWeight: '500' }}>{hrs}h booked</Text>
+                      </View>
+                    )}
                   </View>
                 )}
               </View>
+            );
+          })()}
+
+          {/* Day column headers */}
+          {viewMode !== 'month' && viewMode !== 'day' && (
+            <View style={[styles.dayHeaders, { borderBottomColor: '#C0C0C0', backgroundColor: card }]}>
+              {/* Top-left corner cell — empty spacer */}
+              <View style={[styles.timeLabel, { alignItems: 'center', justifyContent: 'center' }]} />
               {weekDays.map((d, i) => {
                 const isToday = d.toDateString() === today.toDateString();
                 const dayEvents = eventsForDay(d);
@@ -2182,71 +2325,73 @@ export default function CalendarScreen() {
             ]}
           >
             <SafeAreaView style={{ flex: 1 }}>
-              {/* Panel header */}
-              <View style={[du.header, { borderBottomColor: bdr }]}>
-                <Text style={[du.headerDate, { color: txt }]}>
+              {/* Panel header — matches reference */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: bdr }}>
+                <Text style={{ fontSize: 17, fontWeight: '700', color: txt }}>
                   {dailyPanelDate.toLocaleDateString('en-GB', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' })}
                 </Text>
                 <TouchableOpacity
-                  style={[du.closeBtn, { backgroundColor: isDark ? '#252530' : '#F5F5F7' }]}
+                  style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: isDark ? '#252530' : '#F0F0F5', alignItems: 'center', justifyContent: 'center' }}
                   onPress={closeDailyPanel}
                 >
-                  <Text style={[du.closeBtnText, { color: sub }]}>✕</Text>
+                  <Text style={{ fontSize: 14, color: sub, fontWeight: '600' }}>✕</Text>
                 </TouchableOpacity>
               </View>
 
               <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 14, paddingBottom: 40 }}>
 
                 {/* Empty state */}
-                <View style={[du.emptyCard, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}>
-                  <Text style={du.emptyIcon}>📅</Text>
-                  <Text style={[du.emptyText, { color: sub }]}>No tasks or events scheduled for this day</Text>
+                <View style={{ backgroundColor: isDark ? '#252530' : '#F5F5F7', borderRadius: 14, padding: 24, alignItems: 'center', marginBottom: 14 }}>
+                  <Svg width={40} height={40} viewBox="0 0 24 24" fill="none" style={{ marginBottom: 8 }}>
+                    <Path d="M8 2v3M16 2v3M3 8h18M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z" stroke="#9AA3B2" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"/>
+                    <Path d="M8 13h.01M12 13h.01M16 13h.01M8 17h.01M12 17h.01M16 17h.01" stroke="#9AA3B2" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+                  </Svg>
+                  <Text style={{ fontSize: 13, color: sub, textAlign: 'center' }}>No tasks or events scheduled for this day</Text>
                 </View>
 
-                {/* Create Task button */}
+                {/* Create Task button — full width solid blue */}
                 <TouchableOpacity
-                  style={[du.createTaskTopBtn, { backgroundColor: '#3B72EE', borderColor: '#3B72EE', marginBottom: 12 }]}
+                  style={{ backgroundColor: '#3B72EE', borderRadius: 14, paddingVertical: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 14 }}
                   onPress={() => {
                     closeDailyPanel();
                     setTimeout(() => navigation.navigate('Main', { screen: 'Tasks', params: { openCreateModal: true, returnTo: 'Calendar' } }), 250);
                   }}
                 >
-                  <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
-                    <Path d="M9 11l3 3L22 4" stroke="#fff" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+                  <Svg width={18} height={18} viewBox="0 0 24 24" fill="none">
+                    <Path d="M9 11l3 3L22 4" stroke="#fff" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"/>
                     <Path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" stroke="#fff" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
                   </Svg>
-                  <Text style={[du.createTaskTopText, { color: '#fff', marginLeft: 8 }]}>Create Task</Text>
+                  <Text style={{ fontSize: 15, fontWeight: '700', color: '#fff' }}>Create Task</Text>
                 </TouchableOpacity>
 
                 {/* Divider */}
-                <View style={{ height: 1, backgroundColor: bdr, marginBottom: 12 }} />
+                <View style={{ height: 1, backgroundColor: bdr, marginBottom: 14 }} />
 
                 {/* ── Daily Update Section ── */}
                 {dailyPanelDateClass === 'today' && !editingUpdate && !dailyUpdates[dateKey(dailyPanelDate)] && (
                   <TouchableOpacity
-                    style={[du.addUpdateBtn, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr, flexDirection: 'row', alignItems: 'center', gap: 8 }]}
+                    style={{ backgroundColor: isDark ? '#252530' : '#F5F5F7', borderRadius: 14, borderWidth: 1, borderColor: bdr, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, paddingVertical: 15, marginBottom: 14 }}
                     onPress={() => setEditingUpdate(true)}
                   >
                     <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
                       <Path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
                       <Path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
                     </Svg>
-                    <Text style={[du.addUpdateText, { color: '#3B72EE' }]}>Add Daily Update</Text>
+                    <Text style={{ fontSize: 15, fontWeight: '600', color: '#3B72EE' }}>Add Daily Update</Text>
                   </TouchableOpacity>
                 )}
 
                 {dailyPanelDateClass === 'today' && !editingUpdate && dailyUpdates[dateKey(dailyPanelDate)] && (
-                  // Today with submitted update → show readout + edit button
-                  <View style={[du.updateCard, { backgroundColor: isDark ? '#252530' : '#F5F5F7', borderColor: bdr }]}>
-                    <View style={du.updateHeaderRow}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={[du.updateTitle, { color: txt }]}>Daily Update</Text>
-                        <Text style={[du.updateSubtitle, { color: '#3B72EE' }]}>
+                  <View style={{ backgroundColor: isDark ? '#252530' : '#F5F5F7', borderRadius: 14, borderWidth: 1, borderColor: bdr, padding: 16, marginBottom: 14 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12 }}>
+                      <View>
+                        <Text style={{ fontSize: 16, fontWeight: '700', color: txt }}>Daily Update</Text>
+                        <Text style={{ fontSize: 13, color: '#3B72EE', fontWeight: '500', marginTop: 2 }}>
                           {dailyPanelDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
                         </Text>
                       </View>
                       <TouchableOpacity onPress={() => setEditingUpdate(true)}>
-                        <Text style={[du.editLink, { color: '#3B72EE' }]}>Edit</Text>
+                        <Text style={{ fontSize: 14, fontWeight: '700', color: '#3B72EE' }}>Edit</Text>
                       </TouchableOpacity>
                     </View>
                     {renderUpdateField('Today\'s Priorities', dailyUpdates[dateKey(dailyPanelDate)].priorities, txt, sub)}
@@ -2257,18 +2402,17 @@ export default function CalendarScreen() {
                 )}
 
                 {dailyPanelDateClass === 'today' && editingUpdate && (
-                  // Today, editing → form (image 1)
-                  <View>
-                    <View style={du.formHeader}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={[du.updateTitle, { color: txt }]}>Daily Update</Text>
-                        <Text style={[du.updateSubtitle, { color: '#3B72EE' }]}>
+                  <View style={{ backgroundColor: isDark ? '#252530' : '#F5F5F7', borderRadius: 14, borderWidth: 1, borderColor: bdr, padding: 16, marginBottom: 14 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12 }}>
+                      <View>
+                        <Text style={{ fontSize: 16, fontWeight: '700', color: txt }}>Daily Update</Text>
+                        <Text style={{ fontSize: 13, color: '#3B72EE', fontWeight: '500', marginTop: 2 }}>
                           {dailyPanelDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
                         </Text>
                       </View>
                       {dailyUpdates[dateKey(dailyPanelDate)] && (
                         <TouchableOpacity onPress={() => setEditingUpdate(false)}>
-                          <Text style={[du.editLink, { color: sub }]}>✕</Text>
+                          <Text style={{ fontSize: 16, color: sub }}>✕</Text>
                         </TouchableOpacity>
                       )}
                     </View>
@@ -2276,8 +2420,11 @@ export default function CalendarScreen() {
                     {renderUpdateInput('Progress (Yesterday):-', editProgress, setEditProgress, 'What did you accomplish yesterday?', isDark, card, bdr, txt, sub)}
                     {renderUpdateInput('Blockers / Needs:-', editBlockers, setEditBlockers, 'Any blockers or help needed?', isDark, card, bdr, txt, sub)}
                     {renderUpdateInput('Upcoming:-', editUpcoming, setEditUpcoming, 'What\'s coming up next?', isDark, card, bdr, txt, sub)}
-                    <TouchableOpacity style={du.submitBtn} onPress={saveDailyUpdate}>
-                      <Text style={du.submitBtnText}>➤  Submit Update</Text>
+                    <TouchableOpacity
+                      style={{ backgroundColor: '#3B72EE', borderRadius: 12, paddingVertical: 13, alignItems: 'center', marginTop: 8 }}
+                      onPress={saveDailyUpdate}
+                    >
+                      <Text style={{ fontSize: 14, fontWeight: '700', color: '#fff' }}>➤  Submit Update</Text>
                     </TouchableOpacity>
                   </View>
                 )}
@@ -2291,14 +2438,14 @@ export default function CalendarScreen() {
 
                 {/* ── Team Updates Section ── */}
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 18, marginBottom: 10 }}>
-                  <Text style={[du.sectionLabel, { color: sub, marginBottom: 0 }]}>TEAM UPDATES</Text>
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: sub, letterSpacing: 0.6 }}>TEAM UPDATES</Text>
                   {loadingUpdates && <ActivityIndicator size="small" color="#3B72EE" />}
                 </View>
                 {(() => {
                   const teamList = teamUpdates[dateKey(dailyPanelDate)] || [];
                   if (teamList.length === 0) {
                     return (
-                      <Text style={[du.noTeamText, { color: sub }]}>
+                      <Text style={{ fontSize: 13, color: sub, fontStyle: 'italic', textAlign: 'center', paddingVertical: 12 }}>
                         {loadingUpdates ? 'Loading team updates…' : 'No team updates for this date yet.'}
                       </Text>
                     );
@@ -2345,42 +2492,47 @@ export default function CalendarScreen() {
       {/* ── Create Event Modal ── */}
       {modalVisible && (
         <Modal transparent visible animationType="none" onRequestClose={closeModal} statusBarTranslucent>
-          <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={closeModal} />
+          {/* Backdrop */}
+          <TouchableOpacity style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)' }} activeOpacity={1} onPress={closeModal} />
           <Animated.View
             style={[
               styles.topPanel,
               {
-                backgroundColor: card,
+                backgroundColor: isDark ? '#0D0D0F' : '#F5F5F7',
                 transform: [{ translateY: slideAnim }],
-                maxHeight: Dimensions.get('window').height - kbHeight,
               },
             ]}
           >
-            <SafeAreaView style={{ flexShrink: 1 }}>
-              <View style={[styles.handle, { backgroundColor: isDark ? '#3A3A48' : '#DEDEE8' }]} />
+            <SafeAreaView edges={['bottom']} style={{ flexShrink: 1 }}>
+              {/* Drag handle */}
+              <View style={{ alignItems: 'center', paddingTop: 10, paddingBottom: 4 }}>
+                <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: isDark ? '#3A3A48' : '#DEDEE8' }} />
+              </View>
+
               <ScrollView
-                style={styles.panelScroll}
-                contentContainerStyle={{ paddingBottom: kbHeight > 0 ? 24 : 40 }}
+                contentContainerStyle={{ paddingBottom: kbHeight > 0 ? kbHeight + 16 : 32 }}
                 keyboardShouldPersistTaps="handled"
                 showsVerticalScrollIndicator={false}
               >
-                {/* ── Header — matches CreateTask ── */}
-                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: bdr, backgroundColor: card }}>
-                  <TouchableOpacity onPress={closeModal} style={{ padding: 4 }}>
-                    <Text style={{ fontSize: 26, color: txt, fontWeight: '300' }}>‹</Text>
+                {/* ── Header: back arrow left, title centered, ✕ right ── */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 6, paddingBottom: 18 }}>
+                  <TouchableOpacity onPress={closeModal} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <Text style={{ fontSize: 26, color: txt, fontWeight: '300', lineHeight: 28 }}>‹</Text>
                   </TouchableOpacity>
                   <Text style={{ fontSize: 17, fontWeight: '700', color: txt }}>New Event</Text>
-                  <TouchableOpacity onPress={saveEvent} style={{ padding: 4 }}>
-                    <Text style={{ fontSize: 15, fontWeight: '700', color: '#3B72EE' }}>Save</Text>
+                  <TouchableOpacity onPress={closeModal} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <Text style={{ fontSize: 18, color: sub, fontWeight: '400' }}>✕</Text>
                   </TouchableOpacity>
                 </View>
 
                 {/* ── Event Name ── */}
-                <View style={{ paddingHorizontal: 16, paddingTop: 20, paddingBottom: 8 }}>
-                  <Text style={{ fontSize: 13, fontWeight: '600', color: sub, marginBottom: 6 }}>Event Name *</Text>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: card, borderRadius: 12, borderWidth: 1, borderColor: bdr, paddingHorizontal: 12, paddingVertical: 10 }}>
+                <View style={{ paddingHorizontal: 16, paddingBottom: 10 }}>
+                  <Text style={{ fontSize: 12, fontWeight: '600', color: sub, marginBottom: 6, letterSpacing: 0.2 }}>
+                    Event Name <Text style={{ color: '#EF4444' }}>*</Text>
+                  </Text>
+                  <View style={{ backgroundColor: card, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 12 }}>
                     <TextInput
-                      style={{ flex: 1, fontSize: 15, color: txt }}
+                      style={{ fontSize: 15, color: txt }}
                       placeholder="Enter event name"
                       placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
                       value={eventName}
@@ -2390,11 +2542,11 @@ export default function CalendarScreen() {
                 </View>
 
                 {/* ── Description ── */}
-                <View style={{ paddingHorizontal: 16, paddingBottom: 8 }}>
-                  <Text style={{ fontSize: 13, fontWeight: '600', color: sub, marginBottom: 6 }}>Description</Text>
-                  <View style={{ backgroundColor: card, borderRadius: 12, borderWidth: 1, borderColor: bdr, paddingHorizontal: 12, paddingTop: 10, paddingBottom: 10 }}>
+                <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
+                  <Text style={{ fontSize: 12, fontWeight: '600', color: sub, marginBottom: 6, letterSpacing: 0.2 }}>Description</Text>
+                  <View style={{ backgroundColor: card, borderRadius: 14, paddingHorizontal: 14, paddingTop: 12, paddingBottom: 12 }}>
                     <TextInput
-                      style={{ fontSize: 14, color: txt, minHeight: 80, textAlignVertical: 'top', lineHeight: 20 }}
+                      style={{ fontSize: 14, color: txt, minHeight: 72, textAlignVertical: 'top', lineHeight: 21 }}
                       placeholder="Add event details..."
                       placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
                       value={eventDesc}
@@ -2404,12 +2556,12 @@ export default function CalendarScreen() {
                   </View>
                 </View>
 
-                {/* ── Meta card — Date/Time + Location ── */}
-                <View style={{ marginHorizontal: 16, marginBottom: 14, borderRadius: 16, borderWidth: 1, borderColor: bdr, backgroundColor: card, overflow: 'hidden' }}>
+                {/* ── Date / Time / Location ── */}
+                <View style={{ marginHorizontal: 16, marginBottom: 16, backgroundColor: card, borderRadius: 16, overflow: 'hidden' }}>
 
-                  {/* Date row */}
+                  {/* Date */}
                   <TouchableOpacity
-                    style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: bdr }}
+                    style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 15, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: bdr }}
                     onPress={() => { setShowDatePicker(s => !s); setShowTimePicker(false); setShowEndTimePicker(false); }}
                     activeOpacity={0.7}
                   >
@@ -2418,8 +2570,6 @@ export default function CalendarScreen() {
                       {pickerDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                     </Text>
                   </TouchableOpacity>
-
-                  {/* Date picker inline */}
                   {showDatePicker && (
                     <View style={[styles.pickerCard, { backgroundColor: card, borderColor: bdr }]}>
                       <DateTimePicker value={tempPickerDate} mode="date" display="inline" themeVariant={isDark ? 'dark' : 'light'} minimumDate={new Date(new Date().setHours(0,0,0,0))} onChange={(_, date) => { if (date) setTempPickerDate(date); }} style={{ width: '100%' }} />
@@ -2430,9 +2580,9 @@ export default function CalendarScreen() {
                     </View>
                   )}
 
-                  {/* Start time row */}
+                  {/* Start time */}
                   <TouchableOpacity
-                    style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: bdr }}
+                    style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 15, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: bdr }}
                     onPress={() => { setShowTimePicker(s => !s); setShowDatePicker(false); setShowEndTimePicker(false); }}
                     activeOpacity={0.7}
                   >
@@ -2451,9 +2601,9 @@ export default function CalendarScreen() {
                     </View>
                   )}
 
-                  {/* End time row */}
+                  {/* End time */}
                   <TouchableOpacity
-                    style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: bdr }}
+                    style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 15, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: bdr }}
                     onPress={() => { setShowEndTimePicker(s => !s); setShowDatePicker(false); setShowTimePicker(false); }}
                     activeOpacity={0.7}
                   >
@@ -2472,8 +2622,8 @@ export default function CalendarScreen() {
                     </View>
                   )}
 
-                  {/* Location row */}
-                  <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12 }}>
+                  {/* Location */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 15 }}>
                     <Text style={{ fontSize: 14, color: sub, flex: 1 }}>Location</Text>
                     <TextInput
                       style={{ fontSize: 14, color: txt, textAlign: 'right', flex: 2 }}
@@ -2485,189 +2635,172 @@ export default function CalendarScreen() {
                   </View>
                 </View>
 
-                {/* ── Event Type ── */}
-                <View style={{ marginHorizontal: 16, marginBottom: 12, borderRadius: 16, borderWidth: 1, borderColor: bdr, backgroundColor: card, overflow: 'hidden' }}>
-                  <View style={{ paddingHorizontal: 14, paddingTop: 14, paddingBottom: 10 }}>
-                    <Text style={{ fontSize: 13, fontWeight: '600', color: sub, marginBottom: 10 }}>Event Type</Text>
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                {/* ── Event Type + Participants — merged card ── */}
+                <View style={{ marginHorizontal: 16, marginBottom: 16, backgroundColor: card, borderRadius: 16, overflow: 'hidden' }}>
+
+                  {/* ── Event Type row (collapsible) ── */}
+                  <TouchableOpacity
+                    style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 15, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: bdr }}
+                    onPress={() => { setShowTypeDropdown(s => !s); setShowParticipants(false); }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={{ fontSize: 14, color: sub }}>Event Type</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      {/* Show selected type pill */}
+                      {(() => {
+                        const t = EVENT_TYPES.find(t => t.id === eventType);
+                        return t ? (
+                          <View style={{ paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, backgroundColor: t.color }}>
+                            <Text style={{ fontSize: 12, fontWeight: '700', color: '#fff' }}>{t.label}</Text>
+                          </View>
+                        ) : null;
+                      })()}
+                      <Text style={{ color: sub, fontSize: 12 }}>{showTypeDropdown ? '▲' : '▾'}</Text>
+                    </View>
+                  </TouchableOpacity>
+
+                  {/* Event Type dropdown — list style matching edit screen */}
+                  {showTypeDropdown && (
+                    <View style={{ borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: bdr }}>
                       {EVENT_TYPES.map(t => {
                         const active = eventType === t.id;
                         return (
                           <TouchableOpacity
                             key={t.id}
-                            onPress={() => { setEventType(t.id); if (t.id !== 'Other') setCustomType(''); }}
+                            style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 13, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: bdr, backgroundColor: active ? (isDark ? 'rgba(59,114,238,0.08)' : '#F0F5FF') : 'transparent' }}
+                            onPress={() => { setEventType(t.id); if (t.id !== 'Other') setCustomType(''); setShowTypeDropdown(false); }}
                             activeOpacity={0.7}
-                            style={{ paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, backgroundColor: active ? t.color : (isDark ? '#252530' : t.soft), borderWidth: active ? 0 : 1, borderColor: isDark ? '#3A3A48' : t.color + '40' }}
                           >
-                            <Text style={{ fontSize: 13, fontWeight: active ? '700' : '500', color: active ? '#fff' : (isDark ? '#fff' : t.color) }}>{t.label}</Text>
+                            <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: t.color, marginRight: 12 }} />
+                            <Text style={{ flex: 1, fontSize: 14, color: txt, fontWeight: active ? '600' : '400' }}>{t.label}</Text>
+                            {active && <Text style={{ color: '#3B72EE', fontWeight: '700', fontSize: 15 }}>✓</Text>}
                           </TouchableOpacity>
                         );
                       })}
+                      {eventType === 'Other' && (
+                        <View style={{ paddingHorizontal: 16, paddingVertical: 10 }}>
+                          <TextInput
+                            style={{ backgroundColor: isDark ? '#1A1A20' : '#F5F5F7', borderRadius: 10, borderWidth: 1, borderColor: bdr, color: txt, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14 }}
+                            placeholder="Type custom event name"
+                            placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
+                            value={customType}
+                            onChangeText={setCustomType}
+                          />
+                        </View>
+                      )}
                     </View>
-                    {eventType === 'Other' && (
-                      <TextInput
-                        style={{ marginTop: 10, backgroundColor: isDark ? '#1A1A20' : '#F5F5F7', borderRadius: 10, borderWidth: 1, borderColor: bdr, color: txt, paddingHorizontal: 12, paddingVertical: 9, fontSize: 14 }}
-                        placeholder="Type custom event name"
-                        placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
-                        value={customType}
-                        onChangeText={setCustomType}
-                      />
-                    )}
-                  </View>
+                  )}
 
-                  {/* Teams meeting row */}
+                  {/* ── Online meeting row — separate toggle row ── */}
                   <TouchableOpacity
-                    style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12, borderTopWidth: 1, borderTopColor: bdr, backgroundColor: teamsMeeting ? (isDark ? 'rgba(59,114,238,0.1)' : '#EEF3FF') : 'transparent' }}
+                    style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 15, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: bdr, backgroundColor: teamsMeeting ? (isDark ? 'rgba(59,114,238,0.08)' : '#F0F5FF') : 'transparent' }}
                     onPress={() => setTeamsMeeting(v => !v)}
                     activeOpacity={0.7}
                   >
-                    <Text style={{ fontSize: 16, marginRight: 10 }}>📹</Text>
-                    <Text style={{ flex: 1, fontSize: 14, color: teamsMeeting ? '#3B72EE' : txt, fontWeight: teamsMeeting ? '600' : '400' }}>Teams meeting</Text>
-                    {teamsMeeting && (
-                      <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: '#3B72EE', alignItems: 'center', justifyContent: 'center' }}>
-                        <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>✓</Text>
-                      </View>
-                    )}
-                  </TouchableOpacity>
-                </View>
-
-                {/* ── Description + Location ── */}
-                <View style={{ marginHorizontal: 16, marginBottom: 12, borderRadius: 16, borderWidth: 1, borderColor: bdr, backgroundColor: card, overflow: 'hidden' }}>
-                  <View style={{ paddingHorizontal: 14, paddingTop: 14, paddingBottom: 4 }}>
-                    <Text style={{ fontSize: 13, fontWeight: '600', color: sub, marginBottom: 6 }}>Description</Text>
-                    <TextInput
-                      style={{ fontSize: 14, color: txt, minHeight: 70, textAlignVertical: 'top', lineHeight: 20 }}
-                      placeholder="Add a description..."
-                      placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
-                      value={eventDesc}
-                      onChangeText={setEventDesc}
-                      multiline
-                    />
-                  </View>
-                  <View style={{ height: 1, backgroundColor: bdr }} />
-                  <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12 }}>
-                    <Text style={{ fontSize: 16, marginRight: 10 }}>📍</Text>
-                    <TextInput
-                      style={{ flex: 1, fontSize: 14, color: txt }}
-                      placeholder="Add location (optional)"
-                      placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
-                      value={location}
-                      onChangeText={setLocation}
-                    />
-                  </View>
-                </View>
-
-                {/* ── Participants ── */}
-                <View style={{ marginHorizontal: 16, marginBottom: 12, borderRadius: 16, borderWidth: 1, borderColor: bdr, backgroundColor: card, overflow: 'hidden' }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 12 }}>
-                    <Text style={{ fontSize: 13, fontWeight: '600', color: sub }}>Participants</Text>
-                    <TouchableOpacity onPress={() => setShowParticipants(s => !s)}>
-                      <Text style={{ fontSize: 13, fontWeight: '700', color: '#3B72EE' }}>+ Add</Text>
-                    </TouchableOpacity>
-                  </View>
-
-                {/* Selected participant chips */}
-                {participants.length > 0 ? (
-                  <View style={styles.participantChipsRow}>
-                    {participants.map(p => (
-                      <View key={p.id} style={styles.participantChip}>
-                        <View style={styles.participantChipAvatar}>
-                          <Text style={styles.participantChipAvatarText}>{p.avatar}</Text>
-                        </View>
-                        <Text style={[styles.participantChipName, { color: isDark ? '#FFFFFF' : '#1A1A2E' }]}>{p.name}</Text>
-                        <TouchableOpacity onPress={() => toggleParticipant({ id: p.id, first_name: p.name })}>
-                          <Text style={[styles.participantChipRemove, { color: sub }]}>✕</Text>
-                        </TouchableOpacity>
-                      </View>
-                    ))}
-                  </View>
-                ) : (
-                  !showParticipants && (
-                    <View style={[
-                      styles.noParticipants,
-                      { backgroundColor: isDark ? '#252530' : '#FAFAFA', borderColor: bdr },
-                    ]}>
-                      <Text style={styles.noParticipantsIcon}>👥</Text>
-                      <Text style={[styles.noParticipantsText, { color: sub }]}>No participants yet</Text>
+                    <Svg width={18} height={18} viewBox="0 0 24 24" fill="none" style={{ marginRight: 10 }}>
+                      <Path d="M15 10l4.553-2.276A1 1 0 0121 8.723v6.554a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" stroke={teamsMeeting ? '#3B72EE' : sub} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+                    </Svg>
+                    <Text style={{ flex: 1, fontSize: 14, color: teamsMeeting ? '#3B72EE' : txt, fontWeight: teamsMeeting ? '600' : '400' }}>Online meeting</Text>
+                    {/* Toggle switch — matches edit screen style */}
+                    <View style={[detailStyles.toggleSwitch, teamsMeeting && { backgroundColor: '#3B72EE' }]}>
+                      <View style={[detailStyles.toggleKnob, teamsMeeting && { transform: [{ translateX: 16 }] }]} />
                     </View>
-                  )
-                )}
+                  </TouchableOpacity>
 
-                {/* Participants picker */}
-                {showParticipants && (
-                  <View style={[
-                    styles.participantsPicker,
-                    { backgroundColor: isDark ? '#252530' : '#FAFAFA', borderColor: bdr },
-                  ]}>
-                    <TextInput
-                      style={[
-                        styles.participantSearchInput,
-                        { backgroundColor: card, borderColor: bdr, color: txt },
-                      ]}
-                      placeholder="Search users..."
-                      placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
-                      value={participantSearch}
-                      onChangeText={setParticipantSearch}
-                    />
-                    <ScrollView style={{ maxHeight: 180 }} nestedScrollEnabled>
-                      {filteredUsers.length === 0 ? (
-                        <Text style={[styles.noUsersText, { color: sub }]}>No users found</Text>
-                      ) : (
-                        filteredUsers.map(u => {
-                          const isSelected = participants.some(p => p.id === u.id);
-                          return (
-                            <TouchableOpacity
-                              key={u.id}
-                              style={[styles.userRow, { borderBottomColor: bdr }]}
-                              onPress={() => toggleParticipant(u)}
-                            >
-                              <View style={styles.userAvatar}>
-                                <Text style={styles.userAvatarText}>
-                                  {((u.first_name || u.username || 'U')[0] || 'U').toUpperCase()}
-                                </Text>
-                              </View>
-                              <Text style={[styles.userName, { color: txt }]}>{u.first_name || u.username || 'User'}</Text>
-                              <View style={[
-                                styles.userCheckbox,
-                                { borderColor: isDark ? '#3A3A48' : '#DEDEE8' },
-                                isSelected && styles.userCheckboxActive,
-                              ]}>
-                                {isSelected && <Text style={styles.userCheckmark}>✓</Text>}
-                              </View>
-                            </TouchableOpacity>
-                          );
-                        })
+                  {/* ── Participants row (collapsible) ── */}
+                  <TouchableOpacity
+                    style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 15, borderBottomWidth: (participants.length > 0 || showParticipants) ? StyleSheet.hairlineWidth : 0, borderBottomColor: bdr }}
+                    onPress={() => { setShowParticipants(s => !s); setShowTypeDropdown(false); }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={{ fontSize: 14, color: sub }}>Participants</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      {participants.length > 0 && (
+                        <View style={{ backgroundColor: '#3B72EE', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3 }}>
+                          <Text style={{ fontSize: 12, fontWeight: '700', color: '#fff' }}>{participants.length}</Text>
+                        </View>
                       )}
-                    </ScrollView>
-                  </View>
-                )}
+                      <Text style={{ fontSize: 13, fontWeight: '700', color: '#3B72EE' }}>+ Add</Text>
+                    </View>
+                  </TouchableOpacity>
+
+                  {/* Selected participant chips */}
+                  {participants.length > 0 && !showParticipants && (
+                    <View style={{ paddingHorizontal: 14, paddingVertical: 10 }}>
+                      <View style={styles.participantChipsRow}>
+                        {participants.map(p => (
+                          <View key={p.id} style={[styles.participantChip, { backgroundColor: isDark ? '#252530' : '#F0F4FF', borderColor: isDark ? '#3A3A48' : '#D0D8FF' }]}>
+                            <View style={[styles.participantChipAvatar, { backgroundColor: '#3B72EE' }]}>
+                              <Text style={styles.participantChipAvatarText}>{p.avatar}</Text>
+                            </View>
+                            <Text style={[styles.participantChipName, { color: txt }]}>{p.name}</Text>
+                            <TouchableOpacity onPress={() => toggleParticipant({ id: p.id, first_name: p.name })} hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}>
+                              <Text style={{ color: sub, fontSize: 12 }}>✕</Text>
+                            </TouchableOpacity>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+                  )}
+
+                  {/* Participants picker dropdown */}
+                  {showParticipants && (
+                    <View style={{ paddingHorizontal: 14, paddingBottom: 12, paddingTop: 4 }}>
+                      <TextInput
+                        style={[styles.participantSearchInput, { backgroundColor: isDark ? '#1A1A20' : '#F5F5F7', borderColor: bdr, color: txt, marginBottom: 4 }]}
+                        placeholder="Search users..."
+                        placeholderTextColor={isDark ? '#6C6C80' : '#AAAABC'}
+                        value={participantSearch}
+                        onChangeText={setParticipantSearch}
+                      />
+                      <ScrollView style={{ maxHeight: 160 }} nestedScrollEnabled showsVerticalScrollIndicator={false}>
+                        {filteredUsers.length === 0 ? (
+                          <Text style={[styles.noUsersText, { color: sub }]}>No users found</Text>
+                        ) : (
+                          filteredUsers.map(u => {
+                            const isSelected = participants.some(p => p.id === u.id);
+                            return (
+                              <TouchableOpacity
+                                key={u.id}
+                                style={[styles.userRow, { borderBottomColor: bdr }]}
+                                onPress={() => toggleParticipant(u)}
+                              >
+                                <View style={[styles.userAvatar, { backgroundColor: '#3B72EE' }]}>
+                                  <Text style={styles.userAvatarText}>
+                                    {((u.first_name || u.username || 'U')[0] || 'U').toUpperCase()}
+                                  </Text>
+                                </View>
+                                <Text style={[styles.userName, { color: txt }]}>{u.first_name || u.username || 'User'}</Text>
+                                <View style={[styles.userCheckbox, { borderColor: isDark ? '#3A3A48' : '#DEDEE8' }, isSelected && styles.userCheckboxActive]}>
+                                  {isSelected && <Text style={styles.userCheckmark}>✓</Text>}
+                                </View>
+                              </TouchableOpacity>
+                            );
+                          })
+                        )}
+                      </ScrollView>
+                    </View>
+                  )}
                 </View>
 
-                {/* Alert info */}
-                <View style={{ marginHorizontal: 16, marginBottom: 16, backgroundColor: isDark ? 'rgba(59,114,238,0.1)' : '#EEF3FF', borderRadius: 12, borderWidth: 1, borderColor: isDark ? 'rgba(59,114,238,0.2)' : '#C7D7FE', paddingHorizontal: 14, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                  <Text style={{ fontSize: 15 }}>🔔</Text>
-                  <Text style={{ flex: 1, fontSize: 13, color: '#3B72EE', fontWeight: '500' }}>
+                {/* ── Alert banner ── */}
+                <View style={{ marginHorizontal: 16, marginBottom: 20, backgroundColor: isDark ? 'rgba(59,114,238,0.08)' : '#EEF3FF', borderRadius: 12, borderWidth: 1, borderColor: isDark ? 'rgba(59,114,238,0.2)' : '#C7D7FE', paddingHorizontal: 14, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <Text style={{ fontSize: 16 }}>🔔</Text>
+                  <Text style={{ flex: 1, fontSize: 13, color: '#3B72EE', fontWeight: '500', lineHeight: 18 }}>
                     {participants.length > 0
                       ? `${participants.length} participant${participants.length > 1 ? 's' : ''} will be notified 1 hour before`
                       : "You'll receive an alert 1 hour before this event"}
                   </Text>
                 </View>
 
-                {/* Buttons */}
-                <View style={{ flexDirection: 'row', gap: 10, marginHorizontal: 16, marginBottom: 28 }}>
-                  <TouchableOpacity
-                    style={{ flex: 1, paddingVertical: 14, borderRadius: 12, borderWidth: 1, borderColor: bdr, backgroundColor: card, alignItems: 'center' }}
-                    onPress={closeModal}
-                  >
-                    <Text style={{ fontSize: 15, fontWeight: '600', color: sub }}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={{ flex: 2, paddingVertical: 14, borderRadius: 12, backgroundColor: '#0E1726', alignItems: 'center' }}
-                    onPress={saveEvent}
-                  >
-                    <Text style={{ fontSize: 15, fontWeight: '700', color: '#fff' }}>Create event</Text>
-                  </TouchableOpacity>
-                </View>
+                {/* ── Create button — full width, #3B72EE ── */}
+                <TouchableOpacity
+                  style={{ marginHorizontal: 16, marginBottom: 12, paddingVertical: 16, borderRadius: 14, backgroundColor: '#3B72EE', alignItems: 'center' }}
+                  onPress={saveEvent}
+                  activeOpacity={0.85}
+                >
+                  <Text style={{ fontSize: 15, fontWeight: '700', color: '#fff' }}>Create event</Text>
+                </TouchableOpacity>
 
               </ScrollView>
             </SafeAreaView>
@@ -2675,7 +2808,7 @@ export default function CalendarScreen() {
         </Modal>
       )}
 
-      {/* ── Ask Dyuksa: AI slot-picker modal ── */}
+            {/* ── Ask Dyuksa: AI slot-picker modal ── */}
       {aiSuggestion && (
         <Modal transparent visible animationType="fade" onRequestClose={closeAiModal}>
           <TouchableOpacity style={aiStyles.backdrop} activeOpacity={1} onPress={closeAiModal} />
@@ -2969,8 +3102,13 @@ export default function CalendarScreen() {
                       </View>
                     )}
                   </View>
-                  <TouchableOpacity onPress={closeEventDetail} disabled={savingEdit} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                    <Text style={[detailStyles.closeBtn, { color: sub }]}>✕</Text>
+                  <TouchableOpacity
+                    onPress={closeEventDetail}
+                    disabled={savingEdit}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    style={{ width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' }}
+                  >
+                    <Text style={{ fontSize: 14, color: sub, fontWeight: '600' }}>✕</Text>
                   </TouchableOpacity>
                 </View>
 
@@ -2982,74 +3120,126 @@ export default function CalendarScreen() {
                 >
                   {/* ── Read-only view ── */}
                   {!editMode && (
-                    <View style={{ gap: 12 }}>
-                      <View>
+                    <View style={{ gap: 0 }}>
+
+                      {/* Event name */}
+                      <View style={{ marginBottom: 16 }}>
                         <Text style={[detailStyles.label, { color: sub }]}>EVENT NAME</Text>
                         <Text style={[detailStyles.bigValue, { color: txt }]}>{detailEvent.name}</Text>
                       </View>
 
-                      <View style={{ flexDirection: 'row', gap: 12 }}>
-                        <View style={{ flex: 1 }}>
-                          <Text style={[detailStyles.label, { color: sub }]}>DATE</Text>
-                          <Text style={[detailStyles.value, { color: txt }]}>{fmtDate(detailEvent.eventTimestamp)}</Text>
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={[detailStyles.label, { color: sub }]}>TIME</Text>
-                          <Text style={[detailStyles.value, { color: txt }]}>
-                            {fmtTime(detailEvent.eventTimestamp)} – {fmtTime(detailEvent.end_time)}
-                          </Text>
-                        </View>
-                      </View>
+                      {/* Meta card — date, time, type, organizer, location in one bordered card */}
+                      <View style={{ borderRadius: 14, borderWidth: 1, borderColor: bdr, overflow: 'hidden', marginBottom: 14 }}>
 
-                      <View>
-                        <Text style={[detailStyles.label, { color: sub }]}>TYPE</Text>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                          <Text style={[detailStyles.value, { color: txt }]}>
-                            {(EVENT_TYPES.find(t => t.id === detailEvent.event_type)?.icon || '👥')} {detailEvent.event_type || 'Meeting'}
-                          </Text>
-                          {detailEvent.is_online_meeting && (
-                            <View style={detailStyles.onlinePill}>
-                              <Text style={detailStyles.onlinePillText}>📹 Online</Text>
+                        {/* Date + Time row */}
+                        <View style={{ flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: bdr }}>
+                          <View style={{ flex: 1, padding: 12 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                              <Svg width={12} height={12} viewBox="0 0 24 24" fill="none">
+                                <Path d="M8 2v3M16 2v3M3 8h18M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z" stroke={sub} strokeWidth={2} strokeLinecap="round"/>
+                              </Svg>
+                              <Text style={[detailStyles.label, { color: sub, marginBottom: 0 }]}>DATE</Text>
                             </View>
-                          )}
+                            <Text style={[detailStyles.value, { color: txt }]}>{fmtDate(detailEvent.eventTimestamp)}</Text>
+                          </View>
+                          <View style={{ width: 1, backgroundColor: bdr }} />
+                          <View style={{ flex: 1, padding: 12 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                              <Svg width={12} height={12} viewBox="0 0 24 24" fill="none">
+                                <Circle cx={12} cy={12} r={10} stroke={sub} strokeWidth={2}/>
+                                <Path d="M12 6v6l4 2" stroke={sub} strokeWidth={2} strokeLinecap="round"/>
+                              </Svg>
+                              <Text style={[detailStyles.label, { color: sub, marginBottom: 0 }]}>TIME</Text>
+                            </View>
+                            <Text style={[detailStyles.value, { color: txt }]}>
+                              {fmtTime(detailEvent.eventTimestamp)} – {fmtTime(detailEvent.end_time)}
+                            </Text>
+                          </View>
                         </View>
+
+                        {/* Type row */}
+                        <View style={{ flexDirection: 'row', alignItems: 'center', padding: 12, gap: 10, borderBottomWidth: 1, borderBottomColor: bdr }}>
+                          <Svg width={14} height={14} viewBox="0 0 24 24" fill="none">
+                            <Path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" stroke={sub} strokeWidth={2} strokeLinecap="round"/>
+                            <Circle cx={9} cy={7} r={4} stroke={sub} strokeWidth={2}/>
+                            <Path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" stroke={sub} strokeWidth={2} strokeLinecap="round"/>
+                          </Svg>
+                          <View style={{ flex: 1 }}>
+                            <Text style={[detailStyles.label, { color: sub, marginBottom: 2 }]}>TYPE</Text>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                              {(() => {
+                                const typeObj = EVENT_TYPES.find(t => t.id.toLowerCase() === (detailEvent.event_type || '').toLowerCase());
+                                return (
+                                  <>
+                                    {typeObj && <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: typeObj.color }} />}
+                                    <Text style={[detailStyles.value, { color: txt }]}>{detailEvent.event_type || 'Meeting'}</Text>
+                                  </>
+                                );
+                              })()}
+                              {detailEvent.is_online_meeting && (
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(124,58,237,0.1)', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 }}>
+                                  <Svg width={11} height={11} viewBox="0 0 24 24" fill="none">
+                                    <Path d="M15 10l4.553-2.069A1 1 0 0121 8.82v6.36a1 1 0 01-1.447.89L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" stroke="#7C3AED" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+                                  </Svg>
+                                  <Text style={{ color: '#7C3AED', fontSize: 10, fontWeight: '700' }}>Online</Text>
+                                </View>
+                              )}
+                            </View>
+                          </View>
+                        </View>
+
+                        {/* Organizer row */}
+                        <View style={{ flexDirection: 'row', alignItems: 'center', padding: 12, gap: 10, borderBottomWidth: detailEvent.location || detailEvent.description ? 1 : 0, borderBottomColor: bdr }}>
+                          <Svg width={14} height={14} viewBox="0 0 24 24" fill="none">
+                            <Path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" stroke={sub} strokeWidth={2} strokeLinecap="round"/>
+                            <Circle cx={12} cy={7} r={4} stroke={sub} strokeWidth={2}/>
+                          </Svg>
+                          <View>
+                            <Text style={[detailStyles.label, { color: sub, marginBottom: 2 }]}>ORGANIZER</Text>
+                            <Text style={[detailStyles.value, { color: txt }]}>
+                              {detailEvent.organizer_name || `User #${detailEvent.organizer || '—'}`}
+                            </Text>
+                          </View>
+                        </View>
+
+                        {/* Location row */}
+                        {!!detailEvent.location && (
+                          <View style={{ flexDirection: 'row', alignItems: 'center', padding: 12, gap: 10, borderBottomWidth: detailEvent.description ? 1 : 0, borderBottomColor: bdr }}>
+                            <Svg width={14} height={14} viewBox="0 0 24 24" fill="none">
+                              <Path d="M12 21c-4-4-7-7.582-7-11a7 7 0 1114 0c0 3.418-3 7-7 11z" stroke={sub} strokeWidth={2}/>
+                              <Circle cx={12} cy={10} r={2} stroke={sub} strokeWidth={2}/>
+                            </Svg>
+                            <View>
+                              <Text style={[detailStyles.label, { color: sub, marginBottom: 2 }]}>LOCATION</Text>
+                              <Text style={[detailStyles.value, { color: txt }]}>{detailEvent.location}</Text>
+                            </View>
+                          </View>
+                        )}
+
+                        {/* Description row */}
+                        {!!detailEvent.description && (
+                          <View style={{ flexDirection: 'row', alignItems: 'flex-start', padding: 12, gap: 10 }}>
+                            <Svg width={14} height={14} viewBox="0 0 24 24" fill="none" style={{ marginTop: 2 }}>
+                              <Path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke={sub} strokeWidth={2} strokeLinecap="round"/>
+                              <Path d="M9 13h6M9 17h4M14 2v6h6" stroke={sub} strokeWidth={2} strokeLinecap="round"/>
+                            </Svg>
+                            <View style={{ flex: 1 }}>
+                              <Text style={[detailStyles.label, { color: sub, marginBottom: 2 }]}>DESCRIPTION</Text>
+                              <Text style={[detailStyles.value, { color: txt, lineHeight: 20 }]}>{detailEvent.description}</Text>
+                            </View>
+                          </View>
+                        )}
                       </View>
 
-                      {!!detailEvent.location && (
-                        <View>
-                          <Text style={[detailStyles.label, { color: sub }]}>LOCATION</Text>
-                          <Text style={[detailStyles.value, { color: txt }]}>📍 {detailEvent.location}</Text>
-                        </View>
-                      )}
-
-                      {!!detailEvent.description && (
-                        <View>
-                          <Text style={[detailStyles.label, { color: sub }]}>DESCRIPTION</Text>
-                          <Text style={[detailStyles.value, { color: txt, lineHeight: 20 }]}>
-                            {detailEvent.description}
-                          </Text>
-                        </View>
-                      )}
-
-                      <View>
-                        <Text style={[detailStyles.label, { color: sub }]}>ORGANIZER</Text>
-                        <Text style={[detailStyles.value, { color: txt }]}>
-                          {detailEvent.organizer_name || `User #${detailEvent.organizer || '—'}`}
-                        </Text>
-                      </View>
-
+                      {/* Participants */}
                       <View>
                         {(() => {
-                          // Prefer the dedicated rsvp-status payload if we got it —
-                          // it gives us names + invitation statuses straight from the
-                          // server, no matching against allUsers needed.
                           const rsvpRows = Array.isArray(detailEvent.rsvp?.attendee_status)
                             ? detailEvent.rsvp.attendee_status
                             : null;
                           const fallbackIds = Array.isArray(detailEvent.attendees) ? detailEvent.attendees : [];
                           const total = rsvpRows ? rsvpRows.length : fallbackIds.length;
 
-                          // Status → display config (matches the website's pill colours)
                           const statusInfo = (s) => {
                             const v = String(s || '').toUpperCase();
                             if (v === 'ORGANIZER') return { label: 'Organizer', color: '#3B72EE' };
@@ -3131,7 +3321,12 @@ export default function CalendarScreen() {
                           }}
                           activeOpacity={0.7}
                         >
-                          <Text style={{ color: txt, fontSize: 14 }}>📅 {fmtDate(editStart.toISOString())}</Text>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                            <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
+                              <Path d="M8 2v3M16 2v3M3 8h18M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z" stroke={sub} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+                            </Svg>
+                            <Text style={{ color: txt, fontSize: 14 }}>{fmtDate(editStart.toISOString())}</Text>
+                          </View>
                         </TouchableOpacity>
                         {showEditDate && (
                           <View style={[detailStyles.inlinePickerWrap, { borderColor: bdr, backgroundColor: bg }]}>
@@ -3287,9 +3482,15 @@ export default function CalendarScreen() {
                           onPress={() => setShowEditTypeMenu(s => !s)}
                           activeOpacity={0.7}
                         >
-                          <Text style={{ color: txt, fontSize: 14 }}>
-                            {(EVENT_TYPES.find(t => t.id === editType)?.icon || '👥')} {editType}
-                          </Text>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                            {(() => {
+                              const t = EVENT_TYPES.find(t => t.id === editType);
+                              return (
+                                <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: t?.color || '#6B7588' }} />
+                              );
+                            })()}
+                            <Text style={{ color: txt, fontSize: 14 }}>{editType}</Text>
+                          </View>
                           <Text style={{ color: sub, fontSize: 12 }}>{showEditTypeMenu ? '▲' : '▼'}</Text>
                         </TouchableOpacity>
                         {showEditTypeMenu && (
@@ -3300,7 +3501,10 @@ export default function CalendarScreen() {
                                 style={[detailStyles.dropdownItem, { borderBottomColor: bdr }, t.id === editType && { backgroundColor: 'rgba(59,114,238,0.08)' }]}
                                 onPress={() => { setEditType(t.id); setShowEditTypeMenu(false); }}
                               >
-                                <Text style={{ color: txt, fontSize: 14 }}>{t.icon} {t.label}</Text>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                  <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: t.color }} />
+                                  <Text style={{ color: txt, fontSize: 14 }}>{t.label}</Text>
+                                </View>
                                 {t.id === editType && <Text style={{ color: '#3B72EE', fontWeight: '700' }}>✓</Text>}
                               </TouchableOpacity>
                             ))}
@@ -3314,7 +3518,9 @@ export default function CalendarScreen() {
                         onPress={() => setEditOnline(v => !v)}
                         activeOpacity={0.7}
                       >
-                        <Text style={{ fontSize: 16 }}>📹</Text>
+                        <Svg width={18} height={18} viewBox="0 0 24 24" fill="none" style={{ marginRight: 10 }}>
+                          <Path d="M15 10l4.553-2.276A1 1 0 0121 8.723v6.554a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" stroke={editOnline ? '#3B72EE' : sub} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+                        </Svg>
                         <Text style={{ flex: 1, color: txt, fontSize: 14 }}>Online meeting</Text>
                         <View style={[detailStyles.toggleSwitch, editOnline && { backgroundColor: '#3B72EE' }]}>
                           <View style={[detailStyles.toggleKnob, editOnline && { transform: [{ translateX: 16 }] }]} />
@@ -3419,21 +3625,27 @@ export default function CalendarScreen() {
                             setTimeout(() => deleteEvent(id), 100);
                           }}
                         >
-                          <Text style={detailStyles.btnDangerText}>🗑 Delete</Text>
+                          <Text style={detailStyles.btnDangerText}>
+                            <Svg width={13} height={13} viewBox="0 0 24 24" fill="none">
+                              <Path d="M3 6h18M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" stroke="#EF4444" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+                            </Svg>
+                            {"  Delete"}
+                          </Text>
                         </TouchableOpacity>
                       )}
-                      <TouchableOpacity
-                        style={[detailStyles.btn, detailStyles.btnSecondary, { borderColor: bdr }]}
-                        onPress={closeEventDetail}
-                      >
-                        <Text style={[detailStyles.btnSecondaryText, { color: txt }]}>Close</Text>
-                      </TouchableOpacity>
+
                       {isOrganizer && (
                         <TouchableOpacity
                           style={[detailStyles.btn, detailStyles.btnPrimary]}
                           onPress={startEditMode}
                         >
-                          <Text style={detailStyles.btnPrimaryText}>✏️ Edit</Text>
+                          <Text style={detailStyles.btnPrimaryText}>
+                            <Svg width={13} height={13} viewBox="0 0 24 24" fill="none">
+                              <Path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+                              <Path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+                            </Svg>
+                            {"  Edit"}
+                          </Text>
                         </TouchableOpacity>
                       )}
                     </>
@@ -3771,7 +3983,7 @@ const ad = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: '#8B5CF6',   // purple like web
+    backgroundColor: '#0000CD',
     borderRadius: 8,
     paddingHorizontal: 10,
     height: 34,
@@ -3946,7 +4158,7 @@ const styles = StyleSheet.create({
   miniDatesGrid: { flexDirection: 'row', flexWrap: 'wrap' },
   miniDateCell: { width: '14.28%', alignItems: 'center', paddingVertical: 3 },
   miniDateCircle: { width: 30, height: 30, borderRadius: 15, justifyContent: 'center', alignItems: 'center' },
-  miniDateToday: { backgroundColor: '#1A1A2E' },
+  miniDateToday: { backgroundColor: '#2952C4' },
   miniDateSelected: { borderWidth: 1.5, borderColor: '#3B72EE' },
   miniDateText: { fontSize: 13, fontWeight: '500' },
   miniDot: { width: 4, height: 4, borderRadius: 2, backgroundColor: '#3B72EE', marginTop: 1 },
@@ -4015,7 +4227,7 @@ const styles = StyleSheet.create({
 
   // Modal
   overlay: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.45)' },
-  topPanel: { position: 'absolute', top: 0, left: 0, right: 0, backgroundColor: '#fff', borderBottomLeftRadius: 24, borderBottomRightRadius: 24, maxHeight: '92%', paddingTop: Platform.OS === 'ios' ? 44 : (StatusBar.currentHeight || 24), shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 16, elevation: 20 },
+  topPanel: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '92%', shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.12, shadowRadius: 16, elevation: 20 },
   handle: { width: 40, height: 4, backgroundColor: '#DEDEE8', borderRadius: 2, alignSelf: 'center', marginTop: 8, marginBottom: 4 },
   panelScroll: { paddingHorizontal: 20 },
   panelHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, marginTop: 4 },
@@ -4393,8 +4605,8 @@ const detailStyles = StyleSheet.create({
     flex: 1, height: 44, borderRadius: 10,
     justifyContent: 'center', alignItems: 'center',
   },
-  btnPrimary: { backgroundColor: '#1A1A2E' },
-  btnPrimaryText: { color: '#fff', fontSize: 14, fontWeight: '700' },
+  btnPrimary: { backgroundColor: '#EEF3FF' },
+  btnPrimaryText: { color: '#3B72EE', fontSize: 14, fontWeight: '700' },
   btnSecondary: { borderWidth: 1, backgroundColor: 'transparent' },
   btnSecondaryText: { fontSize: 14, fontWeight: '600' },
   btnDanger: { backgroundColor: 'rgba(239,68,68,0.10)' },

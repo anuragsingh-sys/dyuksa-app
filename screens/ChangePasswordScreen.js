@@ -8,7 +8,7 @@ import { useNavigation } from '@react-navigation/native';
 import { ThemeContext } from '../context/ThemeContext';
 import { AuthContext } from '../context/AuthContext';
 import { getAccessToken } from '../services/ApiService';
-import { BASE_URL } from '../config';
+import { API_BASE } from '../config';
 import Svg, { Path } from 'react-native-svg';
 
 const ACCENT = '#3B72EE';
@@ -32,6 +32,7 @@ export default function ChangePasswordScreen() {
   const navigation = useNavigation();
   const insets     = useSafeAreaInsets();
   const { theme }  = useContext(ThemeContext);
+  const { user }   = useContext(AuthContext);
   const isDark = theme === 'Dark';
 
   const bg      = isDark ? '#0D0D0F' : '#F7F8FB';
@@ -66,10 +67,15 @@ export default function ChangePasswordScreen() {
     setLoading(true);
     try {
       const token = await getAccessToken();
-      const res = await fetch(`${BASE_URL}/auth/change-password/`, {
+      const res = await fetch(`${API_BASE}/api/v1/auth/reset-password/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ old_password: current, new_password: next, confirm_password: confirm }),
+        body: JSON.stringify({
+          username: user?.username || '',
+          old_password: current,
+          new_password: next,
+          confirm_new_password: confirm,
+        }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));

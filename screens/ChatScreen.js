@@ -14,8 +14,9 @@ import WebSocketService from '../services/WebSocketService';
 import SidebarMenu from '../components/SidebarMenu';
 import NotificationBell from '../components/NotificationBell';
 
-import { API_BASE, BASE_URL, WS_BASE } from '../config';
-// const BASE_URL → imported from config
+import { BASE_URL } from '../config';
+
+const ACCENT = '#3B72EE';
 
 const authHeaders = async () => {
   const token = await getAccessToken();
@@ -250,7 +251,7 @@ const getSenderUsername = (msg) => {
 };
 
 function MessageBubble({ msg, isMine, isDark, sub, allUsers }) {
-  const bg       = isMine ? '#5B8FF5' : (isDark ? '#252530' : '#FFFFFF');
+  const bg       = isMine ? ACCENT : (isDark ? '#252530' : '#FFFFFF');
   const txtColor = isMine ? '#fff' : (isDark ? '#fff' : '#1A1A2E');
   const content  = stripHtml(msg.content || msg.content_preview || '');
   const senderUsername = getSenderUsername(msg);
@@ -288,7 +289,7 @@ function MessageBubble({ msg, isMine, isDark, sub, allUsers }) {
 // ── Main Screen ───────────────────────────────────────────────────────────────
 export default function ChatScreen({ route }) {
   const navigation = useNavigation();
-  const { theme, fontScale } = useContext(ThemeContext);
+  const { theme } = useContext(ThemeContext);
   const { user } = useContext(AuthContext);
   const isDark = theme === 'Dark';
   const bg   = isDark ? '#0D0D0F' : '#F5F5F7';
@@ -312,7 +313,7 @@ export default function ChatScreen({ route }) {
 
   // ── Handle navigation params (from notification tap) ──────────────
   useEffect(() => {
-    if (route?.params?.roomId) {
+    if (route?.params?.roomId && route.params.roomId !== activeRoom?.id) {
       const room = rooms.find(r => r.id === route.params.roomId);
       if (room) openRoom(room);
     }
@@ -342,7 +343,7 @@ export default function ChatScreen({ route }) {
     }
   }, []);
 
-  useFocusEffect(useCallback(() => { fetchRooms(); fetchUsersForModal(); }, [fetchRooms, fetchUsersForModal]));
+  useFocusEffect(useCallback(() => { fetchRooms(); fetchUsersForModal(); }, []));
 
   // ── Fetch messages for a room ──────────────────────────────────────
   const fetchMessages = useCallback(async (roomId) => {
@@ -381,6 +382,9 @@ export default function ChatScreen({ route }) {
     setInput('');
     setView('messages');
     fetchMessages(room.id);
+    if (route?.params?.roomId !== room.id) {
+      navigation.setParams({ roomId: room.id });
+    }
     // Mark room as read locally
     setRooms(prev => prev.map(r => r.id === room.id ? { ...r, unread_count: 0 } : r));
   };
@@ -490,7 +494,7 @@ export default function ChatScreen({ route }) {
     return () => unsubscribe();
   }, [activeRoom, user]);
 
-  const [activeTab, setActiveTab] = useState('all'); // 'all' | 'channels' | 'teams' | 'direct'
+  const [activeTab, setActiveTab] = useState('all'); // 'all' | 'channels' | 'direct' | 'unread'
 
   // ── New Group Chat Modal state ─────────────────────────────────────
   const [showNewChat,    setShowNewChat]    = useState(false);
@@ -602,9 +606,9 @@ export default function ChatScreen({ route }) {
       ? rooms.filter(r => (r.name || '').toLowerCase().includes(search.toLowerCase()))
       : rooms;
     switch (tab) {
-      case 'channels': return base.filter(r => r.room_type === 'project' || r.room_type === 'thread');
-      case 'teams':    return base.filter(r => r.room_type === 'team');
+      case 'channels': return base.filter(r => r.room_type === 'project' || r.room_type === 'thread' || r.room_type === 'team');
       case 'direct':   return base.filter(r => r.room_type === 'private');
+      case 'unread':   return base.filter(r => (r.unread_count || 0) > 0);
       default:         return base;
     }
   }, [rooms, search]);
@@ -614,10 +618,10 @@ export default function ChatScreen({ route }) {
   const displayedRooms = tabRooms(activeTab);
   const totalUnread   = rooms.reduce((s, r) => s + (r.unread_count || 0), 0);
 
-  const allCount      = rooms.length;
-  const channelsCount = rooms.filter(r => r.room_type === 'project' || r.room_type === 'thread').length;
-  const teamsCount    = rooms.filter(r => r.room_type === 'team').length;
-  const directCount   = rooms.filter(r => r.room_type === 'private').length;
+  // Unread counts per tab (shown as red badges)
+  const channelsUnread = rooms.filter(r => r.room_type === 'project' || r.room_type === 'thread' || r.room_type === 'team').reduce((s, r) => s + (r.unread_count || 0), 0);
+  const directUnread   = rooms.filter(r => r.room_type === 'private').reduce((s, r) => s + (r.unread_count || 0), 0);
+  const unreadCount    = totalUnread;
 
   // ── Group messages by date ─────────────────────────────────────────
   const groupedMessages = messages.reduce((acc, msg) => {
@@ -640,7 +644,7 @@ export default function ChatScreen({ route }) {
 
         {/* Chat header */}
         <View style={[styles.chatHeader, { backgroundColor: card, borderBottomColor: bdr }]}>
-          <TouchableOpacity onPress={() => setView('rooms')} style={styles.backBtn}>
+          <TouchableOpacity onPress={() => { setView('rooms'); setActiveRoom(null); navigation.setParams({ roomId: undefined }); }} style={styles.backBtn}>
             <Text style={{ color: '#3B72EE', fontSize: 24 }}>‹</Text>
           </TouchableOpacity>
           {/* Header avatar — show real photo for DMs */}
@@ -703,8 +707,8 @@ export default function ChatScreen({ route }) {
             <FlatList
               ref={flatRef}
               data={groupedMessages}
-              keyExtractor={(item, i) => item.date + i}
-              contentContainerStyle={{ padding: 12, paddingBottom: 90 }}
+              keyExtractor={(item, i) => `${item.date}-${i}`}
+              contentContainerStyle={{ padding: 12, paddingBottom: 16 }}
               showsVerticalScrollIndicator={false}
               onContentSizeChange={() => flatRef.current?.scrollToEnd({ animated: false })}
               renderItem={({ item: group }) => (
@@ -723,7 +727,7 @@ export default function ChatScreen({ route }) {
                       (typeof msg.sender === 'object' && msg.sender?.id === user?.id);
                     return (
                       <MessageBubble
-                        key={msg.id}
+                        key={msg.id ? String(msg.id) : `msg-${i}`}
                         msg={msg}
                         isMine={isMine}
                         isDark={isDark}
@@ -758,7 +762,7 @@ export default function ChatScreen({ route }) {
               blurOnSubmit={false}
             />
             <TouchableOpacity
-              style={[styles.sendBtn, { backgroundColor: input.trim() ? '#5B8FF5' : isDark ? '#252530' : '#E8EDF5' }]}
+              style={[styles.sendBtn, { backgroundColor: input.trim() ? ACCENT : isDark ? '#252530' : '#E8EDF5' }]}
               onPress={sendMessage}
               disabled={!input.trim() || sending}
             >
@@ -822,10 +826,10 @@ export default function ChatScreen({ route }) {
       <View style={{ paddingHorizontal: 12, paddingVertical: 10, backgroundColor: isDark ? '#0D0D0F' : '#F2F3F7', borderBottomWidth: 1, borderBottomColor: bdr }}>
         <View style={{ flexDirection: 'row', backgroundColor: isDark ? '#252530' : '#E8E8EE', borderRadius: 22, padding: 3 }}>
           {[
-            { key: 'all',      label: 'All',      count: allCount },
-            { key: 'channels', label: 'Channels', count: null },
-            { key: 'teams',    label: 'Teams',    count: null },
-            { key: 'direct',   label: 'Direct',   count: null },
+            { key: 'all',      label: 'All',      count: totalUnread },
+            { key: 'channels', label: 'Channels', count: channelsUnread },
+            { key: 'direct',   label: 'Direct',   count: directUnread },
+            { key: 'unread',   label: 'Unread',   count: unreadCount },
           ].map(tab => {
             const isActive = activeTab === tab.key;
             return (
@@ -847,9 +851,11 @@ export default function ChatScreen({ route }) {
                   {tab.label}
                 </Text>
                 {tab.count > 0 && (
-                  <Text style={{ fontSize: 12, fontWeight: '500', color: isActive ? (isDark ? '#9898A6' : '#888') : sub }}>
-                    {tab.count}
-                  </Text>
+                  <View style={{ minWidth: 16, height: 16, paddingHorizontal: 4, borderRadius: 8, backgroundColor: '#EF4444', alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={{ fontSize: 9, fontWeight: '700', color: '#fff' }}>
+                      {tab.count > 99 ? '99+' : tab.count}
+                    </Text>
+                  </View>
                 )}
               </TouchableOpacity>
             );
@@ -876,7 +882,7 @@ export default function ChatScreen({ route }) {
                 ...pinnedInTab.map(r => ({ ...r, _type: 'room' })),
               ] : []),
               ...(nonFavTabRooms.length > 0 ? [
-                { _type: 'section', label: activeTab === 'all' ? 'RECENT' : activeTab === 'channels' ? 'ALL CHANNELS' : activeTab === 'teams' ? 'ALL TEAMS' : 'ALL DIRECT', _key: `sec_${activeTab}` },
+                { _type: 'section', label: activeTab === 'all' ? 'RECENT' : activeTab === 'channels' ? 'ALL CHANNELS' : activeTab === 'unread' ? 'UNREAD' : 'ALL DIRECT', _key: `sec_${activeTab}` },
                 ...nonFavTabRooms.map(r => ({ ...r, _type: 'room' })),
               ] : []),
             ];
@@ -916,13 +922,6 @@ export default function ChatScreen({ route }) {
           }}
         />
       )}
-      {/* FAB */}
-      <TouchableOpacity
-        style={{ position: 'absolute', right: 18, bottom: 24, width: 62, height: 62, borderRadius: 31, backgroundColor: '#3B82F6', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.25, shadowRadius: 10, elevation: 8 }}
-        onPress={openNewChatModal}
-      >
-        <Text style={{ color: '#fff', fontSize: 36, fontWeight: '300', lineHeight: 42, marginTop: -2 }}>+</Text>
-      </TouchableOpacity>
       </View>
 
       {/* ── New Team Chat Modal ──────────────────────────────────────── */}

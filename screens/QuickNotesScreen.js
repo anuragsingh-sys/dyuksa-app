@@ -12,7 +12,12 @@ import SidebarMenu from '../components/SidebarMenu';
 import NotificationBell from '../components/NotificationBell';
 import { getAccessToken } from '../services/ApiService';
 import Svg, { Path, Rect } from 'react-native-svg';
-import { API_BASE } from '../config';
+import { BASE_URL } from '../config';
+import { getWorkspaceId } from '../services/ApiService';
+
+// ── DocumentPicker — lazy load so screen works without the package ───────────
+let DocumentPicker = null;
+try { DocumentPicker = require('expo-document-picker'); } catch {}
 
 // ── Module-level cache ────────────────────────────────────────────────────────
 let _cachedFolders = [];
@@ -117,6 +122,10 @@ export default function QuickNotesScreen() {
   const [savingNote,   setSavingNote]   = useState(false);
   const [notePicker,   setNotePicker]   = useState(null);
 
+  // ── Attachment state ─────────────────────────────────────────────────────────
+  const [attachments,     setAttachments]     = useState([]);  // attachments for current note
+  const [uploadingAttach, setUploadingAttach] = useState(false);
+
   // ── Full-screen editor state ───────────────────────────────────────────────
   const [editorView,   setEditorView]   = useState(false); // full screen editor
   const [editorNote,   setEditorNote]   = useState(null);  // null = new note
@@ -150,11 +159,15 @@ export default function QuickNotesScreen() {
     setLoading(true);
     try {
       const token = await getAccessToken();
-      const headers = { Authorization: `Bearer ${token}` };
+      const wsId  = await getWorkspaceId();
+      const headers = {
+        Authorization: `Bearer ${token}`,
+        ...(wsId ? { 'X-Workspace-ID': String(wsId) } : {}),
+      };
       const [fRes, nRes, pRes] = await Promise.all([
-        fetch(`${API_BASE}/api/v1/quicknotes/folders/`, { headers }),
-        fetch(`${API_BASE}/api/v1/quicknotes/notes/`,   { headers }),
-        fetch(`${API_BASE}/api/v1/projects/`,            { headers }),
+        fetch(`${BASE_URL}/quicknotes/folders/`, { headers }),
+        fetch(`${BASE_URL}/quicknotes/notes/`,   { headers }),
+        fetch(`${BASE_URL}/projects/`,            { headers }),
       ]);
       if (fRes.ok) {
         const fd = await fRes.json();
@@ -215,29 +228,38 @@ export default function QuickNotesScreen() {
   // ── Save Note ─────────────────────────────────────────────────────────────
   const saveNote = async () => {
     const body = draftContent.trim();
-    if (!body)         { Alert.alert('Empty', 'Type something to save.'); return; }
-    if (!draftFolder)  { Alert.alert('Missing', 'Select a folder.'); return; }
-    if (!draftProject) { Alert.alert('Missing', 'Select a project.'); return; }
+    if (!body) { Alert.alert('Empty', 'Type something to save.'); return; }
     setSavingNote(true);
     try {
       const token = await getAccessToken();
+      const wsId  = await getWorkspaceId();
+      const hdrs  = {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        ...(wsId ? { 'X-Workspace-ID': String(wsId) } : {}),
+      };
+      const noteTitle = (draftTitle || '').trim() || body.substring(0, body.indexOf('\n') > 0 ? body.indexOf('\n') : 80).slice(0, 80) || 'Untitled';
+      const noteBody  = {
+        title:   noteTitle,
+        content: body,
+        ...(draftFolder  ? { folder:  draftFolder  } : {}),
+        ...(draftProject ? { project: draftProject } : {}),
+      };
       if (editorNote) {
-        // Edit existing
-        const res = await fetch(`${API_BASE}/api/v1/quicknotes/notes/${editorNote.id}/`, {
+        const res = await fetch(`${BASE_URL}/quicknotes/notes/${editorNote.id}/`, {
           method: 'PATCH',
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: body, folder: draftFolder, project: draftProject }),
+          headers: hdrs,
+          body: JSON.stringify(noteBody),
         });
         if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || JSON.stringify(e)); }
         const updated_note = await res.json();
         const updated = notes.map(n => n.id === updated_note.id ? updated_note : n);
         _cachedNotes = updated; _notesFetchedAt = Date.now(); setNotes(updated);
       } else {
-        // Create new
-        const res = await fetch(`${API_BASE}/api/v1/quicknotes/notes/`, {
+        const res = await fetch(`${BASE_URL}/quicknotes/notes/`, {
           method: 'POST',
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: body, folder: draftFolder, project: draftProject }),
+          headers: hdrs,
+          body: JSON.stringify(noteBody),
         });
         if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || JSON.stringify(e)); }
         const created = await res.json();
@@ -259,9 +281,14 @@ export default function QuickNotesScreen() {
     setSavingFolder(true);
     try {
       const token = await getAccessToken();
-      const res = await fetch(`${API_BASE}/api/v1/quicknotes/folders/`, {
+      const wsId  = await getWorkspaceId();
+      const res = await fetch(`${BASE_URL}/quicknotes/folders/`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          ...(wsId ? { 'X-Workspace-ID': String(wsId) } : {}),
+        },
         body: JSON.stringify({ name }),
       });
       if (!res.ok) {
@@ -286,6 +313,7 @@ export default function QuickNotesScreen() {
     setDraftTitle('');
     setNotePicker(null);
     setEditorNote(null);
+    setAttachments([]);
     setEditorView(true);
     setTimeout(() => contentInputRef.current?.focus(), 200);
   };
@@ -297,7 +325,69 @@ export default function QuickNotesScreen() {
     setDraftFolder(note.folder || draftFolder);
     setDraftProject(note.project || draftProject);
     setNotePicker(null);
+    setAttachments(note.attachments || []);
     setEditorView(true);
+  };
+
+  // ── Attachment upload ────────────────────────────────────────────────────────
+  // POST /api/v1/quicknotes/attachments/
+  // Body: multipart form-data { note: <id>, file: <file> }
+  const pickAndUploadAttachment = async () => {
+    if (!editorNote) {
+      Alert.alert('Save first', 'Please save the note before adding attachments.');
+      return;
+    }
+    if (!DocumentPicker) {
+      Alert.alert('Not available', 'expo-document-picker is not installed.');
+      return;
+    }
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (result.canceled) return;
+      const asset = result.assets?.[0] || result;
+      setUploadingAttach(true);
+      const token = await getAccessToken();
+      const wsId  = await getWorkspaceId();
+      const form  = new FormData();
+      form.append('note', String(editorNote.id));
+      form.append('file', {
+        uri:  asset.uri,
+        name: asset.name || 'attachment',
+        type: asset.mimeType || 'application/octet-stream',
+      });
+      const res = await fetch(`${BASE_URL}/quicknotes/attachments/`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(wsId ? { 'X-Workspace-ID': String(wsId) } : {}),
+          // No Content-Type — let fetch set multipart/form-data boundary
+        },
+        body: form,
+      });
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}));
+        throw new Error(e.detail || e.message || `Upload failed (${res.status})`);
+      }
+      const created = await res.json();
+      // { id, note, file (S3 URL), filename, created_at }
+      setAttachments(prev => [...prev, created]);
+      // Also update the note in cache so attachments persist
+      const updatedNotes = notes.map(n =>
+        n.id === editorNote.id
+          ? { ...n, attachments: [...(n.attachments || []), created] }
+          : n
+      );
+      _cachedNotes = updatedNotes;
+      setNotes(updatedNotes);
+    } catch (e) {
+      Alert.alert('Upload failed', e.message || 'Try again.');
+    } finally {
+      setUploadingAttach(false);
+    }
   };
 
   const closeEditor = () => {
@@ -620,6 +710,36 @@ export default function QuickNotesScreen() {
                 editable={!savingNote}
               />
 
+              {/* ── Attachments ── */}
+              {(attachments.length > 0 || uploadingAttach) && (
+                <View style={{ marginTop: 12 }}>
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: sub, letterSpacing: 0.5, marginBottom: 8 }}>ATTACHMENTS</Text>
+                  {attachments.map(a => (
+                    <TouchableOpacity
+                      key={a.id}
+                      style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, paddingHorizontal: 12, backgroundColor: isDark ? '#1A1A20' : '#F5F5F7', borderRadius: 10, marginBottom: 6 }}
+                      onPress={() => {
+                        const url = a.file;
+                        if (url) require('react-native').Linking.openURL(url).catch(() => {});
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
+                        <Path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" stroke="#3B72EE" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+                      </Svg>
+                      <Text style={{ flex: 1, fontSize: 13, color: txt, fontWeight: '500' }} numberOfLines={1}>{a.filename || 'Attachment'}</Text>
+                      <Text style={{ fontSize: 11, color: sub }}>{a.created_at ? new Date(a.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : ''}</Text>
+                    </TouchableOpacity>
+                  ))}
+                  {uploadingAttach && (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, paddingHorizontal: 12, backgroundColor: isDark ? '#1A1A20' : '#F5F5F7', borderRadius: 10 }}>
+                      <ActivityIndicator size="small" color="#3B72EE" />
+                      <Text style={{ fontSize: 13, color: sub }}>Uploading…</Text>
+                    </View>
+                  )}
+                </View>
+              )}
+
               <View style={{ height: 120 }} />
             </ScrollView>
 
@@ -631,7 +751,7 @@ export default function QuickNotesScreen() {
                   { label: 'I',   style: { fontSize: 18, fontStyle: 'italic', color: txt }, onPress: () => insertAtCursor('_', '_') },
                   { label: '≡',   style: { fontSize: 24, color: txt }, onPress: () => insertAtCursor('\n• ') },
                   { label: '☑',   style: { fontSize: 18, color: txt }, onPress: () => insertAtCursor('\n☐ ') },
-                  { label: '📎',  style: { fontSize: 18 }, onPress: () => {} },
+                  { label: '📎',  style: { fontSize: 18 }, onPress: pickAndUploadAttachment },
                   { label: '🔗',  style: { fontSize: 18 }, onPress: () => insertAtCursor('[', '](url)') },
                 ].map((btn, i) => (
                   <TouchableOpacity key={i} style={{ paddingHorizontal: 12, paddingVertical: 6 }} onPress={btn.onPress}>

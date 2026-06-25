@@ -12,7 +12,7 @@ import { AuthContext } from '../context/AuthContext';
 import { getAccessToken, getWorkspaceId } from '../services/ApiService';
 import SidebarMenu from '../components/SidebarMenu';
 import NotificationBell from '../components/NotificationBell';
-import { BASE_URL, API_BASE } from '../config';
+import { BASE_URL } from '../config';
 import { Feather } from '@expo/vector-icons';
 import { useTasksCache } from '../hooks/useTasksCache';
 
@@ -189,8 +189,8 @@ export default function DashboardScreen() {
       const headers = await authHeaders();
 
       const [projectsRes, docsRes] = await Promise.all([
-        fetch(`${API_BASE}/api/v1/projects/?page_size=20`, { headers }),
-        fetch(`${API_BASE}/api/v1/documents/?page_size=10`, { headers }),
+        fetch(`${BASE_URL}/projects/?page_size=20`, { headers }),
+        fetch(`${BASE_URL}/documents/?page_size=10`, { headers }),
       ]);
 
       if (projectsRes.ok) {
@@ -360,7 +360,7 @@ export default function DashboardScreen() {
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <SafeAreaView style={[s.safe, { backgroundColor: isDark ? '#0D0D0F' : T.surfaceAlt }]} edges={['top', 'left', 'right']}>
-      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={isDark ? '#1A1A20' : '#FFFFFF'} translucent={false} />
 
       {/* Navbar */}
       <View style={[s.navbar, { backgroundColor: isDark ? '#1A1A20' : T.surface, borderBottomColor: isDark ? '#252530' : T.hairline }]}>

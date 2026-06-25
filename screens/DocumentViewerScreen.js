@@ -9,7 +9,7 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import { WebView } from 'react-native-webview';
 import { ThemeContext } from '../context/ThemeContext';
 import { getAccessToken, getWorkspaceId } from '../services/ApiService';
-import { BASE_URL, API_BASE } from '../config';
+import { API_BASE } from '../config';
 
 // ── Light viewer tokens ───────────────────────────────────────────────────────
 const DK = {
@@ -77,7 +77,7 @@ export default function DocumentViewerScreen() {
     (async () => {
       try {
         const headers = await authHeaders();
-        const res = await fetch(`${BASE_URL}/documents/${docId}/`, { headers });
+        const res = await fetch(`${API_BASE}/api/v1/documents/${docId}/`, { headers });
         if (res.ok) setDoc(await res.json());
       } catch (e) { console.warn('fetchDoc:', e.message); }
       finally { setLoading(false); }

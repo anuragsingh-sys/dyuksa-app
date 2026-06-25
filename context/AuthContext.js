@@ -4,7 +4,7 @@ import { setCachedToken, clearTokenCache } from '../services/ApiService';
 import { invalidateTasksCache } from '../hooks/useTasksCache';
 import WebSocketService from '../services/WebSocketService';
 
-import { API_BASE, BASE_URL, WS_BASE } from '../config';
+import { BASE_URL } from '../config';
 const AUTH_TOKEN_KEY     = 'DYUKSA_AUTH_TOKEN';
 const AUTH_REFRESH_KEY   = 'DYUKSA_REFRESH_TOKEN';
 const AUTH_USER_KEY      = 'DYUKSA_AUTH_USER';

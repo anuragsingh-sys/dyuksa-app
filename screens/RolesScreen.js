@@ -9,7 +9,6 @@ import { ThemeContext } from '../context/ThemeContext';
 import { AuthContext } from '../context/AuthContext';
 import { getAccessToken, getWorkspaceId } from '../services/ApiService';
 import { BASE_URL } from '../config';
-import Svg, { Path } from 'react-native-svg';
 
 const ROLE_COLORS = {
   admin:     { bg: '#FEE2E2', txt: '#991B1B', label: 'Admin' },
@@ -97,7 +96,7 @@ export default function RolesScreen() {
     setSaving(true);
     try {
       const headers = await authHeaders();
-      const res = await fetch(`${BASE_URL}/auth/users/${editUser.id}/`, {
+      const res = await fetch(`${BASE_URL}/auth/update-role/${editUser.id}/`, {
         method: 'PATCH',
         headers,
         body: JSON.stringify({ role: newRole }),
@@ -178,10 +177,7 @@ export default function RolesScreen() {
       {/* Search */}
       <View style={{ paddingHorizontal: 12, paddingVertical: 8 }}>
         <View style={[styles.searchWrap, { backgroundColor: card, borderColor: bdr }]}>
-          <Svg width={14} height={14} viewBox="0 0 24 24" fill="none">
-            <Path d="M11 19C15.4183 19 19 15.4183 19 11C19 6.58172 15.4183 3 11 3C6.58172 3 3 6.58172 3 11C3 15.4183 6.58172 19 11 19Z" stroke="#9AA3B2" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
-            <Path d="M21 21L16.65 16.65" stroke="#9AA3B2" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
-          </Svg>
+          <Text style={{ marginRight: 6, fontSize: 14 }}>🔍</Text>
           <TextInput
             style={[styles.searchInput, { color: txt, fontSize: fs(13) }]}
             placeholder="Search users…"

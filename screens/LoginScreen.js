@@ -98,16 +98,16 @@ export default function LoginScreen({ navigation }) {
           )}
 
           {/* Username */}
-          <Text style={s.label}>Work email</Text>
+          <Text style={s.label}>Username</Text>
           <TextInput
             style={[s.input, !!fieldErrors.username && { borderColor: '#EF4444' }]}
-            placeholder="you@dyuksa.com"
+            placeholder="Enter your username"
             placeholderTextColor="#9AA3B2"
             value={username}
             onChangeText={t => { setUsername(t); setFieldErrors(f => ({ ...f, username: '' })); }}
             autoCapitalize="none"
             autoComplete="username"
-            keyboardType="email-address"
+            keyboardType="default"
           />
           {!!fieldErrors.username && <Text style={s.fieldError}>{fieldErrors.username}</Text>}
 

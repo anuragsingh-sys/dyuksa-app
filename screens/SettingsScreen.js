@@ -10,8 +10,8 @@ import { AuthContext } from '../context/AuthContext';
 import { useWorkspace } from '../context/WorkspaceContext';
 import SidebarMenu from '../components/SidebarMenu';
 import NotificationBell from '../components/NotificationBell';
-import { getAccessToken } from '../services/ApiService';
-import { API_BASE } from '../config';
+import { getAccessToken, getTasks, getProjects } from '../services/ApiService';
+import { BASE_URL } from '../config';
 import Svg, { Path, Circle, Rect, Polyline } from 'react-native-svg';
 import { useTasksCache } from '../hooks/useTasksCache';
 
@@ -93,18 +93,67 @@ export default function SettingsScreen() {
   const userRole  = user?.role || 'member';
   const initials  = userName.split(' ').slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || '?';
 
-  // Stats
-  const myTasks    = tasks.filter(t => user?.id && Array.isArray(t.assigned_to) && t.assigned_to.some(id => String(id) === String(user.id)));
-  const taskCount  = myTasks.length;
-  const projIds    = [...new Set(myTasks.map(t => t.project_details?.id || t.project).filter(Boolean))];
-  const projCount  = projIds.length;
+  // Stats — fetch fresh so counts show even if the Tasks screen wasn't visited
+  const [fetchedTasks, setFetchedTasks] = useState(null);
+  const [allProjects,  setAllProjects]  = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    getTasks()
+      .then(list => {
+        if (alive) setFetchedTasks(Array.isArray(list) ? list : []);
+      })
+      .catch(() => {});
+    getProjects()
+      .then(list => {
+        if (alive) setAllProjects(Array.isArray(list) ? list : []);
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [currentWorkspace?.id]);
+
+  // Prefer freshly fetched tasks; fall back to the shared cache
+  const allTasks   = fetchedTasks ?? tasks;
+
+  // Robust "is this task mine?" check — matches TasksScreen logic
+  const myId    = user?.id;
+  const myEmail = (user?.email || '').toLowerCase();
+  const myUname = (user?.username || user?.name || '').toLowerCase();
+  const isMyTask = (task) => {
+    const ids = task.assigned_to || [];
+    if (myId != null && Array.isArray(ids) && ids.some(x => String(x?.id ?? x) === String(myId))) return true;
+    const details = task.assigned_to_user_details || [];
+    return Array.isArray(details) && details.some(u => {
+      if (myId != null && String(u.id) === String(myId)) return true;
+      if (myEmail && (u.email || '').toLowerCase() === myEmail) return true;
+      if (myUname && (u.username || '').toLowerCase() === myUname) return true;
+      return false;
+    });
+  };
+
+  const myTasks   = allTasks.filter(isMyTask);
+  const taskCount = myTasks.length;
+
+  // Projects the user is part of: union of projects from their tasks + projects where they're a member
+  const taskProjIds = myTasks.map(t => t.project_details?.id || t.project).filter(Boolean);
+  const memberProjIds = (allProjects || []).filter(p => {
+    const mems = p.members || p.members_details || p.team_members || [];
+    return Array.isArray(mems) && mems.some(m => {
+      const mid = m?.id ?? m;
+      const memail = (m?.email || '').toLowerCase();
+      const muname = (m?.username || '').toLowerCase();
+      return String(mid) === String(myId) || (myEmail && memail === myEmail) || (myUname && muname === myUname);
+    });
+  }).map(p => p.id);
+  const projIds   = [...new Set([...taskProjIds, ...memberProjIds])];
+  const projCount = projIds.length;
 
   // Members count
   const [memberCount, setMemberCount] = useState(null);
   useEffect(() => {
     if (!currentWorkspace?.id) return;
     getAccessToken().then(token => {
-      fetch(`${API_BASE}/api/v1/organizations/workspaces/${currentWorkspace.id}/members/`, {
+      fetch(`${BASE_URL}/organizations/workspaces/${currentWorkspace.id}/members/`, {
         headers: { Authorization: `Bearer ${token}` },
       }).then(r => r.ok ? r.json() : null).then(d => {
         if (d) setMemberCount(Array.isArray(d) ? d.length : (d.members?.length || d.count || null));
@@ -145,7 +194,7 @@ export default function SettingsScreen() {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 90 }}
+        contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 40 }}
       >
         {/* ── Profile card ── */}
         <View style={[styles.profileCard, { backgroundColor: card, borderColor: bdr }]}>
@@ -208,7 +257,32 @@ export default function SettingsScreen() {
         {/* ── APPEARANCE ── */}
         <Section title="APPEARANCE" sub={sub} />
         <View style={[styles.card, { backgroundColor: card, borderColor: bdr }]}>
-          <Row iconName="star"    iconBg={purple.bg}  iconColor={purple.color} label="Theme"         value={theme}    onPress={() => setTheme(isDark ? 'Light' : 'Dark')} isDark={isDark} bdr={bdr} txt={txt} sub={sub} />
+          {/* Theme row — custom toggle switch (blue = dark, gray = light) */}
+          <TouchableOpacity
+            onPress={() => setTheme(isDark ? 'Light' : 'Dark')}
+            activeOpacity={0.75}
+            style={[styles.row, { borderBottomWidth: 1, borderBottomColor: isDark ? '#252530' : '#F0F2F6' }]}
+          >
+            <View style={[styles.rowIcon, { backgroundColor: purple.bg }]}>
+              <Icon name="star" color={purple.color} size={17} />
+            </View>
+            <Text style={[styles.rowLabel, { color: txt }]}>Theme</Text>
+            {/* Sliding toggle: track blue when dark, gray when light */}
+            <View style={{
+              width: 44, height: 26, borderRadius: 13,
+              backgroundColor: isDark ? ACCENT : '#D1D5DB',
+              justifyContent: 'center',
+              paddingHorizontal: 3,
+            }}>
+              <View style={{
+                width: 20, height: 20, borderRadius: 10,
+                backgroundColor: '#FFFFFF',
+                transform: [{ translateX: isDark ? 18 : 0 }],
+                shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
+                shadowOpacity: 0.2, shadowRadius: 2, elevation: 2,
+              }} />
+            </View>
+          </TouchableOpacity>
           <Row iconName="palette" iconBg={blue.bg}    iconColor={blue.color}   label="Accent color"  value="Blue"     onPress={() => {}} isDark={isDark} bdr={bdr} txt={txt} sub={sub} />
           <Row iconName="globe"   iconBg={green.bg}   iconColor={green.color}  label="Language"      value="English"  onPress={() => {}} isDark={isDark} bdr={bdr} txt={txt} sub={sub} isLast />
         </View>
