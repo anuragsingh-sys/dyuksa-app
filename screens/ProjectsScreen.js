@@ -33,6 +33,13 @@ const TASK_STATUS_LABELS = { pending: 'Pending', in_progress: 'In Progress', com
 const TASK_STATUS_COLORS = { pending: '#888899', in_progress: '#4ECDC4', completed: '#4ADE80', backlog: '#F472B6', deployed: '#3B82F6', deferred: '#FBBF24', review: '#A78BFA' };
 const PRIORITY_COLORS = { low: '#4ADE80', medium: '#FBBF24', high: '#F97316', urgent: '#EF4444' };
 
+// ── Module-level task count cache ────────────────────────────────────────────
+// Persists across re-renders and screen focus changes
+// Re-fetches only when cache is older than TASK_COUNT_TTL
+let _taskCountCache = null;       // { [projectId]: count }
+let _taskCountFetchedAt = 0;
+const TASK_COUNT_TTL = 5 * 60 * 1000; // 5 minutes
+
 // ── Token colours (from dev_1) ─────────────────────────────────────────────
 const T = {
   brand: '#2D6AE3', ink: '#0E1726', ink2: '#3B4658', ink3: '#6B7588', ink4: '#9AA3B2',
@@ -232,25 +239,34 @@ export default function ProjectsScreen() {
       const list = await getProjects();
       setProjects(list);
 
-      // Fetch tasks page by page and count per project by project_details.id
-      // We fetch all pages to get accurate counts across all projects
+      // Fetch task counts — use cache if fresh (< 5 min old)
       try {
-        const token = await getAccessToken();
-        const headers = { Authorization: `Bearer ${token}` };
-        const countMap = {};
-        let url = `${BASE_URL}/tasksite/`;
-        while (url) {
-          const r = await fetch(url, { headers });
-          if (!r.ok) break;
-          const d = await r.json();
-          const results = Array.isArray(d) ? d : (d.results || []);
-          results.forEach(t => {
-            const pid = String(t.project_details?.id ?? t.project ?? '');
-            if (pid) countMap[pid] = (countMap[pid] || 0) + 1;
-          });
-          url = d.next || null;
+        const now = Date.now();
+        if (_taskCountCache && (now - _taskCountFetchedAt) < TASK_COUNT_TTL) {
+          // Cache hit — use immediately, no network request
+          setTaskCountMap(_taskCountCache);
+        } else {
+          // Cache miss or stale — fetch all task pages
+          const token = await getAccessToken();
+          const headers = { Authorization: `Bearer ${token}` };
+          const countMap = {};
+          let url = `${BASE_URL}/tasksite/`;
+          while (url) {
+            const r = await fetch(url, { headers });
+            if (!r.ok) break;
+            const d = await r.json();
+            const results = Array.isArray(d) ? d : (d.results || []);
+            results.forEach(t => {
+              const pid = String(t.project_details?.id ?? t.project ?? '');
+              if (pid) countMap[pid] = (countMap[pid] || 0) + 1;
+            });
+            url = d.next || null;
+          }
+          // Save to module-level cache
+          _taskCountCache = countMap;
+          _taskCountFetchedAt = now;
+          setTaskCountMap(countMap);
         }
-        setTaskCountMap(countMap);
       } catch {}
     } catch (e) {
       Alert.alert('Error', e.message || 'Could not load projects.');
@@ -430,7 +446,7 @@ export default function ProjectsScreen() {
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
-            onRefresh={() => { setRefreshing(true); fetchProjects(false); }}
+            onRefresh={() => { setRefreshing(true); _taskCountFetchedAt = 0; fetchProjects(false); }}
             tintColor={T.brand}
             colors={[T.brand]}
           />
