@@ -36,11 +36,10 @@ class WebSocketService {
     this._shouldConnect = false;
     this._clearReconnectTimer();
     if (this._ws) {
-      this._ws.onclose = null; // prevent reconnect loop
+      this._ws.onclose = null;
       this._ws.close();
       this._ws = null;
     }
-    console.log('🔌 WebSocket disconnected');
   }
 
   /** Register a listener for incoming messages. Returns unsubscribe fn. */
@@ -80,15 +79,11 @@ class WebSocketService {
     this._token = token;
 
     const url = `${WS_BASE}?token=${token}`;
-    console.log('🔌 WebSocket connecting…');
-
     try {
       const ws = new WebSocket(url);
-      this._ws = ws;
 
       ws.onopen = () => {
-        console.log('✅ WebSocket connected');
-        this._retryDelay = 2000; // reset backoff on success
+        this._retryDelay = 2000; 
       };
 
       ws.onmessage = (event) => {
@@ -106,7 +101,6 @@ class WebSocketService {
       };
 
       ws.onclose = (e) => {
-        console.log(`🔌 WebSocket closed (code ${e.code}). Reconnecting in ${this._retryDelay}ms…`);
         this._ws = null;
         if (this._shouldConnect) {
           this._scheduleReconnect(this._retryDelay);

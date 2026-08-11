@@ -14,38 +14,39 @@ import { BASE_URL } from './config';
 import { NotificationsProvider } from './context/NotificationsContext';
 import { AuthProvider, AuthContext } from './context/AuthContext';
 import { registerForPushNotifications, addNotificationListeners, rescheduleAllEvents } from './services/PushNotificationService';
+import { usePrefetch } from './hooks/usePrefetch';
 import { DataService } from './services/DataService';
 import { ThemeProvider, ThemeContext } from './context/ThemeContext';
 import { WorkspaceProvider, useWorkspace } from './context/WorkspaceContext';
 import ErrorBoundary from './components/ErrorBoundary';
-import OnboardingScreen, { ONBOARDING_KEY } from './screens/OnboardingScreen';
+import OnboardingScreen, { ONBOARDING_KEY } from './screens/Auth/OnboardingScreen';
 
-import LoginScreen            from './screens/LoginScreen';
-import SignupScreen            from './screens/SignupScreen';
-import ForgotPasswordScreen    from './screens/ForgotPasswordScreen';
-import TeamManagementScreen    from './screens/TeamManagementScreen';
-import EditProfileScreen       from './screens/EditProfileScreen';
-import ChangePasswordScreen    from './screens/ChangePasswordScreen';
-import DashboardScreen from './screens/DashboardScreen';
-import CalendarScreen  from './screens/CalendarScreen';
-import ProjectsScreen  from './screens/ProjectsScreen';
-import TasksScreen     from './screens/TasksScreen';
-import CreateTaskScreen from './screens/CreateTaskScreen';
-import DocumentsScreen from './screens/DocumentsScreen';
-import ChatScreen      from './screens/ChatScreen';
-import SettingsScreen  from './screens/SettingsScreen';
-import QuickNotesScreen      from './screens/QuickNotesScreen';
-import ProjectDetailScreen      from './screens/ProjectDetailScreen';
-import TaskDetailScreen         from './screens/TaskDetailScreen';
-import NotificationsScreen      from './screens/NotificationsScreen';
-import SearchScreen             from './screens/SearchScreen';
-import TeamScreen               from './screens/TeamScreen';
-import MyWorkScreen             from './screens/MyWorkScreen';
-import ReportsScreen            from './screens/ReportsScreen';
-import DocumentViewerScreen     from './screens/DocumentViewerScreen';
+import LoginScreen            from './screens/Auth/LoginScreen';
+import SignupScreen            from './screens/Auth/SignupScreen';
+import ForgotPasswordScreen    from './screens/Auth/ForgotPasswordScreen';
+import TeamManagementScreen    from './screens/Team/TeamManagementScreen';
+import EditProfileScreen       from './screens/Settings/EditProfileScreen';
+import ChangePasswordScreen    from './screens/Auth/ChangePasswordScreen';
+import DashboardScreen from './screens/Dashboard/DashboardScreen';
+import CalendarScreen  from './screens/Calendar/CalendarScreen';
+import ProjectsScreen  from './screens/Projects/ProjectsScreen';
+import TasksScreen     from './screens/Tasks/TasksScreen';
+import CreateTaskScreen from './screens/Tasks/CreateTaskScreen';
+import DocumentsScreen from './screens/Documents/DocumentsScreen';
+import ChatScreen      from './screens/Chat/ChatScreen';
+import SettingsScreen  from './screens/Settings/SettingsScreen';
+import QuickNotesScreen      from './screens/QuickNotes/QuickNotesScreen';
+import ProjectDetailScreen      from './screens/Projects/ProjectDetailScreen';
+import TaskDetailScreen         from './screens/Tasks/TaskDetailScreen';
+import NotificationsScreen      from './screens/Notifications/NotificationsScreen';
+import SearchScreen             from './screens/Search/SearchScreen';
+import TeamScreen               from './screens/Team/TeamScreen';
+import MyWorkScreen             from './screens/MyWork/MyWorkScreen';
+import ReportsScreen            from './screens/Reports/ReportsScreen';
+import DocumentViewerScreen     from './screens/Documents/DocumentViewerScreen';
 import QuickCreateScreen        from './screens/QuickCreateScreen';
-import CreateProjectScreen      from './screens/CreateProjectScreen';
-import InviteUserScreen         from './screens/InviteUserScreen';
+import CreateProjectScreen      from './screens/Projects/CreateProjectScreen';
+import InviteUserScreen         from './screens/Team/InviteUserScreen';
 import NotificationToast        from './components/NotificationToast';
 
 export const STORAGE_KEY = 'DYUKSA_QUICK_TASKS';
@@ -648,6 +649,9 @@ export const navigationRef = createNavigationContainerRef();
 function RootNavigator() {
   const { isAuthenticated, isLoading } = useContext(AuthContext);
   const [showOnboarding, setShowOnboarding] = useState(null);
+
+  // Start background cache warming immediately after login
+  usePrefetch(isAuthenticated);
 
   useEffect(() => {
     AsyncStorage.getItem(ONBOARDING_KEY).then(done => {

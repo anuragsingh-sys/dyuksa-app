@@ -1,5 +1,5 @@
 /**
- * useTasksCache — singleton in-memory cache for paginated tasks.
+ * hooks/useTasksCache.js — Singleton in-memory cache for paginated tasks
  *
  * Guarantees:
  *  • Only ONE fetch runs at a time across all screens
@@ -16,49 +16,36 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getAccessToken, getWorkspaceId } from '../services/ApiService';
-import { BASE_URL } from '../config';
+import { tasksApi } from '../api/index';
+import { STORAGE_KEYS } from '../types/index';
 
 // ── Singleton module-level state ──────────────────────────────────────────────
-const STALE_MS  = 60_000;        // 60 s stale window
-const CACHE_KEY = 'TASKS_CACHE_V1';
+const STALE_MS  = 60_000;  // 60s stale window
 
 let _tasks     = [];
 let _fetchedAt = 0;
 let _fetching  = false;
-let _listeners = new Set();      // setState fns from every mounted consumer
+let _listeners = new Set();  // setState fns from every mounted consumer
 
 function notify(patch) {
   _listeners.forEach(fn => fn(patch));
 }
 
 async function fetchAllPages() {
-  if (_fetching) return;          // one fetch at a time — all consumers share it
+  if (_fetching) return;  // one fetch at a time — all consumers share it
   _fetching = true;
   notify({ loading: true, error: null });
 
   try {
-    const token       = await getAccessToken();
-    const workspaceId = await getWorkspaceId();
-    if (!token) throw new Error('No auth token');
-
-    const headers = {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    };
-    if (workspaceId) headers['X-Workspace-ID'] = workspaceId;
-
     let all = [];
     let page = 1;
     let hasNext = true;
 
     while (hasNext) {
-      const res = await fetch(`${BASE_URL}/tasksite/?page=${page}`, { headers });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
-      const results = Array.isArray(json) ? json : (json.results || []);
+      const json = await tasksApi.getPage(page);
+      const results = Array.isArray(json) ? json : (json?.results || []);
       all = [...all, ...results];
-      hasNext = !!json.next;
+      hasNext = !!json?.next;
       page++;
       if (page > 25) break;  // safety cap
     }
@@ -68,8 +55,8 @@ async function fetchAllPages() {
 
     // Persist for cold-start hydration
     try {
-      await AsyncStorage.setItem(CACHE_KEY, JSON.stringify({ tasks: all, fetchedAt: _fetchedAt }));
-    } catch (_) {}
+      await AsyncStorage.setItem(STORAGE_KEYS.TASKS_CACHE, JSON.stringify({ tasks: all, fetchedAt: _fetchedAt }));
+    } catch {}
 
     notify({ tasks: all, loading: false, error: null });
   } catch (err) {
@@ -100,7 +87,7 @@ export function useTasksCache() {
   // Cold-start: hydrate from AsyncStorage if memory cache is empty
   useEffect(() => {
     if (_tasks.length > 0) return;
-    AsyncStorage.getItem(CACHE_KEY).then(raw => {
+    AsyncStorage.getItem(STORAGE_KEYS.TASKS_CACHE).then(raw => {
       if (!raw) return;
       try {
         const { tasks, fetchedAt } = JSON.parse(raw);
@@ -109,7 +96,7 @@ export function useTasksCache() {
           _fetchedAt = fetchedAt ?? 0;
           update({ tasks });
         }
-      } catch (_) {}
+      } catch {}
     });
   }, []);
 

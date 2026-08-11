@@ -1,17 +1,3 @@
-/**
- * PushNotificationService — DYUKSA
- *
- * Uses expo-notifications for:
- *   - Push permission request
- *   - Expo push token retrieval (send to backend for server-side push)
- *   - Scheduling local notifications for event reminders
- *     (1 day before + 2 hours before each event)
- *   - Cancelling notifications when events are deleted
- *
- * Install:  npx expo install expo-notifications expo-device
- * Add to app.json plugins: ["expo-notifications"]
- */
-
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import { Platform } from 'react-native';
@@ -65,8 +51,7 @@ export async function registerForPushNotifications() {
   // Get Expo push token — send this to your backend to send server-side pushes
   const tokenData = await Notifications.getExpoPushTokenAsync();
   const token = tokenData.data;
-  console.log('Expo Push Token:', token);
-
+  
   // ── BACKEND INTEGRATION POINT ────────────────────────────────────────────
   // When ready: send token to backend so server can push notifications
   // await fetch('https://api.dyuksa.com/users/push-token', {
