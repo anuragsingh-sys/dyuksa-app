@@ -12,6 +12,7 @@ import Svg, { Path, Rect } from 'react-native-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NativeModules, Platform, DeviceEventEmitter } from 'react-native';
 
+
 const startVoiceInput = (onResult, onError) => {
   if (Platform.OS !== 'android') {
     onError?.('Voice search is only available on Android devices.');
@@ -25,7 +26,6 @@ const startVoiceInput = (onResult, onError) => {
         'android.speech.extra.LANGUAGE': 'en-US',
         'android.speech.extra.PROMPT': 'Speak to search...',
         'android.speech.extra.MAX_RESULTS': 1,
-        // Keep listening for 6 seconds of silence before closing
         'android.speech.extra.SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS': 6000,
         'android.speech.extra.SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS': 4000,
         'android.speech.extra.SPEECH_INPUT_MINIMUM_LENGTH_MILLIS': 2000,
@@ -105,9 +105,9 @@ export default function SearchScreen() {
   const [query,   setQuery]   = useState('');
   const [loading, setLoading] = useState(false);
   const [results,    setResults]    = useState(null);
-  const [aiResult,   setAiResult]   = useState(null);  // AI agent response
-  const [aiLoading,  setAiLoading]  = useState(false);  // AI thinking indicator
-  const aiAbortRef = useRef(null);  // cancel in-flight AI call on new query
+  const [aiResult,   setAiResult]   = useState(null);
+  const [aiLoading,  setAiLoading]  = useState(false); 
+  const aiAbortRef = useRef(null);  
   const [recent,  setRecent]  = useState([]);
   const [isListening, setIsListening] = useState(false);
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -133,7 +133,7 @@ export default function SearchScreen() {
         setIsListening(false);
         if (text) {
           setQuery(text);
-          search(text); // immediately trigger search, no debounce wait
+          search(text); 
         }
       },
       (err) => {
@@ -173,14 +173,14 @@ export default function SearchScreen() {
     if (!q.trim()) { setResults(null); setAiResult(null); return; }
     setLoading(true);
 
-    // ── Cancel any previous AI call ──────────────────────────────────
+    // ── Cancel any previous AI call 
     if (aiAbortRef.current) aiAbortRef.current.abort();
     const aiAbort = new AbortController();
     aiAbortRef.current = aiAbort;
     setAiResult(null);
     setAiLoading(true);
 
-    // ── PATH A: Search APIs (fast, immediate results) ─────────────────
+    // ── PATH A: Search APIs 
     const searchPromise = (async () => {
       try {
         const headers = await authHeaders();
@@ -203,9 +203,8 @@ export default function SearchScreen() {
       finally { setLoading(false); }
     })();
 
-    // ── PATH B: AI Agent (slower, auto-updates when ready) ───────────
-    // Endpoint will be set once backend is ready — placeholder for now
-    const AI_ENDPOINT = null; // TODO: replace with actual endpoint e.g. `${BASE_URL}/task-ai/chat/agent/`
+    // ── PATH B: AI Agent 
+    const AI_ENDPOINT = null; 
     if (AI_ENDPOINT) {
       (async () => {
         try {
@@ -218,7 +217,6 @@ export default function SearchScreen() {
           });
           if (!res.ok || aiAbort.signal.aborted) return;
           const data = await res.json();
-          // Auto-update results list with AI response
           if (!aiAbort.signal.aborted) setAiResult(data);
         } catch (e) {
           if (e.name !== 'AbortError') console.warn('[AI Agent]', e.message);
@@ -353,7 +351,7 @@ export default function SearchScreen() {
         {hasResults && (
           <View style={{ paddingHorizontal: 16 }}>
 
-            {/* ── AI Agent result — fires in parallel, auto-appears when ready ── */}
+            {/* ── AI Agent result  ─ */}
             {(aiLoading || aiResult) && (
               <View style={{
                 marginBottom: 16,
@@ -386,7 +384,7 @@ export default function SearchScreen() {
                   )}
                 </View>
 
-                {/* AI content — auto-renders when agent responds */}
+                {/* AI content */}
                 {aiResult && (
                   <View style={{ padding: 14 }}>
                     {(aiResult.message || aiResult.response || aiResult.summary) && (

@@ -12,16 +12,16 @@ import { canCreateWorkspace, canManageMembers } from '../utils/permissions';
 import { Feather } from '@expo/vector-icons';
 import Svg, { Path, Rect } from 'react-native-svg';
 
-const SIDEBAR_WIDTH  = 260;
+const SIDEBAR_WIDTH = 260;
 
 const NotebookIcon = ({ color, size = 18 }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-    <Path d="M2 6h4"/>
-    <Path d="M2 10h4"/>
-    <Path d="M2 14h4"/>
-    <Path d="M2 18h4"/>
-    <Rect width="16" height="20" x="4" y="2" rx="2"/>
-    <Path d="M16 2v20"/>
+    <Path d="M2 6h4" />
+    <Path d="M2 10h4" />
+    <Path d="M2 14h4" />
+    <Path d="M2 18h4" />
+    <Rect width="16" height="20" x="4" y="2" rx="2" />
+    <Path d="M16 2v20" />
   </Svg>
 );
 
@@ -33,7 +33,7 @@ const SidebarItem = ({ icon, svgIcon, label, active, hasArrow, onPress, isDarkMo
   >
     <View style={styles.sidebarItemIconWrap}>
       {svgIcon ? svgIcon({ color: active ? '#3B72EE' : (isDarkMode ? '#9898A6' : '#6B7588'), size: 18 })
-               : <Feather name={icon} size={18} color={active ? '#2D6AE3' : (isDarkMode ? '#9898A6' : '#6B7588')} />}
+        : <Feather name={icon} size={18} color={active ? '#2D6AE3' : (isDarkMode ? '#9898A6' : '#6B7588')} />}
     </View>
     <Text style={[styles.sidebarItemLabel, { color: isDarkMode ? '#9898A6' : '#3B4658' }, active && styles.sidebarItemLabelActive]}>{label}</Text>
     {hasArrow && <Feather name="chevron-right" size={14} color={isDarkMode ? '#5C5C6E' : '#9AA3B2'} style={{ marginLeft: 'auto' }} />}
@@ -66,15 +66,15 @@ export default function SidebarMenu({ activeScreen }) {
       .start(() => { setOpen(false); cb && cb(); });
   };
 
-  const goToDashboard  = () => closeSidebar(() => {
+  const goToDashboard = () => closeSidebar(() => {
     try { navigation.jumpTo('Dashboard'); }
     catch { navigation.navigate('Main', { screen: 'Dashboard' }); }
   });
-  const goToTab        = (tab)            => closeSidebar(() => {
+  const goToTab = (tab) => closeSidebar(() => {
     try { navigation.jumpTo(tab); }
     catch { navigation.navigate('Main', { screen: tab }); }
   });
-  const goToStack      = (screen, params) => closeSidebar(() => navigation.navigate(screen, params));
+  const goToStack = (screen, params) => closeSidebar(() => navigation.navigate(screen, params));
 
   // Initial letter for workspace avatar
 
@@ -125,7 +125,9 @@ export default function SidebarMenu({ activeScreen }) {
                 )}
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.userName, { color: isDark ? "#fff" : "#1A1A2E" }]}>{user?.name || 'User'}</Text>
-                  <Text style={[styles.userRole, { color: isDark ? "#5C5C6E" : "#6B7588" }]}>{user?.role || 'Member'}</Text>
+                  {user?.role ? (
+                    <Text style={[styles.userRole, { color: isDark ? "#5C5C6E" : "#6B7588" }]}>{user.role}</Text>
+                  ) : null}
                 </View>
                 <Text style={{ color: '#5C5C6E', fontSize: 16, marginRight: 4 }}>›</Text>
               </TouchableOpacity>
@@ -133,21 +135,21 @@ export default function SidebarMenu({ activeScreen }) {
 
               {/* Nav items */}
               <ScrollView style={styles.sidebarNav} showsVerticalScrollIndicator={false}>
-                <SidebarItem icon="grid"          label="Dashboard" active={activeScreen === 'Dashboard'} onPress={goToDashboard} isDarkMode={isDark} />
-                <SidebarItem icon="folder"        label="Projects"  active={activeScreen === 'Projects'}  onPress={() => goToTab('Projects')} isDarkMode={isDark} />
-                <SidebarItem icon="file-text"     label="Documents"  active={activeScreen === 'Docs'}      onPress={() => goToStack('Docs')} isDarkMode={isDark} />
+                <SidebarItem icon="grid" label="Dashboard" active={activeScreen === 'Dashboard'} onPress={goToDashboard} isDarkMode={isDark} />
+                <SidebarItem icon="folder" label="Projects" active={activeScreen === 'Projects'} onPress={() => goToTab('Projects')} isDarkMode={isDark} />
+                <SidebarItem icon="file-text" label="Documents" active={activeScreen === 'Docs'} onPress={() => goToStack('Docs')} isDarkMode={isDark} />
 
-                <SidebarItem icon="check-square"  label="Tasks"      active={activeScreen === 'Tasks'}     onPress={() => goToTab('Tasks')} isDarkMode={isDark} />
+                <SidebarItem icon="check-square" label="Tasks" active={activeScreen === 'Tasks'} onPress={() => goToTab('Tasks')} isDarkMode={isDark} />
 
-                <SidebarItem icon="calendar"      label="Calendar"       active={activeScreen === 'Calendar'}   onPress={() => goToStack('Calendar')} isDarkMode={isDark} />
-                <SidebarItem icon="briefcase"     label="My Work"        active={activeScreen === 'MyWork'}     onPress={() => goToStack('MyWork')} isDarkMode={isDark} />
-                <SidebarItem icon="bar-chart-2"   label="Reports"        active={activeScreen === 'Reports'}    onPress={() => goToStack('Reports')} isDarkMode={isDark} />
-                <SidebarItem svgIcon={NotebookIcon} label="Notes"         active={activeScreen === 'QuickNotes'} onPress={() => goToStack('QuickNotes')} isDarkMode={isDark} />
+                <SidebarItem icon="calendar" label="Calendar" active={activeScreen === 'Calendar'} onPress={() => goToStack('Calendar')} isDarkMode={isDark} />
+                <SidebarItem icon="briefcase" label="My Work" active={activeScreen === 'MyWork'} onPress={() => goToStack('MyWork')} isDarkMode={isDark} />
+                <SidebarItem icon="bar-chart-2" label="Reports" active={activeScreen === 'Reports'} onPress={() => goToStack('Reports')} isDarkMode={isDark} />
+                <SidebarItem svgIcon={NotebookIcon} label="Notes" active={activeScreen === 'QuickNotes'} onPress={() => goToStack('QuickNotes')} isDarkMode={isDark} />
                 {canManageMembers(user?.role) && (
-                  <SidebarItem icon="users"       label="Team Management" onPress={() => goToStack('TeamManagement')} isDarkMode={isDark} />
+                  <SidebarItem icon="users" label="Team Management" onPress={() => goToStack('TeamManagement')} isDarkMode={isDark} />
                 )}
-                <SidebarItem icon="message-square" label="Chats"          active={activeScreen === 'Chat'} onPress={() => goToStack('Chat')} isDarkMode={isDark} />
-                <SidebarItem icon="settings"      label="Settings"      active={activeScreen === 'Settings'} onPress={() => goToStack('Settings')} isDarkMode={isDark} />
+                <SidebarItem icon="message-square" label="Chats" active={activeScreen === 'Chat'} onPress={() => goToStack('Chat')} isDarkMode={isDark} />
+                <SidebarItem icon="settings" label="Settings" active={activeScreen === 'Settings'} onPress={() => goToStack('Settings')} isDarkMode={isDark} />
               </ScrollView>
 
 
@@ -169,62 +171,62 @@ export default function SidebarMenu({ activeScreen }) {
                 }
               </TouchableOpacity>
 
-                {/* Workspace list dropdown */}
-                {wsExpanded && (
-                  <View style={styles.wsDropdown}>
-                    <Text style={styles.wsDropdownTitle}>SWITCH WORKSPACE</Text>
-                    <ScrollView style={{ maxHeight: 180 }} showsVerticalScrollIndicator={false}>
-                      {workspaces.map(ws => {
-                        const isActive  = ws.id === currentWorkspace?.id;
-                        const switching = switchingId === ws.id;
-                        return (
-                          <TouchableOpacity
-                            key={ws.id}
-                            style={[styles.wsItem, isActive && styles.wsItemActive]}
-                            onPress={() => {
-                              if (String(ws.id) === String(currentWorkspace?.id)) {
-                                setWsExpanded(false);
-                                return;
-                              }
-                              handleSwitch(ws)
-                                .then(() => {
-                                  setWsExpanded(false);
-                                  closeSidebar(() => {
-                                    try { navigation.jumpTo('Dashboard'); }
-                                    catch { navigation.navigate('Main', { screen: 'Dashboard' }); }
-                                  });
-                                })
-                                .catch(e => Alert.alert('Could not switch workspace', e.message || 'Try again.'));
-                            }}
-                            disabled={!!switchingId}
-                            activeOpacity={0.7}
-                          >
-                            <Text style={[styles.wsItemName, isActive && styles.wsItemNameActive]} numberOfLines={1}>
-                              {ws.name}
-                            </Text>
-                            {switching
-                              ? <ActivityIndicator size="small" color="#3B72EE" />
-                              : isActive
-                                ? <Text style={styles.wsItemCheck}>✓</Text>
-                                : null
+              {/* Workspace list dropdown */}
+              {wsExpanded && (
+                <View style={styles.wsDropdown}>
+                  <Text style={styles.wsDropdownTitle}>SWITCH WORKSPACE</Text>
+                  <ScrollView style={{ maxHeight: 180 }} showsVerticalScrollIndicator={false}>
+                    {workspaces.map(ws => {
+                      const isActive = ws.id === currentWorkspace?.id;
+                      const switching = switchingId === ws.id;
+                      return (
+                        <TouchableOpacity
+                          key={ws.id}
+                          style={[styles.wsItem, isActive && styles.wsItemActive]}
+                          onPress={() => {
+                            if (String(ws.id) === String(currentWorkspace?.id)) {
+                              setWsExpanded(false);
+                              return;
                             }
-                          </TouchableOpacity>
-                        );
-                      })}
-                      {workspaces.length === 0 && !loadingWorkspaces && (
-                        <Text style={styles.wsEmpty}>No workspaces found</Text>
-                      )}
-                    </ScrollView>
-                    {/* Read-only note */}
-                    <View style={styles.wsFooterNote}>
-                      <Text style={styles.wsFooterNoteText}>
-                        {canCreateWorkspace(user?.role)
-                          ? '🌐 Create workspaces from the web app'
-                          : '🔒 Contact your admin to create workspaces'}
-                      </Text>
-                    </View>
+                            handleSwitch(ws)
+                              .then(() => {
+                                setWsExpanded(false);
+                                closeSidebar(() => {
+                                  try { navigation.jumpTo('Dashboard'); }
+                                  catch { navigation.navigate('Main', { screen: 'Dashboard' }); }
+                                });
+                              })
+                              .catch(e => Alert.alert('Could not switch workspace', e.message || 'Try again.'));
+                          }}
+                          disabled={!!switchingId}
+                          activeOpacity={0.7}
+                        >
+                          <Text style={[styles.wsItemName, isActive && styles.wsItemNameActive]} numberOfLines={1}>
+                            {ws.name}
+                          </Text>
+                          {switching
+                            ? <ActivityIndicator size="small" color="#3B72EE" />
+                            : isActive
+                              ? <Text style={styles.wsItemCheck}>✓</Text>
+                              : null
+                          }
+                        </TouchableOpacity>
+                      );
+                    })}
+                    {workspaces.length === 0 && !loadingWorkspaces && (
+                      <Text style={styles.wsEmpty}>No workspaces found</Text>
+                    )}
+                  </ScrollView>
+                  {/* Read-only note */}
+                  <View style={styles.wsFooterNote}>
+                    <Text style={styles.wsFooterNoteText}>
+                      {canCreateWorkspace(user?.role)
+                        ? '🌐 Create workspaces from the web app'
+                        : '🔒 Contact your admin to create workspaces'}
+                    </Text>
                   </View>
-                )}
+                </View>
+              )}
 
               {/* Logout only */}
               <View style={styles.sidebarBottom}>

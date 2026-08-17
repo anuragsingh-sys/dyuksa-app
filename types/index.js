@@ -132,7 +132,7 @@ export const PROJECT_TYPE_LABELS = {
   ideas:            'Ideas',
 };
 
-// ── User Roles 
+// ── User Roles (workspace-level — stored on User model, comes from user.role / JWT payload.role)
 export const USER_ROLE = {
   ADMIN:     'admin',
   MANAGER:   'manager',
@@ -141,8 +141,48 @@ export const USER_ROLE = {
   VIEWER:    'viewer',
 };
 
-export const USER_ROLE_OPTIONS = ['admin', 'manager', 'annotator', 'viewer', 'developer'];
+export const USER_ROLE_OPTIONS = ['admin', 'manager', 'developer', 'annotator', 'viewer'];
 
+export const USER_ROLE_LABELS = {
+  admin:     'Admin',
+  manager:   'Manager',
+  developer: 'Developer',
+  annotator: 'Annotator',
+  viewer:    'Viewer',
+};
+
+// ── Project Membership Roles 
+export const PROJECT_ROLE = {
+  ADMIN:   'project_admin',
+  MANAGER: 'project_manager',
+  MEMBER:  'project_member',
+  VIEWER:  'project_viewer',
+};
+
+export const PROJECT_ROLE_OPTIONS = [
+  'project_admin',
+  'project_manager',
+  'project_member',
+  'project_viewer',
+];
+
+// Display labels for new project roles
+export const PROJECT_ROLE_LABELS = {
+  project_admin:   'Project Admin',
+  project_manager: 'Project Manager',
+  project_member:  'Project Member',
+  project_viewer:  'Project Viewer',
+  owner:       'Project Admin',
+  admin:       'Project Admin',
+  manager:     'Project Manager',
+  member:      'Project Member',
+  viewer:      'Project Viewer',
+  frontend:    'Project Member',
+  backend:     'Project Member',
+  tester:      'Project Member',
+  devops:      'Project Member',
+  social_media:'Project Member',
+};
 // ── Notification Types 
 export const NOTIFICATION_TYPE = {
   TASK_ASSIGNED:       'task_assigned',
@@ -422,7 +462,7 @@ export const normalizeUser = (raw) => ({
   name:      [raw.first_name, raw.last_name].filter(Boolean).join(' ') || raw.username || '',
   username:  raw.username || '',
   email:     raw.email || '',
-  role:      raw.role || 'Member',
+  role:      raw.role || null,
   avatar:    ([raw.first_name, raw.last_name].filter(Boolean).join(' ') || raw.username || 'U')[0]?.toUpperCase() || 'U',
   avatarUrl: raw.avatar || raw.avatar_url || null,
   skills:    raw.skills || [],

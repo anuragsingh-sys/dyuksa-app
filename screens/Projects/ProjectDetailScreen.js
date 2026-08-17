@@ -11,8 +11,9 @@ import { API_BASE, BASE_URL } from '../../config';
 import Svg, { Path } from 'react-native-svg';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
+import { PROJECT_ROLE_LABELS } from '../../types/index';
 
-// ── Token colours ─────────────────────────────────────────────────────────────
+// ── Token colours
 const T = {
   brand: '#2D6AE3', ink: '#0E1726', ink2: '#3B4658', ink3: '#6B7588', ink4: '#9AA3B2',
   hairline: '#E6E9EF', hairlineSoft: '#F0F2F6', surface: '#FFFFFF', surfaceAlt: '#F7F8FB',
@@ -580,9 +581,10 @@ export default function ProjectDetailScreen() {
                     const u        = m.user || m.user_details || {};
                     const name     = u.full_name || (`${u.first_name || ''} ${u.last_name || ''}`).trim() || u.username || 'Unknown';
                     const initials = name.split(' ').slice(0, 2).map(w => w.charAt(0).toUpperCase()).join('');
-                    const role     = m.role || 'member';
-                    const roleLabel = role.charAt(0).toUpperCase() + role.slice(1);
-                    const isOwner  = role.toLowerCase() === 'owner';
+                    
+                    const role      = m.role || 'project_member';
+                    const roleLabel = PROJECT_ROLE_LABELS[role] || (role.charAt(0).toUpperCase() + role.slice(1).replace(/_/g, ' '));
+                    const isOwner   = role === 'project_admin' || role === 'owner'; 
                     const avatarColor = AVATAR_COLORS[i % AVATAR_COLORS.length];
                     return (
                       <View key={m.id || i} style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 13, borderBottomWidth: i < memberList.length - 1 ? 1 : 0, borderBottomColor: bdr }}>
@@ -591,7 +593,7 @@ export default function ProjectDetailScreen() {
                         </View>
                         <View style={{ flex: 1 }}>
                           <Text style={{ fontSize: 14, fontWeight: '600', color: txt }}>{name}</Text>
-                          <Text style={{ fontSize: 12, color: sub, marginTop: 1 }}>{TASK_TYPE_LABELS[m.role] || roleLabel}</Text>
+                          <Text style={{ fontSize: 12, color: sub, marginTop: 1 }}>{roleLabel}</Text>
                         </View>
                         <Text style={{ fontSize: 13, fontWeight: '600', color: isOwner ? T.cBlue : sub }}>{roleLabel}</Text>
                       </View>

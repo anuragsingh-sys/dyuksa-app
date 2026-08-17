@@ -10,34 +10,23 @@ import * as ImagePicker from 'expo-image-picker';
 import Svg, { Circle, Line } from 'react-native-svg';
 import { ThemeContext } from '../../context/ThemeContext';
 import { NotificationsContext } from '../../context/NotificationsContext';
-import { getUsers, createProject } from '../../services/ApiService';
+import { authApi, projectsApi } from '../../api';
+import {
+  PROJECT_TYPE_OPTIONS as TASK_TYPES,
+  PROJECT_TYPE_LABELS as TASK_TYPE_LABELS,
+  PROJECT_COLORS,
+  PROJECT_ROLE,
+  PROJECT_ROLE_OPTIONS,
+  PROJECT_ROLE_LABELS,
+} from '../../types/index';
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-const TASK_TYPES = ['client', 'internal', 'content_creation', 'ideas'];
-const TASK_TYPE_LABELS = {
-  client: 'Client',
-  internal: 'Internal',
-  content_creation: 'Content Creation',
-  ideas: 'Ideas',
-};
 
-const PROJECT_COLORS = [
-  '#3B72EE', // blue (default, matches accent)
-  '#22A06B', // green
-  '#E5A60E', // yellow
-  '#7A5AF8', // purple
-  '#E5484D', // red
-  '#F97316', // orange
-  '#0EA5E9', // sky
-  '#10B981', // emerald
-];
-
-// ── Helper: user display name ─────────────────────────────────────────────────
+// ── Helper: user display name
 function displayName(u) {
   return `${u.first_name || ''} ${u.last_name || ''}`.trim() || u.username || '?';
 }
 
-// ── Helper: initials from user ────────────────────────────────────────────────
+// ── Helper: initials from user 
 function initials(u) {
   const n = displayName(u);
   const parts = n.split(' ');
@@ -223,7 +212,7 @@ export default function CreateProjectScreen() {
   // Fade-in
   const fadeAnim = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    getUsers().then(setUsers).catch(() => {});
+    authApi.getUsers().then(setUsers).catch(() => {});
     Animated.timing(fadeAnim, { toValue: 1, duration: 280, useNativeDriver: true }).start();
   }, []);
 
@@ -231,7 +220,13 @@ export default function CreateProjectScreen() {
     setSelectedMembers(prev =>
       prev.find(m => m.id === user.id)
         ? prev.filter(m => m.id !== user.id)
-        : [...prev, user]
+        : [...prev, { ...user, projectRole: PROJECT_ROLE.MEMBER }]
+    );
+  };
+
+  const updateMemberRole = (userId, role) => {
+    setSelectedMembers(prev =>
+      prev.map(m => m.id === userId ? { ...m, projectRole: role } : m)
     );
   };
 
@@ -261,7 +256,10 @@ export default function CreateProjectScreen() {
       name:             projectName.trim(),
       task_type:        taskType,
       description:      description.trim() || undefined,
-      assigned_members: selectedMembers.map(m => ({ user_id: m.id, role: 'viewer' })),
+      assigned_members: selectedMembers.map(m => ({
+        user_id: m.id,
+        role:    m.projectRole || PROJECT_ROLE.MEMBER,
+      })),
       project_settings: { priority: 'high', privacy },
     };
 
@@ -393,29 +391,51 @@ export default function CreateProjectScreen() {
           </View>
 
           <View style={[styles.membersCard, { backgroundColor: inputBg, borderColor: bdr }]}>
-            {selectedMembers.length > 0 ? (
-              <View style={styles.memberChipsWrap}>
-                {selectedMembers.map((m, idx) => {
-                  const avatarColor = AVATAR_COLORS[idx % AVATAR_COLORS.length];
-                  return (
-                    <View key={m.id} style={styles.memberChip}>
-                      <View style={[styles.chipAvatar, { backgroundColor: avatarColor }]}>
-                        <Text style={styles.chipAvatarText}>{initials(m)}</Text>
-                      </View>
-                      <Text style={[styles.chipName, { color: txt }]}>
-                        {displayName(m).split(' ')[0]}
-                      </Text>
-                    </View>
-                  );
-                })}
-                <TouchableOpacity
-                  onPress={() => setMemberSheetOpen(true)}
-                  style={[styles.inviteBtn, { borderColor: bdr }]}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[styles.inviteBtnText, { color: sub }]}>+ Invite</Text>
-                </TouchableOpacity>
-              </View>
+             {selectedMembers.length > 0 ? (
+                  <View style={styles.memberChipsWrap}>
+                    {selectedMembers.map((m, idx) => {
+                      const avatarColor = AVATAR_COLORS[idx % AVATAR_COLORS.length];
+                      return (
+                        <View key={m.id} style={styles.memberChip}>
+                          <View style={[styles.chipAvatar, { backgroundColor: avatarColor }]}>
+                            <Text style={styles.chipAvatarText}>{initials(m)}</Text>
+                          </View>
+                          <Text style={[styles.chipName, { color: txt }]}>
+                            {displayName(m).split(' ')[0]}
+                          </Text>
+                          {/* Role selector per member */}
+                          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 2 }}>
+                            {PROJECT_ROLE_OPTIONS.map(r => (
+                              <TouchableOpacity
+                                key={r}
+                                onPress={() => updateMemberRole(m.id, r)}
+                                style={{
+                                  paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6,
+                                  backgroundColor: (m.projectRole || PROJECT_ROLE.MEMBER) === r ? accent + '22' : inputBg,
+                                  borderWidth: 1,
+                                  borderColor: (m.projectRole || PROJECT_ROLE.MEMBER) === r ? accent : bdr,
+                                }}
+                              >
+                                <Text style={{
+                                  fontSize: 9, fontWeight: '600',
+                                  color: (m.projectRole || PROJECT_ROLE.MEMBER) === r ? accent : sub,
+                                }}>
+                                  {PROJECT_ROLE_LABELS[r]}
+                                </Text>
+                              </TouchableOpacity>
+                            ))}
+                          </View>
+                        </View>
+                      );
+                    })}
+                    <TouchableOpacity
+                      onPress={() => setMemberSheetOpen(true)}
+                      style={[styles.inviteBtn, { borderColor: bdr }]}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[styles.inviteBtnText, { color: sub }]}>+ Invite</Text>
+                    </TouchableOpacity>
+                  </View>
             ) : (
               <TouchableOpacity
                 onPress={() => setMemberSheetOpen(true)}

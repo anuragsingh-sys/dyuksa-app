@@ -199,6 +199,11 @@ export const projectsApi = {
     return client.get(ENDPOINTS.PROJECT_DETAIL(projectId));
   },
 
+  getMembers: async (projectId) => {
+    const data = await client.get(ENDPOINTS.PROJECT_DETAIL(projectId));
+    return Array.isArray(data?.assigned_members) ? data.assigned_members : [];
+  },
+
   create: async (body) => {
     return client.post(ENDPOINTS.PROJECTS, body);
   },

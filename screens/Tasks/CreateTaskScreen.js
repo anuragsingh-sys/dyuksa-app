@@ -9,8 +9,13 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { ThemeContext } from '../../context/ThemeContext';
 import { NotificationsContext } from '../../context/NotificationsContext';
-import { getUsers, getProjects, createTask, refineTextAI } from '../../services/ApiService';
 import { invalidateTasksCache } from '../../hooks/useTasksCache';
+import { projectsApi, tasksApi, aiApi } from '../../api';
+
+// Local shims for backward compat with call sites below
+const getProjects  = projectsApi.getAll;
+const createTask   = tasksApi.create;
+const refineTextAI = aiApi.refineText;
 
 const PRIORITIES = [
   { key: 'low',      label: 'Low',      color: '#22A06B' },
@@ -85,7 +90,9 @@ export default function CreateTaskScreen() {
   const [generatingDesc, setGeneratingDesc] = useState(false);
 
   // Data
-  const [projects, setProjects] = useState([]);
+  const [projects,       setProjects]       = useState([]);
+  const [projectMembers, setProjectMembers] = useState([]);
+  const [membersLoading, setMembersLoading] = useState(false);
   const [users,    setUsers]    = useState([]);
   const [saving,   setSaving]   = useState(false);
   const [linkInput,  setLinkInput]  = useState('');
@@ -104,12 +111,41 @@ export default function CreateTaskScreen() {
       setProjects(pl);
       if (route.params?.projectId) {
         const pre = pl.find(p => String(p.id) === String(route.params.projectId));
-        if (pre) setProject(pre);
+        if (pre) {
+          setProject(pre);
+          loadProjectMembers(pre.id);
+        }
       }
     }).catch(() => {});
-    getUsers().then(setUsers).catch(() => {});
     Animated.timing(fadeAnim, { toValue: 1, duration: 280, useNativeDriver: true }).start();
   }, []);
+
+  // Load members when project changes
+  const loadProjectMembers = async (projectId) => {
+    if (!projectId) { setProjectMembers([]); return; }
+    setMembersLoading(true);
+    try {
+      const members = await projectsApi.getMembers(projectId);
+      // assigned_members[i] shape: { user_id, role, user_details: { id, first_name, last_name, username, email } }
+      // Normalize to a flat user shape that the assignee sheet can render
+      const normalized = members.map(m => {
+        const u = m.user_details || {};
+        return {
+          id:         u.id       || m.user_id,
+          first_name: u.first_name  || '',
+          last_name:  u.last_name   || '',
+          username:   u.username    || '',
+          email:      u.email       || '',
+          role:       m.role        || '',
+        };
+      }).filter(u => u.id); 
+      setProjectMembers(normalized);
+    } catch {
+      setProjectMembers([]);
+    } finally {
+      setMembersLoading(false);
+    }
+  };
 
   const userName = (u) =>
     `${u.first_name || ''} ${u.last_name || ''}`.trim() || u.username || 'User';
@@ -194,13 +230,13 @@ export default function CreateTaskScreen() {
     }
   };
 
-  const filteredUsers = users.filter(u =>
+  const filteredUsers = projectMembers.filter(u =>
     userName(u).toLowerCase().includes(assignSearch.toLowerCase())
   );
 
   const PRIORITY_COLORS_MAP = Object.fromEntries(PRIORITIES.map(p => [p.key, p.color]));
 
-  // ── Bottom sheet component ─────────────────────────────────────────
+  // ── Bottom sheet component 
   const Sheet = ({ visible, onClose, title, children, onDone, doneLabel }) => (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={s.sheetBackdrop} onPress={onClose}>
@@ -506,7 +542,12 @@ export default function CreateTaskScreen() {
             return (
               <TouchableOpacity
                 key={p.id}
-                onPress={() => { setProject(p); setShowProjectSheet(false); }}
+                onPress={() => {
+                  setProject(p);
+                  setAssignees([]); 
+                  loadProjectMembers(p.id);
+                  setShowProjectSheet(false);
+                }}
                 style={[s.sheetRow, { backgroundColor: active ? '#3B72EE11' : 'transparent', borderBottomColor: bdr }]}
               >
                 <View style={[s.sheetAvatar, { backgroundColor: col }]}>
@@ -531,13 +572,25 @@ export default function CreateTaskScreen() {
       </Sheet>
 
       {/* ── Assignee sheet ── */}
-      <Sheet
+       <Sheet
         visible={showAssignSheet}
         onClose={() => setShowAssignSheet(false)}
         title={`Assign to${assignees.length > 0 ? ` (${assignees.length})` : ''}`}
         onDone={() => setShowAssignSheet(false)}
         doneLabel="+ Done"
       >
+        {!project && (
+          <View style={{ padding: 30, alignItems: 'center' }}>
+            <Text style={{ color: sub, fontSize: 13 }}>Select a project first to see members</Text>
+          </View>
+        )}
+        {project && membersLoading && (
+          <View style={{ padding: 30, alignItems: 'center' }}>
+            <ActivityIndicator color="#3B72EE" />
+          </View>
+        )}
+        {project && !membersLoading && (
+          <>
         {/* Selected chips */}
         {assignees.length > 0 && (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ paddingHorizontal: 16, paddingVertical: 8 }} contentContainerStyle={{ gap: 8 }}>
@@ -594,6 +647,8 @@ export default function CreateTaskScreen() {
             </View>
           )}
         </ScrollView>
+        </>
+        )}
       </Sheet>
 
       {/* ── Date picker ── */}
