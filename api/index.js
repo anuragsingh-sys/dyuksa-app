@@ -1,14 +1,3 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// api/index.js — Centralized API layer
-//
-// ALL API calls for the entire Dyuksa app, organized by feature module.
-// Every function here uses client.js — no direct fetch() anywhere else.
-//
-// Usage:
-//   import { authApi, tasksApi, projectsApi } from '../api';
-//   const tasks = await tasksApi.getAll();
-// ─────────────────────────────────────────────────────────────────────────────
-
 import * as client from './client';
 import { ENDPOINTS, CENTRAL_ENDPOINTS } from '../types/index';
 
@@ -77,7 +66,6 @@ export const authApi = {
   },
 
   register: async (payload) => {
-    // payload: { company_name, admin_email, password, password_confirm, otp, platform: 'pm', products }
     return client.postPublicCentral(CENTRAL_ENDPOINTS.SIGNUP, payload);
   },
 
@@ -101,7 +89,6 @@ export const workspaceApi = {
   },
 
   switch: async (workspaceId) => {
-    // Persist workspace ID first — source of truth
     await client.setWorkspaceId(workspaceId);
     try {
       return await client.post(ENDPOINTS.WORKSPACE_SWITCH(workspaceId), {}, {
@@ -109,7 +96,6 @@ export const workspaceApi = {
         includeWorkspace: false,
       });
     } catch {
-      // Even if switch endpoint fails, ID is already saved — return success
       return { workspace_id: workspaceId };
     }
   },
@@ -132,7 +118,7 @@ export const tasksApi = {
 
   getPage: async (page) => {
     const data = await client.get(`${ENDPOINTS.TASKS}?page=${page}`);
-    return data; // { count, next, previous, results }
+    return data;
   },
 
   getFullPageUrl: async (url) => {

@@ -15,9 +15,7 @@ export const STORAGE_KEYS = {
   ONBOARDING:     'DYUKSA_ONBOARDING_DONE',
 };
 
-// ── Central Auth Server Endpoints (identity / auth — NOT the PM server) ──────
-// These endpoints MUST hit CENTRAL_URL, not BASE_URL.
-// The Central server owns: login, signup, password reset, social auth, invites.
+// ── Central Auth Server Endpoints
 export const CENTRAL_ENDPOINTS = {
   LOGIN:            '/auth/login/',
   FORGOT_PASSWORD:  '/auth/forgot-password/',
@@ -111,7 +109,7 @@ export const TASK_PRIORITY_COLORS = {
   low:      '#22C55E',
   medium:   '#3B72EE',
   high:     '#F97316',
-  urgent:   '#EF4444',
+  urgent:   '#EF4444', 
   critical: '#EF4444',
 };
 
@@ -132,7 +130,7 @@ export const PROJECT_TYPE_LABELS = {
   ideas:            'Ideas',
 };
 
-// ── User Roles (workspace-level — stored on User model, comes from user.role / JWT payload.role)
+// ── User Roles
 export const USER_ROLE = {
   ADMIN:     'admin',
   MANAGER:   'manager',
